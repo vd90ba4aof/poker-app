@@ -9,6 +9,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 
 /**
  * V2.9.108: 视觉API客户端 - 单行格式提速+双prompt保险
@@ -118,6 +123,13 @@ object VisionApiClient {
     data class OppHudInfo(val seat: Int, val vpip: Int, val pfr: Int, val ats: Int, val threeBet: Int)
     // V2.9.180: 按钮坐标
     data class ButtonPosition(val text: String, val xPct: Double, val yPct: Double)
+    // V2.9.xxx: 多桌并行分析结果
+    data class MultiTableResult(
+        val tableId: Int,
+        val result: VisionResult?,
+        val success: Boolean,
+        val errorMessage: String
+    )
 
     fun analyzeScreenshot(jpegData: ByteArray): VisionResult? {
         if (apiKey.isEmpty()) { lastError = "未设置API Key"; return null }
@@ -938,6 +950,102 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             "deepseek" -> { apiUrl = "https://api.deepseek.com/v1/chat/completions"; modelName = "deepseek-chat-vision" }
             "siliconflow" -> { apiUrl = "https://api.siliconflow.cn/v1/chat/completions"; modelName = "Qwen/Qwen3-VL-8B-Instruct" }
             else -> { Log.w(TAG, "未知供应商: $provider，保持当前配置"); lastError = "未知供应商: $provider" }
+        }
+    }
+
+    // V2.9.xxx: 多桌截图并行分析
+    // 入参为各桌截图文件路径列表，返回与输入顺序一致的分析结果列表
+    suspend fun analyzeMultipleScreenshots(screenshotPaths: List<String>): List<MultiTableResult> {
+        // 空列表提前返回
+        if (screenshotPaths.isEmpty()) {
+            Log.d(TAG, "analyzeMultipleScreenshots: 截图列表为空，直接返回")
+            return emptyList()
+        }
+        // 无API Key提前返回全失败
+        if (apiKey.isEmpty()) {
+            Log.w(TAG, "analyzeMultipleScreenshots: 未设置API Key，全部返回失败")
+            return screenshotPaths.mapIndexed { index, _ ->
+                MultiTableResult(
+                    tableId = index,
+                    result = null,
+                    success = false,
+                    errorMessage = "未设置API Key"
+                )
+            }
+        }
+        return try {
+            coroutineScope {
+                screenshotPaths.mapIndexed { index, path ->
+                    async(Dispatchers.IO) {
+                        analyzeSingleScreenshotSafe(index, path)
+                    }
+                }.awaitAll()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "analyzeMultipleScreenshots 整体异常: ${e.message}", e)
+            screenshotPaths.mapIndexed { index, _ ->
+                MultiTableResult(
+                    tableId = index,
+                    result = null,
+                    success = false,
+                    errorMessage = "整体异常: ${e.message}"
+                )
+            }
+        }
+    }
+
+    // V2.9.xxx: 单桌截图安全分析（独立try-catch，不影响其他桌）
+    private fun analyzeSingleScreenshotSafe(tableId: Int, screenshotPath: String): MultiTableResult {
+        return try {
+            // 校验文件存在性
+            val file = java.io.File(screenshotPath)
+            if (!file.exists()) {
+                Log.w(TAG, "桌${tableId}文件不存在: $screenshotPath")
+                return MultiTableResult(
+                    tableId = tableId,
+                    result = null,
+                    success = false,
+                    errorMessage = "文件不存在: $screenshotPath"
+                )
+            }
+            // 读取文件字节
+            val jpegData = file.readBytes()
+            if (jpegData.isEmpty()) {
+                Log.w(TAG, "桌${tableId}文件为空: $screenshotPath")
+                return MultiTableResult(
+                    tableId = tableId,
+                    result = null,
+                    success = false,
+                    errorMessage = "文件为空: $screenshotPath"
+                )
+            }
+            // 复用现有 analyzeScreenshot 逻辑
+            val result = analyzeScreenshot(jpegData)
+            if (result != null) {
+                Log.d(TAG, "桌${tableId}分析成功")
+                MultiTableResult(
+                    tableId = tableId,
+                    result = result,
+                    success = true,
+                    errorMessage = ""
+                )
+            } else {
+                Log.w(TAG, "桌${tableId}分析失败: $lastError")
+                MultiTableResult(
+                    tableId = tableId,
+                    result = null,
+                    success = false,
+                    errorMessage = lastError
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "桌${tableId}分析异常: ${e.message}", e)
+            MultiTableResult(
+                tableId = tableId,
+                result = null,
+                success = false,
+                errorMessage = "异常: ${e.message}"
+            )
         }
     }
 }
