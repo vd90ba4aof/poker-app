@@ -47,6 +47,9 @@ object VisionApiClient {
     var lastResultTime: Long = 0
         private set
 
+    // V2.9.230: 断网兜底模式标志位——当API调用失败时是否启用本地识别兜底
+    var isOfflineFallback: Boolean = false
+
     var dButtonPosition: String = ""
     var dButtonLocked: String = ""
         private set
@@ -102,7 +105,9 @@ object VisionApiClient {
         // V2.9.212: 游戏模式检测——现金桌vs锦标赛
         val gameMode: String = "cash",             // 游戏模式: cash=现金桌, tournament=锦标赛(MTT)
         // V2.9.220: 自动检测到的平台（基于OCR文本识别，仅供参考，不自动切换）
-        val detectedPlatform: String = "STANDARD"  // 自动检测平台: STANDARD/GGPOKER/SHORT_DECK
+        val detectedPlatform: String = "STANDARD",  // 自动检测平台: STANDARD/GGPOKER/SHORT_DECK
+        // V2.9.230: 本地suit识别标记——标记最终suit是否来自本地推断（用于前端判断可信度）
+        val localSuitUsed: Boolean = false
     )
 
     data class CardInfo(val rank: String, val suit: String)
@@ -137,7 +142,14 @@ object VisionApiClient {
                 val tApi1 = System.currentTimeMillis()
                 if (result != null) {
                     compactSuccessCount++; lastPromptMode = "v156_schema"
-                    Log.d(TAG, "⏱ v156 API: ${tApi1-tApi0}ms 成功(${compactSuccessCount}/${compactSuccessCount+compactFailCount})")
+                    Log.d(TAG, "⏱ v156 API: ${tApi1-tApi0}ms 成功(${compactSuccessCount}/${compactFailCount})")
+                    // V2.9.230: 应用本地suit识别融合（仅对suit_uncertain=true的牌生效）
+                    // 使用原始JPEG解码的bitmap进行本地花色识别
+                    val screenshotBmp = try {
+                        android.graphics.BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
+                    } catch (_: Exception) { null }
+                    result = applyLocalSuitFusion(result, screenshotBmp)
+                    screenshotBmp?.recycle()
                 }
             } catch (e: Exception) { 
                 Log.w(TAG, "v156异常: ${e.message}")
@@ -206,7 +218,59 @@ object VisionApiClient {
             correctedResult = applyValidationCorrections(correctedResult); lastResult = correctedResult
             Log.d(TAG, "识别成功($lastPromptMode): ${correctedResult.holeCards.joinToString()} | comm=${correctedResult.communityCards.map{it.rank}.joinToString()} | 底池${correctedResult.potSize} | ${correctedResult.totalPlayers}桌 | D=$dPosInsured")
             correctedResult
-        } catch (e: Exception) { lastError = "API错误: ${e.message}"; Log.e(TAG, "analyzeScreenshot failed", e); null }
+        } catch (e: Exception) {
+            lastError = "API错误: ${e.message}"
+            Log.e(TAG, "analyzeScreenshot failed", e)
+            // V2.9.230: 断网兜底模式——API调用失败时，尝试返回部分结果
+            // 如果有本地CV锁定的rank信息，返回一个带有rank但suit不确定的结果
+            // 保证游戏过程不会因为断网完全中断
+            if (isOfflineFallback) {
+                Log.w(TAG, "启用断网兜底模式: API调用失败，尝试返回本地rank兜底结果")
+                return try {
+                    val fallbackHoleCards = holeCardsRankLocked?.map { rank ->
+                        CardInfo(rank, "")  // suit为空，表示不确定
+                    } ?: emptyList()
+                    val fallbackStreet = streetLocked ?: "preflop"
+                    // 使用上一次成功结果中的部分信息（如果有）
+                    val last = lastResult
+                    VisionResult(
+                        isPokerTable = false,  // 标记为非牌桌，表示这是兜底结果
+                        holeCards = fallbackHoleCards,
+                        communityCards = last?.communityCards ?: emptyList(),
+                        potSize = last?.potSize ?: 0,
+                        playerChips = last?.playerChips ?: 0,
+                        totalPlayers = last?.totalPlayers ?: 6,
+                        activePlayers = last?.activePlayers ?: 2,
+                        myPosition = last?.myPosition ?: "",
+                        street = fallbackStreet,
+                        toCall = last?.toCall ?: 0,
+                        minRaise = last?.minRaise ?: 0,
+                        buttons = last?.buttons ?: emptyList(),
+                        blindSB = last?.blindSB ?: 0,
+                        blindBB = last?.blindBB ?: 0,
+                        ante = last?.ante ?: 0,
+                        players = last?.players ?: emptyList(),
+                        dButtonPosition = last?.dButtonPosition ?: dButtonPosition,
+                        rawResponse = "OFFLINE_FALLBACK: ${e.message}",
+                        showdownCards = emptyList(),
+                        oppHud = emptyList(),
+                        buttonPositions = emptyList(),
+                        suitUncertain = true,  // 兜底模式下suit全部不确定
+                        isStraddle = last?.isStraddle ?: false,
+                        isBombPot = last?.isBombPot ?: false,
+                        isInsurance = last?.isInsurance ?: false,
+                        isPKO = last?.isPKO ?: false,
+                        gameMode = last?.gameMode ?: "cash",
+                        detectedPlatform = last?.detectedPlatform ?: "STANDARD",
+                        localSuitUsed = false  // 兜底模式下suit为空，未使用本地推断
+                    )
+                } catch (ex: Exception) {
+                    Log.e(TAG, "断网兜底也失败: ${ex.message}")
+                    null
+                }
+            }
+            null
+        }
     }
 
     private fun applyStreetCorrection(result: VisionResult): VisionResult {
@@ -580,6 +644,218 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
     private fun parseChipValue(data: JSONObject, key: String): Int { val r = data.opt(key) ?: return 0; return when(r) { is Int -> r; is Long -> r.toInt(); is Double -> r.toInt(); is String -> parseChipString(r); else -> data.optInt(key, 0) } }
     private fun parseChipString(s: String): Int { val t = s.trim().replace(",",""); return try { when { t.endsWith("K",true) -> (t.dropLast(1).toFloat()*1000).toInt(); t.endsWith("M",true) -> (t.dropLast(1).toFloat()*1000000).toInt(); t.contains(".") -> t.toFloat().toInt(); else -> t.toInt() } } catch (_: Exception) { 0 } }
 
+    // V2.9.230: 本地suit识别结果
+    data class LocalSuitResult(val suit: String, val confidence: Float)
+
+    /**
+     * V2.9.230: 本地花色识别——基于颜色分布+形状特征推断suit
+     * 输入: 卡牌区域的bitmap
+     * 输出: 推断的suit字符串(s/h/d/c) + 置信度，失败返回null
+     *
+     * 识别思路:
+     * 1. 颜色判断: 红色像素占比高 → hearts或diamonds；黑色像素占比高 → spades或clubs
+     * 2. 形状辅助: 宽长比偏宽(接近正方形) → diamonds/clubs；偏长(长方形) → hearts/spades
+     * 3. 红色牌面 + 偏宽 → diamonds；红色牌面 + 偏长 → hearts
+     *    黑色牌面 + 偏宽 → clubs；黑色牌面 + 偏长 → spades
+     *
+     * 注意: 本函数仅作为API不确定时的兜底补充，不替换API确定结果
+     */
+    private fun localSuitRecognize(cardBitmap: android.graphics.Bitmap?): LocalSuitResult? {
+        if (cardBitmap == null || cardBitmap.width <= 0 || cardBitmap.height <= 0) return null
+        return try {
+            val width = cardBitmap.width
+            val height = cardBitmap.height
+            // 采样点数量限制，避免大图性能问题
+            val sampleStep = maxOf(1, minOf(width, height) / 40)
+            var redPixels = 0
+            var blackPixels = 0
+            var totalSampled = 0
+            // 遍历采样像素，统计红/黑像素占比
+            for (y in 0 until height step sampleStep) {
+                for (x in 0 until width step sampleStep) {
+                    val pixel = cardBitmap.getPixel(x, y)
+                    val r = android.graphics.Color.red(pixel)
+                    val g = android.graphics.Color.green(pixel)
+                    val b = android.graphics.Color.blue(pixel)
+                    val alpha = android.graphics.Color.alpha(pixel)
+                    // 跳过透明或接近白色的背景像素
+                    if (alpha < 128) continue
+                    if (r > 240 && g > 240 && b > 240) continue
+                    // 判断红色: R明显高于G和B，且R足够大
+                    val isRed = r > 120 && r > g * 1.4f && r > b * 1.4f
+                    // 判断黑色: RGB都偏低
+                    val isBlack = r < 80 && g < 80 && b < 80
+                    if (isRed) redPixels++
+                    if (isBlack) blackPixels++
+                    totalSampled++
+                }
+            }
+            if (totalSampled == 0) return null
+            val redRatio = redPixels.toFloat() / totalSampled
+            val blackRatio = blackPixels.toFloat() / totalSampled
+            // 判断主色系
+            val isRedSuit = redRatio > blackRatio && redRatio > 0.08f
+            val isBlackSuit = blackRatio > redRatio && blackRatio > 0.08f
+            if (!isRedSuit && !isBlackSuit) return null
+            // 形状辅助: 宽高比
+            val aspectRatio = width.toFloat() / height.toFloat()
+            // 扑克牌标准比例约 0.71 (宽/高=63.5/88.9)
+            // 方块/梅花图案相对更"宽扁"，红桃/黑桃相对更"瘦长"
+            // 这里用宽高比做辅助区分，阈值需要根据实际裁剪区域调整
+            val isWideShape = aspectRatio > 0.75f
+            // 计算置信度
+            val colorConfidence = if (isRedSuit) {
+                redRatio / (redRatio + blackRatio)
+            } else {
+                blackRatio / (redRatio + blackRatio)
+            }
+            val shapeConfidence = if (isWideShape) {
+                (aspectRatio - 0.65f) / 0.2f  // 0.65→0, 0.85→1
+            } else {
+                (0.85f - aspectRatio) / 0.2f  // 0.85→0, 0.65→1
+            }.coerceIn(0f, 1f)
+            val totalConfidence = (colorConfidence * 0.7f + shapeConfidence * 0.3f).coerceIn(0f, 1f)
+            // 最终推断
+            val suit = when {
+                isRedSuit && isWideShape -> "d"     // 方块 diamonds
+                isRedSuit && !isWideShape -> "h"    // 红桃 hearts
+                isBlackSuit && isWideShape -> "c"   // 梅花 clubs
+                isBlackSuit && !isWideShape -> "s"  // 黑桃 spades
+                else -> return null
+            }
+            Log.d(TAG, "本地suit识别: $suit 置信度=$totalConfidence (红=$redRatio 黑=$blackRatio 宽高比=$aspectRatio)")
+            LocalSuitResult(suit, totalConfidence)
+        } catch (e: Exception) {
+            Log.w(TAG, "本地suit识别异常: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * V2.9.230: 从完整截图中裁剪指定位置的卡牌区域
+     * 用于本地suit识别时获取单张牌的bitmap
+     * 位置使用百分比坐标 (xPct, yPct, wPct, hPct)，范围 0.0~1.0
+     */
+    private fun cropCardFromBitmap(bitmap: android.graphics.Bitmap, xPct: Float, yPct: Float, wPct: Float, hPct: Float): android.graphics.Bitmap? {
+        return try {
+            val x = (bitmap.width * xPct).toInt().coerceIn(0, bitmap.width - 1)
+            val y = (bitmap.height * yPct).toInt().coerceIn(0, bitmap.height - 1)
+            val w = (bitmap.width * wPct).toInt().coerceIn(1, bitmap.width - x)
+            val h = (bitmap.height * hPct).toInt().coerceIn(1, bitmap.height - y)
+            android.graphics.Bitmap.createBitmap(bitmap, x, y, w, h)
+        } catch (e: Exception) {
+            Log.w(TAG, "裁剪卡牌区域异常: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * V2.9.230: suit置信度融合逻辑
+     * 输入: API返回的suit, suit_uncertain标记, 本地推断的suit
+     * 输出: Pair(最终suit, 是否使用了本地推断)
+     *
+     * 融合策略:
+     * 1. API确定(suit_uncertain=false) → 直接用API结果，完全信任
+     * 2. API不确定(suit_uncertain=true) → 用本地推断结果作为补充
+     * 3. 本地推断也为null → 保持API原始suit（可能为空）
+     */
+    private fun mergeSuitResult(apiSuit: String, apiUncertain: Boolean, localResult: LocalSuitResult?): Pair<String, Boolean> {
+        return try {
+            // API确定 → 完全信任API，不使用本地推断
+            if (!apiUncertain) {
+                return Pair(apiSuit, false)
+            }
+            // API不确定，尝试用本地推断补充
+            if (localResult != null && localResult.confidence >= 0.4f) {
+                Log.d(TAG, "suit融合: API不确定(${apiSuit.ifEmpty { "空" }}), 本地推断=${localResult.suit}(置信度=${localResult.confidence})，采用本地结果")
+                return Pair(localResult.suit, true)
+            }
+            // 本地推断也不可用，保持API原始结果
+            Log.d(TAG, "suit融合: API不确定(${apiSuit.ifEmpty { "空" }}), 本地推断不可用，保持API结果")
+            Pair(apiSuit, false)
+        } catch (e: Exception) {
+            Log.w(TAG, "suit融合异常: ${e.message}")
+            Pair(apiSuit, false)
+        }
+    }
+
+    /**
+     * V2.9.230: 对VisionResult中suit不确定的牌应用本地suit识别融合
+     * 输入: 原始VisionResult + 原始截图bitmap
+     * 输出: 融合后的VisionResult（可能更新了suit和localSuitUsed标记）
+     *
+     * 注意: 只对suit_uncertain=true时的牌进行本地推断补充
+     *       API确定的牌(suit_uncertain=false)完全保持不变
+     */
+    private fun applyLocalSuitFusion(result: VisionResult, screenshotBitmap: android.graphics.Bitmap?): VisionResult {
+        if (screenshotBitmap == null) return result
+        if (!result.suitUncertain) return result  // API全部确定，无需本地补充
+        return try {
+            var anyLocalUsed = false
+            // 处理手牌
+            val mergedHoleCards = result.holeCards.map { card ->
+                if (card.suit.isEmpty() || result.suitUncertain) {
+                    // 尝试从截图中裁剪手牌区域进行本地识别
+                    // 注意: 由于缺少精确的卡牌位置坐标，这里使用启发式位置估算
+                    // 手牌通常在屏幕底部中央区域，两张牌并排
+                    // 实际应用中可以根据UI布局调整这些百分比参数
+                    val cardBmp = try {
+                        // 估算单张手牌位置（底部中央偏左/偏右）
+                        // 这里只是示意位置，实际需要根据具体UI调整
+                        val cardWidthPct = 0.08f
+                        val cardHeightPct = 0.14f
+                        val baseYPct = 0.78f
+                        // 由于不知道具体是哪张牌，使用整个手牌区域近似
+                        // 更精确的方案是将裁剪位置与card index对应
+                        val xOffset = if (result.holeCards.size > 1) {
+                            val centerX = 0.5f
+                            val gap = 0.09f
+                            centerX - gap / 2 + result.holeCards.indexOf(card) * gap - cardWidthPct / 2
+                        } else {
+                            0.5f - cardWidthPct / 2
+                        }
+                        cropCardFromBitmap(screenshotBitmap, xOffset.coerceIn(0f, 1f), baseYPct, cardWidthPct, cardHeightPct)
+                    } catch (_: Exception) { null }
+                    val localResult = localSuitRecognize(cardBmp)
+                    val (mergedSuit, localUsed) = mergeSuitResult(card.suit, result.suitUncertain, localResult)
+                    if (localUsed) anyLocalUsed = true
+                    cardBmp?.recycle()
+                    CardInfo(card.rank, mergedSuit)
+                } else card
+            }
+            // 处理公共牌（如果也标记为suit不确定）
+            val mergedCommunityCards = result.communityCards.map { card ->
+                if (card.suit.isEmpty() || result.suitUncertain) {
+                    val cardBmp = try {
+                        // 公共牌通常在屏幕中央区域
+                        val cardWidthPct = 0.07f
+                        val cardHeightPct = 0.12f
+                        val centerYPct = 0.45f
+                        val totalWidth = cardWidthPct * result.communityCards.size + 0.02f * (result.communityCards.size - 1)
+                        val startXPct = 0.5f - totalWidth / 2
+                        val cardIdx = result.communityCards.indexOf(card)
+                        val xPct = startXPct + cardIdx * (cardWidthPct + 0.02f)
+                        cropCardFromBitmap(screenshotBitmap, xPct.coerceIn(0f, 1f), centerYPct - cardHeightPct / 2, cardWidthPct, cardHeightPct)
+                    } catch (_: Exception) { null }
+                    val localResult = localSuitRecognize(cardBmp)
+                    val (mergedSuit, localUsed) = mergeSuitResult(card.suit, result.suitUncertain, localResult)
+                    if (localUsed) anyLocalUsed = true
+                    cardBmp?.recycle()
+                    CardInfo(card.rank, mergedSuit)
+                } else card
+            }
+            if (anyLocalUsed) {
+                Log.d(TAG, "本地suit融合完成: 至少一张牌使用了本地推断结果")
+                result.copy(holeCards = mergedHoleCards, communityCards = mergedCommunityCards, localSuitUsed = true)
+            } else {
+                result.copy(holeCards = mergedHoleCards, communityCards = mergedCommunityCards)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "本地suit融合异常: ${e.message}")
+            result  // 失败时保持原始结果
+        }
+    }
+
     private fun validateResult(result: VisionResult): List<String> {
         val w = mutableListOf<String>(); val vr = setOf("A","K","Q","J","T","9","8","7","6","5","4","3","2")
         for (c in result.holeCards) { if (c.rank !in vr) w.add("无效点数:${c.rank}"); if (c.suit.isNotEmpty() && c.suit !in setOf("s","h","d","c")) w.add("无效花色:${c.suit}") }
@@ -647,6 +923,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             put("game_mode", result.gameMode)
             // V2.9.220: 自动检测到的平台（仅供参考，不自动切换）
             put("detected_platform", result.detectedPlatform)
+            // V2.9.230: 本地suit识别标记——供前端/JS引擎判断数据可信度
+            put("local_suit_used", result.localSuitUsed)
+            put("is_offline_fallback", isOfflineFallback && result.rawResponse.startsWith("OFFLINE_FALLBACK"))
             if (warnings.isNotEmpty()) put("_warnings", JSONArray(warnings))
         }.toString()
     }
