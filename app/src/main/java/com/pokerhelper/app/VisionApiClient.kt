@@ -1,5 +1,8 @@
 package com.pokerhelper.app
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.Log
 import okhttp3.*
@@ -39,6 +42,31 @@ object VisionApiClient {
     
     // V2.9.108: prompt格式开关——true=单行紧凑(快), false=原格式(稳)
     var useCompactPrompt = true
+
+    // V3.0.0: 本地识别开关——GG扑克平台优先使用本地识别引擎
+    var useLocalRecognition: Boolean = true
+    private var localRecognizer: LocalSceneRecognizer? = null
+    private var localRecognizerContext: Context? = null
+    private var localScreenW: Int = 1080
+    private var localScreenH: Int = 2344
+
+    /**
+     * V3.0.0: 初始化本地识别引擎
+     * 需在使用本地识别前调用，传入Context和屏幕尺寸
+     */
+    fun initLocalRecognizer(context: Context, cardRecognizer: CardRecognizer, screenW: Int = 1080, screenH: Int = 2344) {
+        try {
+            localRecognizerContext = context.applicationContext
+            localScreenW = screenW
+            localScreenH = screenH
+            localRecognizer = LocalSceneRecognizer(context.applicationContext, cardRecognizer)
+            localRecognizer?.init(screenW, screenH)
+            Log.i(TAG, "本地识别引擎初始化完成: ${screenW}x${screenH}")
+        } catch (e: Exception) {
+            Log.e(TAG, "本地识别引擎初始化失败", e)
+            localRecognizer = null
+        }
+    }
     
     var apiProvider = "openai"
     var apiKey = ""
@@ -135,6 +163,39 @@ object VisionApiClient {
         if (apiKey.isEmpty()) { lastError = "未设置API Key"; return null }
         return try {
             val t0 = System.currentTimeMillis()
+
+            // V3.0.0: GG扑克优先使用本地识别引擎
+            if (useLocalRecognition && GameModeConfig.currentPlatform == GamePlatform.GGPOKER && localRecognizer != null) {
+                try {
+                    val bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
+                    if (bitmap != null) {
+                        val tLocal0 = System.currentTimeMillis()
+                        val localResult = localRecognizer?.recognizeScene(bitmap)
+                        val tLocal1 = System.currentTimeMillis()
+                        Log.d(TAG, "⏱ 本地识别耗时: ${tLocal1 - tLocal0}ms")
+
+                        if (localResult != null && localRecognizer?.isValidResult(localResult) == true) {
+                            Log.i(TAG, "★ 本地识别成功且有效，跳过API (${tLocal1 - tLocal0}ms)")
+                            // 应用与API路径相同的后期处理：D按钮保险、street纠错、校验纠错
+                            var corrected = applyDButtonInsuranceToLocal(localResult)
+                            corrected = applyStreetCorrection(corrected)
+                            corrected = applyValidationCorrections(corrected)
+                            lastResult = corrected
+                            lastResultTime = System.currentTimeMillis()
+                            lastError = ""
+                            lastRawResponse = localResult.rawResponse
+                            bitmap.recycle()
+                            return corrected
+                        } else {
+                            Log.w(TAG, "本地识别失败或无效，降级到API路径")
+                        }
+                        bitmap.recycle()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "本地识别异常，降级到API: ${e.message}", e)
+                }
+            }
+
             val compressedJpeg = compressImage(jpegData, maxWidth = 960)
             val t1 = System.currentTimeMillis()
             val base64Image = Base64.encodeToString(compressedJpeg, Base64.NO_WRAP)
@@ -283,6 +344,16 @@ object VisionApiClient {
             }
             null
         }
+    }
+
+    /**
+     * V3.0.0: 本地识别结果应用D按钮保险
+     * 复用与API路径相同的保险逻辑
+     */
+    private fun applyDButtonInsuranceToLocal(result: VisionResult): VisionResult {
+        val dPosInsured = applyDButtonInsurance(result.dButtonPosition, result.holeCards)
+        dButtonPosition = dPosInsured
+        return result.copy(dButtonPosition = dPosInsured)
     }
 
     private fun applyStreetCorrection(result: VisionResult): VisionResult {
