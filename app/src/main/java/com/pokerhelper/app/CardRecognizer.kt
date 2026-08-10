@@ -437,8 +437,8 @@ class CardRecognizer(private val context: Context) {
             suitStartY = (h * 0.45).toInt()  // rank占上45%，suit在下半部
             suitEndY = minOf(h, (h * 0.75).toInt())  // y=95%会扫到玩家名字区域，改为75%截断
         } else {
-            suitStartY = (h * 0.35).toInt()
-            suitEndY = minOf(h, (h * 0.75).toInt())  // 公共牌suit在牌面上部，y=92%会扫到牌下方的筹码/背景
+            suitStartY = (h * 0.40).toInt()  // V3.6: 从35%调整到40%，与测试最优窗口一致
+            suitEndY = minOf(h, (h * 0.90).toInt())  // V3.6: 从75%扩展到90%，捕获♠底部尖端（y≈86%）
         }
         val suitW = (w * 0.65).toInt()  // suit symbol在左侧
 
