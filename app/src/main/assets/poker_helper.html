@@ -432,7 +432,7 @@ var SU=['h','d','s','c'];
 var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 
 // 全局状态
-var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',game_mode:'cash',platform:'standard',rake_cap:0};
+var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',game_mode:'cash',_icmFoldMult:1,_icmRaiseMult:1,_icmCallMult:1,platform:'standard',rake_cap:0};
 var _pi=null,_ms='h';
 var _decisionCache={};var _cacheMax=200;
 function cacheKey(){return G.phase+'_'+G.scene+'_'+G.pos+'_'+G.act+'_'+G.opp+'_'+G.stk+'_'+G.pot+'_'+G.bet+'_a'+(G.ante||0)+'_'+(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'')+G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('')+'L'+G.limpers;}
@@ -2568,6 +2568,16 @@ var HandStateMachine=(function(){
       var _nashEffBB=Math.round(1/Math.max(spr,0.02));
       if(_nashEffBB<=15){
         var _nashR=NashPushFold.decide(k,p,scene,spr,_nashEffBB,bet,pot);
+        // V2.9.190: 锦标赛模式下短码push/fold范围再收紧10%
+        try{
+          if(G.game_mode === 'tournament' && _nashR && (_nashR.a === 'raise' || _nashR.a === 'push')){
+            var _tightenFreq = (_nashR._seFreq !== undefined ? _nashR._seFreq : 1) * 0.9;
+            if(_tightenFreq < Math.random()){
+              console.log('[ICM] 锦标赛短码收紧: '+k+' push→fold (freq='+_tightenFreq.toFixed(2)+')');
+              _nashR = {a:'fold', r:'[ICM]锦标赛短码收紧', eq:_nashR.eq||0, c:'l', scene:_nashR.scene||'', spr:_nashR.spr||0, _se:true};
+            }
+          }
+        }catch(e3){console.log('[ICM] 纳什收紧失败: '+e3.message);}
         if(_nashR)return _nashR;
       }
     }
@@ -3079,6 +3089,66 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
   }
 
   // V2.9.161: 统一调整管道
+  // ====== V2.9.190: 锦标赛ICM压力计算 ======
+  // 根据筹码深度、剩余人数、钱圈位置计算fold/raise/call乘数
+  function _icmPressure(heroStack, avgStack, totalPlayers, playersLeft, inMoney){
+    try{
+      var foldMult=1.0, raiseMult=1.0, callMult=1.0;
+      var heroBB = heroStack || 100;
+      var pLeft = playersLeft || 9;
+      // 钱圈泡沫位置估算: 通常前10%-15%进入钱圈,简化为总人数的1/8
+      var payBubble = Math.max(9, Math.round((totalPlayers || pLeft) / 8));
+  
+      // 1) 短筹码: <15BB, 更紧, push/fold倾向
+      if(heroBB < 15){
+        foldMult = 1.3;
+        raiseMult = 1.2;
+        callMult = 0.9;
+      }
+      // 2) 泡沫期: 剩余人数接近钱圈泡沫, hero筹码中等 → 极度收紧
+      if(pLeft <= payBubble + 5 && pLeft > payBubble - 2 && heroBB >= 15 && heroBB < 40){
+        foldMult = Math.max(foldMult, 1.5);
+        raiseMult = Math.min(raiseMult, 0.8);
+        callMult = Math.min(callMult, 0.7);
+      }
+      // 3) 决赛桌: ≤9人, 略微收紧但仍可进攻
+      if(pLeft <= 9 && heroBB >= 15){
+        foldMult = Math.max(foldMult, 1.2);
+        raiseMult = Math.max(raiseMult, 1.1);
+      }
+      // 4) 进入钱圈后: 可以稍微放松(已锁定奖金)
+      if(inMoney && pLeft <= payBubble){
+        foldMult = Math.max(1.0, foldMult * 0.9);
+        raiseMult = raiseMult * 1.1;
+      }
+      return {foldMult:foldMult, raiseMult:raiseMult, callMult:callMult};
+    }catch(e){
+      console.log('[ICM] 压力计算失败: '+e.message);
+      return {foldMult:1, raiseMult:1, callMult:1};
+    }
+  }
+  
+  // 锦标赛阶段检测: 根据玩家数和hero筹码返回阶段
+  function _detectTournamentPhase(){
+    try{
+      var players = G.players || 6;
+      // 如果players是数组取长度,如果是数字直接用
+      var pCount = Array.isArray(players) ? players.length : (typeof players==='number'?players:6);
+      var heroBB = G.stk || 100;
+      if(pCount > 18){
+        return 'early';
+      }else if(pCount > 9 && pCount <= 18 && heroBB < 25){
+        return 'bubble';
+      }else if(pCount <= 9){
+        return 'final';
+      }
+      return 'normal';
+    }catch(e){
+      console.log('[ICM] 阶段检测失败: '+e.message);
+      return 'normal';
+    }
+  }
+  
   function _applyPipeline(baseFreq,action,hcKey,oppType,street,context,sprAdj,is3bP,isMW){
     var f=baseFreq;
     sprAdj=sprAdj||{cbet:1,fcb:1,bluff:1};
@@ -3104,6 +3174,27 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
     f=ea.freq;if(ea.label)console.log('[SE161] EA: '+ea.label);
     // 5) RangeEstimator
     f=RangeEstimator.adjustForRange(f,oppType,street||'flop',action);
+    // V2.9.190: 锦标赛ICM频率调整
+    try{
+      if(G.game_mode === 'tournament'){
+        var _foldM = G._icmFoldMult || 1;
+        var _raiseM = G._icmRaiseMult || 1;
+        var _callM = G._icmCallMult || 1;
+        if(action === 'fold' || context === 'facing' || context === 'fcb'){
+          f = f * _foldM;
+        }
+        if(action === 'raise' || action === '3b' || action === 'bet' || action === 'cr' || context === 'cbet' || context === 'barrel' || context === 'bluff'){
+          f = f * _raiseM;
+        }
+        if(action === 'call' || action === 'c'){
+          f = f * _callM;
+        }
+        if(f < 0) f = 0;
+        if(f > 1) f = 1;
+      }
+    }catch(e){
+      console.log('[ICM] pipeline调整失败: '+e.message);
+    }
     return f;
   }
 
@@ -7676,6 +7767,27 @@ function decide(){
   }
 }
 function _decideInner(){
+  // V2.9.190: 锦标赛ICM调整——只在tournament模式下生效
+  try{
+    if(G.game_mode === 'tournament'){
+      var _tPhase = _detectTournamentPhase();
+      var _heroBB = G.stk || 100;
+      var _avgBB = G.stk || 100;
+      var _pLeft = (Array.isArray(G.players) ? G.players.length : (typeof G.players==='number'?G.players:(G.act||6)));
+      var _icmAdj = _icmPressure(_heroBB, _avgBB, _pLeft, _pLeft, false);
+      G._icmFoldMult = _icmAdj.foldMult;
+      G._icmRaiseMult = _icmAdj.raiseMult;
+      G._icmCallMult = _icmAdj.callMult;
+      console.log('[ICM] 阶段='+_tPhase+' 玩家数='+_pLeft+' 筹码='+_heroBB+'BB foldMult='+_icmAdj.foldMult.toFixed(2)+' raiseMult='+_icmAdj.raiseMult.toFixed(2));
+    }else{
+      G._icmFoldMult = 1;
+      G._icmRaiseMult = 1;
+      G._icmCallMult = 1;
+    }
+  }catch(e){
+    console.log('[ICM] decide入口计算失败: '+e.message);
+    G._icmFoldMult = 1; G._icmRaiseMult = 1; G._icmCallMult = 1;
+  }
   var k=getHandKey();
   if(!k)return null;
   var ck=cacheKey();
@@ -9405,7 +9517,7 @@ function updateBet(){G.bet=parseInt(document.getElementById('betInp').value)||0;
 function togAdv(){document.getElementById('adv').classList.toggle('show');}
 function clr(){
   document.body.classList.remove('speed-mode');
-  G.hole=[null,null];G.comm=[null,null,null,null,null];G._heroDid4bet=false;G._slowplayed=false;
+  G.hole=[null,null];G.comm=[null,null,null,null,null];G._heroDid4bet=false;G._slowplayed=false;G._icmFoldMult=1;G._icmRaiseMult=1;G._icmCallMult=1;
   G.scene=G.phase==='pre'?'open':'check';
   G.bet=0;G.pot=10;G.limpers=0;mxVisible=true;
   document.getElementById('mxWrap').classList.remove('collapsed');
@@ -10724,7 +10836,7 @@ function onVisionResult(data){
     // 失败时重置为默认值，不影响原逻辑
     try{
       G.is_straddle = false; G.is_bomb_pot = false; G.is_insurance = false;
-      G.is_pko = false; G.game_type = 'normal'; G.game_mode = 'cash'; G.platform = 'standard'; G.rake_cap = 0;
+      G.is_pko = false; G.game_type = 'normal'; G.game_mode = 'cash'; G.platform = 'standard'; G.rake_cap = 0; G._icmFoldMult = 1; G._icmRaiseMult = 1; G._icmCallMult = 1;
     }catch(e2){}
   }
   // ===== V2.9.186 END =====
@@ -10798,7 +10910,7 @@ function onVisionResult(data){
     }
     OppProfiler.updateUI();
     // V2.9.105: 从opp_seats的bet检测3bet和raiser角色
-    G._facing3bet=false;
+    G._facing3bet=false; G._icmFoldMult=1;G._icmRaiseMult=1;G._icmCallMult=1;
     G._raiserRole='unknown';
     G._raiserStackType='unknown';
     var _maxBet=0,_raiserPos='';

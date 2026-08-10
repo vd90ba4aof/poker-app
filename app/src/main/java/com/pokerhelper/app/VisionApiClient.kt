@@ -100,7 +100,9 @@ object VisionApiClient {
         val isInsurance: Boolean = false,          // 是否出现Insurance/Cashout按钮
         val isPKO: Boolean = false,                // 是否PKO赏金赛
         // V2.9.212: 游戏模式检测——现金桌vs锦标赛
-        val gameMode: String = "cash"              // 游戏模式: cash=现金桌, tournament=锦标赛(MTT)
+        val gameMode: String = "cash",             // 游戏模式: cash=现金桌, tournament=锦标赛(MTT)
+        // V2.9.220: 自动检测到的平台（基于OCR文本识别，仅供参考，不自动切换）
+        val detectedPlatform: String = "STANDARD"  // 自动检测平台: STANDARD/GGPOKER/SHORT_DECK
     )
 
     data class CardInfo(val rank: String, val suit: String)
@@ -286,6 +288,34 @@ object VisionApiClient {
     }
 
     /**
+     * V2.9.220: 根据OCR识别文本自动检测平台
+     * 基于关键词匹配，失败时返回默认 STANDARD
+     * 检测结果仅供参考，不自动切换用户手动选择的平台
+     */
+    private fun detectPlatform(content: String): String {
+        return try {
+            when {
+                // GG扑克：匹配 GGPoker / GG Poker / GGPOKER 等变体
+                content.contains("GGPoker", ignoreCase = true) ||
+                content.contains("GG Poker", ignoreCase = true) ||
+                content.contains("GGPOKER", ignoreCase = true) -> "GGPOKER"
+                // PokerStars：按标准处理
+                content.contains("PokerStars", ignoreCase = true) ||
+                content.contains("POKERSTARS", ignoreCase = true) -> "STANDARD"
+                // 短牌：匹配 6+ / Short Deck / 短牌
+                content.contains("6+") ||
+                content.contains("Short Deck", ignoreCase = true) ||
+                content.contains("短牌") -> "SHORT_DECK"
+                // 默认标准扑克
+                else -> "STANDARD"
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "detectPlatform 异常: ${e.message}，使用默认STANDARD")
+            "STANDARD"
+        }
+    }
+
+    /**
      * V2.9.200: 根据当前平台生成Prompt差异化描述
      * 返回 Pair(平台前缀描述, 按钮描述文本)
      */
@@ -317,7 +347,7 @@ object VisionApiClient {
         // V2.9.200: 根据当前平台动态调整prompt描述（GG/标准/短牌）
         val platformHint = buildPlatformPromptHint()
         val prompt = """${platformHint.first}5-max识别引擎。只输出JSON。
-Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"blinds":"100/200","phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash"}
+Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"blinds":"100/200","phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"STANDARD"}
 花色:s=♠黑 h=♥红心 d=♦方块 c=♣梅花。对子花色须不同。
 pot展开简写:1.2K=1200,1.5M=1500000。底池=桌面中央筹码堆。
 active_players=仅有牌(明/暗)的玩家,弃牌/空座不计。
@@ -326,7 +356,8 @@ button_positions=每按钮{text与buttons一致,xPct=中心X/屏宽,yPct=中心Y
 opp_seats须含nickname(头像旁用户名)。showdown_cards=摊牌对手牌,看不到填[]。opp_hud=对手统计,看不到填[]。
 GG特有字段:is_straddle=是否Straddle(第三盲注);is_bomb_pot=是否BombPot(所有玩家ante后直接翻牌);is_insurance=是否出现Insurance/EV Cashout按钮;is_pko=是否PKO赏金赛(牌桌有赏金标识)。
 game_mode=现金桌填cash,锦标赛填tournament。判断依据:有"锦标赛/报名费/奖池/剩余人数/盲注倒计时"填tournament,否则填cash。
-示例:{"is_poker_table":true,"hole_cards":[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}],"community_cards":[{"rank":"Q","suit":"d"}],"pot":1500,"my_chips":25000,"bet_to_call":0,"dealer_seat":3,"my_seat":1,"blinds":"100/200","phase":"flop","opp_seats":[{"seat":2,"nickname":"King","chips":"18000","action":"check"}],"buttons":["让牌","下注500"],"button_positions":[{"text":"让牌","xPct":0.50,"yPct":0.88},{"text":"下注500","xPct":0.83,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash"}
+detected_platform=根据桌面logo/品牌文字自动识别平台。判断依据:看到GGPoker/GG标志填GGPOKER,看到6+/Short Deck/短牌填SHORT_DECK,看到PokerStars或其他填STANDARD。
+示例:{"is_poker_table":true,"hole_cards":[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}],"community_cards":[{"rank":"Q","suit":"d"}],"pot":1500,"my_chips":25000,"bet_to_call":0,"dealer_seat":3,"my_seat":1,"blinds":"100/200","phase":"flop","opp_seats":[{"seat":2,"nickname":"King","chips":"18000","action":"check"}],"buttons":["让牌","下注500"],"button_positions":[{"text":"让牌","xPct":0.50,"yPct":0.88},{"text":"下注500","xPct":0.83,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"STANDARD"}
 ${streetHint}${rankHint}识别:"""
 
         return JSONObject().apply {
@@ -418,7 +449,16 @@ ${streetHint}${rankHint}识别:"""
         val isPKO = data.optBoolean("is_pko", false)
         // V2.9.212: 游戏模式检测——现金桌vs锦标赛
         val gameMode = data.optString("game_mode", "cash").takeIf { it.isNotEmpty() } ?: "cash"
-return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), parseCards(data.optJSONArray("community_cards")), insuredPot, parseChipValue(data, "my_chips"), data.optInt("total_players", 6), data.optInt("active_players", 2), data.optString("my_position", ""), street, finalToCall, data.optInt("min_raise", 0), buttons, blindSB, blindBB, parseChipValue(data, "ante"), players, data.optString("d_button_pos", ""), content, showdownCards, oppHud, buttonPositions, suitUncertain, isStraddle, isBombPot, isInsurance, isPKO, gameMode)
+        // V2.9.220: 平台自动检测——双重策略：优先用VLM返回的detected_platform，兜底用OCR关键词匹配
+        val vlmDetectedPlatform = data.optString("detected_platform", "").takeIf { it.isNotEmpty() }
+        val ocrDetectedPlatform = detectPlatform(content)
+        val detectedPlatform = vlmDetectedPlatform ?: ocrDetectedPlatform
+        Log.i(TAG, "平台检测: VLM=$vlmDetectedPlatform, OCR=$ocrDetectedPlatform, 最终=$detectedPlatform, 当前配置=${GameModeConfig.currentPlatform.name}")
+        // TODO: V2.9.220+ 连续3次检测一致时可考虑自动切换平台（需评估误判风险）
+        if (detectedPlatform != GameModeConfig.currentPlatform.name) {
+            Log.i(TAG, "平台检测与当前配置不一致: 检测=$detectedPlatform, 配置=${GameModeConfig.currentPlatform.name}（暂不自动切换）")
+        }
+return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), parseCards(data.optJSONArray("community_cards")), insuredPot, parseChipValue(data, "my_chips"), data.optInt("total_players", 6), data.optInt("active_players", 2), data.optString("my_position", ""), street, finalToCall, data.optInt("min_raise", 0), buttons, blindSB, blindBB, parseChipValue(data, "ante"), players, data.optString("d_button_pos", ""), content, showdownCards, oppHud, buttonPositions, suitUncertain, isStraddle, isBombPot, isInsurance, isPKO, gameMode, detectedPlatform)
     }
 
     private fun parseOppSeats(arr: JSONArray?): List<PlayerInfo> {
@@ -605,6 +645,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             put("is_pko", result.isPKO)
             // V2.9.212: 游戏模式——现金桌/锦标赛
             put("game_mode", result.gameMode)
+            // V2.9.220: 自动检测到的平台（仅供参考，不自动切换）
+            put("detected_platform", result.detectedPlatform)
             if (warnings.isNotEmpty()) put("_warnings", JSONArray(warnings))
         }.toString()
     }
