@@ -432,7 +432,7 @@ var SU=['h','d','s','c'];
 var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 
 // 全局状态
-var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',platform:'standard',rake_cap:0};
+var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',game_mode:'cash',platform:'standard',rake_cap:0};
 var _pi=null,_ms='h';
 var _decisionCache={};var _cacheMax=200;
 function cacheKey(){return G.phase+'_'+G.scene+'_'+G.pos+'_'+G.act+'_'+G.opp+'_'+G.stk+'_'+G.pot+'_'+G.bet+'_a'+(G.ante||0)+'_'+(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'')+G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('')+'L'+G.limpers;}
@@ -10682,6 +10682,7 @@ function onVisionResult(data){
     G.is_insurance = data.is_insurance === true ? true : false;
     G.is_pko = data.is_pko === true ? true : false;
     G.game_type = typeof data.game_type === 'string' ? data.game_type : 'normal';
+    G.game_mode = typeof data.game_mode === 'string' ? data.game_mode : 'cash';
     G.platform = typeof data.platform === 'string' ? data.platform : 'standard';
     G.rake_cap = typeof data.rake_cap === 'number' && data.rake_cap > 0 ? data.rake_cap : 0;
 
@@ -10716,14 +10717,14 @@ function onVisionResult(data){
 
     console.log('[GG规则解析] straddle='+G.is_straddle+' bomb_pot='+G.is_bomb_pot
       +' insurance='+G.is_insurance+' pko='+G.is_pko
-      +' game_type='+G.game_type+' platform='+G.platform
+      +' game_type='+G.game_type+' game_mode='+G.game_mode+' platform='+G.platform
       +' rake_cap='+G.rake_cap);
   }catch(e){
     console.log('[GG规则解析] 解析失败，fallback到标准规则: '+e.message);
     // 失败时重置为默认值，不影响原逻辑
     try{
       G.is_straddle = false; G.is_bomb_pot = false; G.is_insurance = false;
-      G.is_pko = false; G.game_type = 'normal'; G.platform = 'standard'; G.rake_cap = 0;
+      G.is_pko = false; G.game_type = 'normal'; G.game_mode = 'cash'; G.platform = 'standard'; G.rake_cap = 0;
     }catch(e2){}
   }
   // ===== V2.9.186 END =====

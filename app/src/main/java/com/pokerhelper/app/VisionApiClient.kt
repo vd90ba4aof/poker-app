@@ -98,7 +98,9 @@ object VisionApiClient {
         val isStraddle: Boolean = false,           // 是否Straddle阶段
         val isBombPot: Boolean = false,            // 是否Bomb Pot
         val isInsurance: Boolean = false,          // 是否出现Insurance/Cashout按钮
-        val isPKO: Boolean = false                 // 是否PKO赏金赛
+        val isPKO: Boolean = false,                // 是否PKO赏金赛
+        // V2.9.212: 游戏模式检测——现金桌vs锦标赛
+        val gameMode: String = "cash"              // 游戏模式: cash=现金桌, tournament=锦标赛(MTT)
     )
 
     data class CardInfo(val rank: String, val suit: String)
@@ -315,7 +317,7 @@ object VisionApiClient {
         // V2.9.200: 根据当前平台动态调整prompt描述（GG/标准/短牌）
         val platformHint = buildPlatformPromptHint()
         val prompt = """${platformHint.first}5-max识别引擎。只输出JSON。
-Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"blinds":"100/200","phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false}
+Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"blinds":"100/200","phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash"}
 花色:s=♠黑 h=♥红心 d=♦方块 c=♣梅花。对子花色须不同。
 pot展开简写:1.2K=1200,1.5M=1500000。底池=桌面中央筹码堆。
 active_players=仅有牌(明/暗)的玩家,弃牌/空座不计。
@@ -323,7 +325,8 @@ buttons=底部全部按钮(${platformHint.second}),不可遗漏!
 button_positions=每按钮{text与buttons一致,xPct=中心X/屏宽,yPct=中心Y/屏高},加注可能横排多坐标。
 opp_seats须含nickname(头像旁用户名)。showdown_cards=摊牌对手牌,看不到填[]。opp_hud=对手统计,看不到填[]。
 GG特有字段:is_straddle=是否Straddle(第三盲注);is_bomb_pot=是否BombPot(所有玩家ante后直接翻牌);is_insurance=是否出现Insurance/EV Cashout按钮;is_pko=是否PKO赏金赛(牌桌有赏金标识)。
-示例:{"is_poker_table":true,"hole_cards":[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}],"community_cards":[{"rank":"Q","suit":"d"}],"pot":1500,"my_chips":25000,"bet_to_call":0,"dealer_seat":3,"my_seat":1,"blinds":"100/200","phase":"flop","opp_seats":[{"seat":2,"nickname":"King","chips":"18000","action":"check"}],"buttons":["让牌","下注500"],"button_positions":[{"text":"让牌","xPct":0.50,"yPct":0.88},{"text":"下注500","xPct":0.83,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false}
+game_mode=现金桌填cash,锦标赛填tournament。判断依据:有"锦标赛/报名费/奖池/剩余人数/盲注倒计时"填tournament,否则填cash。
+示例:{"is_poker_table":true,"hole_cards":[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}],"community_cards":[{"rank":"Q","suit":"d"}],"pot":1500,"my_chips":25000,"bet_to_call":0,"dealer_seat":3,"my_seat":1,"blinds":"100/200","phase":"flop","opp_seats":[{"seat":2,"nickname":"King","chips":"18000","action":"check"}],"buttons":["让牌","下注500"],"button_positions":[{"text":"让牌","xPct":0.50,"yPct":0.88},{"text":"下注500","xPct":0.83,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash"}
 ${streetHint}${rankHint}识别:"""
 
         return JSONObject().apply {
@@ -413,7 +416,9 @@ ${streetHint}${rankHint}识别:"""
         val isBombPot = data.optBoolean("is_bomb_pot", false)
         val isInsurance = data.optBoolean("is_insurance", false)
         val isPKO = data.optBoolean("is_pko", false)
-return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), parseCards(data.optJSONArray("community_cards")), insuredPot, parseChipValue(data, "my_chips"), data.optInt("total_players", 6), data.optInt("active_players", 2), data.optString("my_position", ""), street, finalToCall, data.optInt("min_raise", 0), buttons, blindSB, blindBB, parseChipValue(data, "ante"), players, data.optString("d_button_pos", ""), content, showdownCards, oppHud, buttonPositions, suitUncertain, isStraddle, isBombPot, isInsurance, isPKO)
+        // V2.9.212: 游戏模式检测——现金桌vs锦标赛
+        val gameMode = data.optString("game_mode", "cash").takeIf { it.isNotEmpty() } ?: "cash"
+return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), parseCards(data.optJSONArray("community_cards")), insuredPot, parseChipValue(data, "my_chips"), data.optInt("total_players", 6), data.optInt("active_players", 2), data.optString("my_position", ""), street, finalToCall, data.optInt("min_raise", 0), buttons, blindSB, blindBB, parseChipValue(data, "ante"), players, data.optString("d_button_pos", ""), content, showdownCards, oppHud, buttonPositions, suitUncertain, isStraddle, isBombPot, isInsurance, isPKO, gameMode)
     }
 
     private fun parseOppSeats(arr: JSONArray?): List<PlayerInfo> {
@@ -598,6 +603,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             put("is_bomb_pot", result.isBombPot)
             put("is_insurance", result.isInsurance)
             put("is_pko", result.isPKO)
+            // V2.9.212: 游戏模式——现金桌/锦标赛
+            put("game_mode", result.gameMode)
             if (warnings.isNotEmpty()) put("_warnings", JSONArray(warnings))
         }.toString()
     }

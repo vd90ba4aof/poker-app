@@ -27,6 +27,12 @@ enum class GameType(val displayName: String) {
     ALL_IN_OR_FOLD("All-In or Fold")
 }
 
+// V2.9.212: 游戏模式——现金桌 vs 锦标赛(MTT)
+enum class GameMode(val displayName: String) {
+    CASH("现金桌"),
+    TOURNAMENT("锦标赛")
+}
+
 // 屏幕方向
 enum class ScreenOrientation {
     LANDSCAPE, PORTRAIT
@@ -75,6 +81,8 @@ object GameModeConfig {
     private const val PREFS_NAME = "game_mode_config"
     private const val KEY_PLATFORM = "current_platform"
     private const val KEY_GAME_TYPE = "current_game_type"
+    // V2.9.212: 游戏模式（现金桌/锦标赛）
+    private const val KEY_GAME_MODE = "current_game_mode"
 
     private var prefs: SharedPreferences? = null
 
@@ -82,6 +90,9 @@ object GameModeConfig {
     var currentPlatform: GamePlatform = GamePlatform.STANDARD
         private set
     var currentGameType: GameType = GameType.NORMAL
+        private set
+    // V2.9.212: 当前游戏模式——默认现金桌
+    var currentGameMode: GameMode = GameMode.CASH
         private set
 
     /**
@@ -91,6 +102,7 @@ object GameModeConfig {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val savedPlatformName = prefs?.getString(KEY_PLATFORM, GamePlatform.STANDARD.name) ?: GamePlatform.STANDARD.name
         val savedGameTypeName = prefs?.getString(KEY_GAME_TYPE, GameType.NORMAL.name) ?: GameType.NORMAL.name
+        val savedGameModeName = prefs?.getString(KEY_GAME_MODE, GameMode.CASH.name) ?: GameMode.CASH.name
         try {
             currentPlatform = GamePlatform.valueOf(savedPlatformName)
         } catch (e: IllegalArgumentException) {
@@ -103,7 +115,14 @@ object GameModeConfig {
             Log.w(TAG, "无效游戏类型: $savedGameTypeName，使用默认NORMAL")
             currentGameType = GameType.NORMAL
         }
-        Log.i(TAG, "GameModeConfig初始化: platform=$currentPlatform, gameType=$currentGameType")
+        // V2.9.212: 加载游戏模式
+        try {
+            currentGameMode = GameMode.valueOf(savedGameModeName)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "无效游戏模式: $savedGameModeName，使用默认CASH")
+            currentGameMode = GameMode.CASH
+        }
+        Log.i(TAG, "GameModeConfig初始化: platform=$currentPlatform, gameType=$currentGameType, gameMode=$currentGameMode")
     }
 
     /**
@@ -124,6 +143,16 @@ object GameModeConfig {
         currentGameType = gameType
         prefs?.edit()?.putString(KEY_GAME_TYPE, gameType.name)?.apply()
         Log.i(TAG, "切换游戏类型: $gameType")
+    }
+
+    /**
+     * V2.9.212: 切换游戏模式（现金桌/锦标赛），持久化到SharedPreferences
+     */
+    fun setGameMode(gameMode: GameMode) {
+        if (currentGameMode == gameMode) return
+        currentGameMode = gameMode
+        prefs?.edit()?.putString(KEY_GAME_MODE, gameMode.name)?.apply()
+        Log.i(TAG, "切换游戏模式: $gameMode")
     }
 
     // ============================================================
