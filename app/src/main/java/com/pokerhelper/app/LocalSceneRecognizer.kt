@@ -862,6 +862,8 @@ class LocalSceneRecognizer(
                 isInsurance = isInsurance,
                 isPKO = isPKO,
                 gameMode = gameMode,
+                gameType = "normal",
+                rakeCap = 0,
                 detectedPlatform = "GGPOKER",
                 localSuitUsed = true
             )

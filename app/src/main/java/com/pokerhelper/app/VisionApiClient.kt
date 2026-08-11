@@ -137,6 +137,9 @@ object VisionApiClient {
         val isPKO: Boolean = false,                // 是否PKO赏金赛
         // V2.9.212: 游戏模式检测——现金桌vs锦标赛
         val gameMode: String = "cash",             // 游戏模式: cash=现金桌, tournament=锦标赛(MTT)
+        // V2.9.xxx: 游戏类型与抽水（数据链补齐）
+        val gameType: String = "normal",           // 游戏类型: normal/rush_cash
+        val rakeCap: Int = 0,                      // 抽水上限（单位同筹码）
         // V2.9.220: 自动检测到的平台（基于OCR文本识别，仅供参考，不自动切换）
         val detectedPlatform: String = "STANDARD",  // 自动检测平台: STANDARD/GGPOKER/SHORT_DECK
         // V2.9.230: 本地suit识别标记——标记最终suit是否来自本地推断（用于前端判断可信度）
@@ -979,9 +982,12 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             // V2.9.168: 同时输出opp_seats格式供JS OppProfiler使用
             put("opp_seats", JSONArray(result.players.map { p -> JSONObject().apply {
                 val seatNum = when(p.position) { "bottom"->1; "left-bottom"->2; "left-top"->3; "top-center"->4; "right-top"->5; "right-bottom"->6; else->0 }
+                val bbThreshold = if(result.blindBB > 0) result.blindBB * 3 else 600
                 put("seat", seatNum)
                 put("chips", p.chips.toString())
-                put("action", if(p.bet > 0) { if(p.bet > 600) "raise" else "call" } else if(p.active) "" else "fold")
+                put("bet", p.bet)
+                put("stack", p.chips)
+                put("action", if(p.bet > bbThreshold) "raise" else if(p.bet > 0) "call" else if(p.active) "" else "fold")
                 put("active", p.active)
                 if(p.nickname.isNotEmpty()) put("nickname", p.nickname)
             } }))
@@ -1004,6 +1010,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             put("is_pko", result.isPKO)
             // V2.9.212: 游戏模式——现金桌/锦标赛
             put("game_mode", result.gameMode)
+            // V2.9.xxx: 游戏类型与抽水上限（数据链补齐）
+            put("game_type", result.gameType)
+            put("rake_cap", result.rakeCap)
             // V2.9.220: 自动检测到的平台（仅供参考，不自动切换）
             put("detected_platform", result.detectedPlatform)
             // V2.9.230: 本地suit识别标记——供前端/JS引擎判断数据可信度

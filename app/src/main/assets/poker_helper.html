@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script>var API_BASE="http://127.0.0.1:8666";</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-<title>青云 v2.9.180 · 翻后对手统计+短码纳什(RTA全链路数学最优)</title>
+<title>青云 v2.9.214 · 数据链修复+ICM精度+剥削深化+多人池精细化</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#080e08;color:#fff;height:100vh;padding:6px;user-select:none;font-size:14px;display:flex;flex-direction:column;overflow-y:auto}
@@ -1824,7 +1824,7 @@ var OppProfiler={
         if(raw.action==='raise'||raw.action==='call'||raw.action==='allin')bet=chips; // 简化：用chips作为bet占位
       }
       var active=raw.active!==undefined?raw.active:(raw.action!=='fold');
-      _normalizedSeats.push({pos:pos,nickname:nk,chips:chips,bet:bet,action:raw.action||'',active:active,seat:raw.seat||0});
+      _normalizedSeats.push({pos:pos,nickname:nk,chips:chips,bet:bet,stack:chips,action:raw.action||'',active:active,seat:raw.seat||0});
       _currSeats[pos]=nk;
       // 检测玩家进出
       if(!_prevSeats[pos]){
@@ -3592,6 +3592,36 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
         foldMult = Math.max(1.0, foldMult * 0.9);
         raiseMult = raiseMult * 1.1;
       }
+      // 5) V2.9.214: 简化ICM筹码占比微调（基于chipRatio的连续调整）
+      try{
+        var totalStack = avgStack * pLeft;
+        if(totalStack > 0 && heroStack > 0){
+          var heroShare = heroStack / totalStack;
+          var chipRatio = heroShare * pLeft; // =1为平均, <1短码, >1深码
+          if(chipRatio < 0.5){
+            // 极短码: 极度收紧
+            foldMult *= 1.4;
+            raiseMult *= 1.3;
+          }else if(chipRatio < 1.0){
+            // 短码: 偏紧
+            foldMult *= 1.2;
+            raiseMult *= 1.1;
+          }else if(chipRatio > 3.0){
+            // 极大筹码优势: 激进覆盖
+            foldMult *= 0.85;
+            raiseMult *= 1.1;
+          }else if(chipRatio > 2.0){
+            // 深码: 可以更多施压
+            foldMult *= 0.9;
+            raiseMult *= 1.05;
+          }
+          // 边界保护
+          if(foldMult < 0.7) foldMult = 0.7;
+          if(raiseMult > 1.6) raiseMult = 1.6;
+        }
+      }catch(eIcm){
+        console.log('[ICM] chipRatio微调失败: '+eIcm.message);
+      }
       return {foldMult:foldMult, raiseMult:raiseMult, callMult:callMult};
     }catch(e){
       console.log('[ICM] 压力计算失败: '+e.message);
@@ -3638,7 +3668,21 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
     // 3) 多人池
     if(isMW){
       if(context==='facing'){/* FCB内部已处理 */}
-      else{f=f*0.7;}
+      else{
+        // V2.9.214: 多人池按手牌强度分级衰减（强牌几乎不衰减，弱牌大幅衰减）
+        try{
+          var mwFactor;
+          if(hcKey <= 2) mwFactor = 0.95;      // 坚果/暗三条/两对 → 几乎不衰减
+          else if(hcKey <= 5) mwFactor = 0.80;  // 超对/顶对好踢 → 轻微衰减
+          else if(hcKey <= 8) mwFactor = 0.60;  // 顶对弱踢/第二对/弱对 → 显著衰减
+          else if(hcKey <= 11) mwFactor = 0.50; // 听牌/组合听牌 → 大幅衰减
+          else mwFactor = 0.35;                 // 卡顺/超牌/后门/空气 → 极度衰减
+          f = f * mwFactor;
+        }catch(eMw){
+          console.log('[SE161] 多人池衰减失败: '+eMw.message);
+          f = f * 0.7; // 降级为统一衰减
+        }
+      }
     }
     // 4) ExploitAdjuster
     var ea=ExploitAdjuster(f,action,hcKey,oppType,street||'flop',context);
@@ -4283,8 +4327,43 @@ freq=_applyPipeline(freq,'bet',hcKey,_oppType2||'unknown',_street2||'flop','donk
   // ====== V2.9.161: ExploitAdjuster 剥削闭环 ======
   var _exploitHistory={bluffAttempts:0,bluffWins:0,valueAttempts:0,valueCalls:0,valueWins:0,foldToFaced:0,foldToTotal:0,lastReset:Date.now()};
   function _resetExploitHistory(){if(Date.now()-_exploitHistory.lastReset>3600000){_exploitHistory={bluffAttempts:0,bluffWins:0,valueAttempts:0,valueCalls:0,valueWins:0,foldToFaced:0,foldToTotal:0,lastReset:Date.now()};}}
+  // V2.9.214: 从OppProfiler获取当前对手的细化剥削统计数据
+  function _getOppExploitData(){
+    try{
+      var d = {foldTo3bet:-1, foldToCbet:-1, checkRaisePct:-1, cbetFreq:-1, sampleSize:0};
+      var profiles = G._oppProfiles || {};
+      var activeOpp = null;
+      // 优先找到当前加注者的profile
+      var raiserRole = G._raiserRole || '';
+      for(var nk in profiles){
+        var p = profiles[nk];
+        if(p._enteredThisHand && p.pos === raiserRole){
+          activeOpp = p; break;
+        }
+      }
+      // fallback: 取hands最多的active profile
+      if(!activeOpp){
+        for(var nk2 in profiles){
+          var p2 = profiles[nk2];
+          if(!activeOpp || p2.hands > activeOpp.hands) activeOpp = p2;
+        }
+      }
+      if(!activeOpp || activeOpp.hands < 5) return d;
+      d.sampleSize = activeOpp.hands;
+      if(activeOpp._faced3bet > 0) d.foldTo3bet = Math.round(activeOpp._foldTo3bet / activeOpp._faced3bet * 100);
+      if(activeOpp._facedCBet > 0) d.foldToCbet = Math.round(activeOpp._foldToCBet / activeOpp._facedCBet * 100);
+      if(activeOpp._sawFlopAsOOP > 0) d.checkRaisePct = Math.round(activeOpp._checkRaise / activeOpp._sawFlopAsOOP * 100);
+      if(activeOpp._sawFlopAsNonPFR > 0) d.cbetFreq = Math.round(activeOpp._cbetFlop / activeOpp._sawFlopAsNonPFR * 100);
+      return d;
+    }catch(eOed){
+      console.log('[Exploit] 获取对手细化数据失败: '+eOed.message);
+      return {foldTo3bet:-1, foldToCbet:-1, checkRaisePct:-1, cbetFreq:-1, sampleSize:0};
+    }
+  }
   function ExploitAdjuster(freq,action,hcKey,oppType,street,scene){
     _resetExploitHistory();var adj=freq;var label='';
+    // V2.9.214: 获取对手细化剥削数据
+    var oppExp = _getOppExploitData();
     if(OppProfiler&&OppProfiler.getStat){
       var ftCB=OppProfiler.getStat('foldToCBetFlop')||0;
       var oppCB=OppProfiler.getStat('cbetFlop')||0;
@@ -4296,6 +4375,31 @@ freq=_applyPipeline(freq,'bet',hcKey,_oppType2||'unknown',_street2||'flop','donk
       if(oppType==='nit'&&(action==='bet'||action==='raise')&&hcKey>=13){adj=Math.min(.9,adj*1.5);label='nit诈唬剥削';}
       if((oppType==='calling_station'||oppType==='fish')&&hcKey>=13){adj=adj*0.2;label='跟注站不诈唬';}
       if((oppType==='calling_station'||oppType==='fish')&&hcKey<=4){adj=Math.min(.95,adj*1.3);label='跟注站价值加码';}
+    }
+    // V2.9.214: 基于细化对手数据的剥削调整（保守幅度±10-15%，避免小样本过拟合）
+    try{
+      if(oppExp.sampleSize >= 5){
+        // 1) 高fold-to-3bet → 增加3bet bluff频率（对nit/tight尤其有效）
+        if(oppExp.foldTo3bet >= 0 && oppExp.foldTo3bet > 60 && (action==='3b'||action==='raise') && hcKey >= 12){
+          adj = Math.min(.95, adj * 1.15);
+          if(!label) label = '高弃3bet诈唬';
+          else label += '+高弃3bet';
+        }
+        // 2) 高fold-to-cbet → 增加cbet频率
+        if(oppExp.foldToCbet >= 0 && oppExp.foldToCbet > 55 && (scene==='cbet'||action==='bet')){
+          adj = Math.min(.95, adj * 1.1);
+          if(!label) label = '高弃CBet剥削';
+          else label += '+高弃CBet';
+        }
+        // 3) 高CR频率 → 中等强度手牌增加check频率（减少bet）
+        if(oppExp.checkRaisePct >= 0 && oppExp.checkRaisePct > 15 && action==='bet' && hcKey >= 5 && hcKey <= 9){
+          adj = adj * 0.9;
+          if(!label) label = '高CR谨慎下注';
+          else label += '+高CR谨慎';
+        }
+      }
+    }catch(eEa2){
+      console.log('[Exploit] 细化调整失败: '+eEa2.message);
     }
     if(_exploitHistory.bluffAttempts>=3){var br=_exploitHistory.bluffWins/_exploitHistory.bluffAttempts;if(br<.3&&(action==='bet'||action==='raise')&&hcKey>=13){adj=adj*0.3;label='bluff被catch减频';}}
     if(_exploitHistory.valueCalls>=5){var vr=_exploitHistory.valueWins/_exploitHistory.valueCalls;if(vr>.8&&hcKey<=4){adj=Math.min(.98,adj*1.15);label='价值尺度加码';}}
