@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script>var API_BASE="http://127.0.0.1:8666";</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-<title>青云 v2.9.215 · 自适应截图间隔(人数+street双维)</title>
+<title>青云 v2.9.180 · 翻后对手统计+短码纳什(RTA全链路数学最优)</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#080e08;color:#fff;height:100vh;padding:6px;user-select:none;font-size:14px;display:flex;flex-direction:column;overflow-y:auto}
@@ -432,7 +432,7 @@ var SU=['h','d','s','c'];
 var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 
 // 全局状态
-var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',_handRecord:null,_lastPhase:'',_handCount:0,_streetActions:{},_heroInvested:0,_handStartTime:0,game_mode:'cash',_icmFoldMult:1,_icmRaiseMult:1,_icmCallMult:1,platform:'standard',rake_cap:0,_hudData:{}};
+var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',game_mode:'cash',_icmFoldMult:1,_icmRaiseMult:1,_icmCallMult:1,platform:'standard',rake_cap:0};
 var _pi=null,_ms='h';
 var _decisionCache={};var _cacheMax=200;
 function cacheKey(){return G.phase+'_'+G.scene+'_'+G.pos+'_'+G.act+'_'+G.opp+'_'+G.stk+'_'+G.pot+'_'+G.bet+'_a'+(G.ante||0)+'_'+(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'')+G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('')+'L'+G.limpers;}
@@ -982,243 +982,6 @@ var HandHistory={
   getAll:function(){return this.records;},
   clear:function(){this.records=[];try{localStorage.removeItem(this.STORAGE_KEY);}catch(e){}}
 };
-
-// ===== V2.9.180+: 手牌复盘模块 HandReplay =====
-// 功能: 每手牌结束后记录完整数据到本地JSON，供后续分析和回放
-// 约束: 只记录不干预决策，全try-catch包裹，最多保存100手
-var HandReplay = {
-  MAX_HANDS: 100,
-  _handHistory: [],  // 完整手牌历史数组
-  _handIdCounter: 0, // 递增手牌ID
-
-  // ===== 1. 初始化新一手牌记录 =====
-  startNewHand: function(){
-    try{
-      this._handIdCounter++;
-      var _hole = G.hole && G.hole.length >= 2
-        ? G.hole.map(function(c){return c?c.rank+(c.suit||''):'?';})
-        : ['?','?'];
-      var _blinds = '';
-      try{
-        var _bb = G._lockedBB || 0;
-        if(_bb > 0) _blinds = Math.round(_bb/2) + '/' + _bb;
-      }catch(e){}
-      G._handRecord = {
-        handId: this._handIdCounter,
-        timestamp: Date.now(),
-        game_mode: G.game_mode || 'cash',
-        platform: G.platform || 'standard',
-        blinds: _blinds,
-        hero_seat: G._heroSeat || 0,
-        hero_cards: _hole,
-        position: G.pos || 'unknown',
-        street_actions: { preflop: [], flop: {cards:[],actions:[]}, turn: {card:'',actions:[]}, river: {card:'',actions:[]} },
-        final_pot: 0,
-        result: 'unknown',  // won/lost/folded/unknown
-        net_profit: 0,
-        ai_decisions: []
-      };
-      G._lastPhase = G.phase || 'pre';
-      G._streetActions = { preflop: [], flop: [], turn: [], river: [] };
-      G._heroInvested = 0;
-      G._handStartTime = Date.now();
-      console.log('[HandReplay] 新手牌 #'+this._handIdCounter+' 开始, 手牌='+_hole.join(' ')+', 位置='+(G.pos||'?'));
-    }catch(e){
-      console.log('[HandReplay] startNewHand异常: '+e.message);
-    }
-  },
-
-  // ===== 2. 记录AI决策 =====
-  recordAIDecision: function(street, recommendation, confidence, eq){
-    try{
-      if(!G._handRecord) return;
-      G._handRecord.ai_decisions.push({
-        street: street,
-        recommendation: recommendation || '',
-        confidence: typeof confidence === 'number' ? confidence : 0,
-        eq: typeof eq === 'number' ? eq : 0,
-        timestamp: Date.now()
-      });
-    }catch(e){
-      console.log('[HandReplay] recordAIDecision异常: '+e.message);
-    }
-  },
-
-  // ===== 3. 记录当前街英雄动作 =====
-  recordHeroAction: function(street, action, amount){
-    try{
-      if(!G._handRecord) return;
-      var _amt = typeof amount === 'number' ? amount : 0;
-      var _entry = { seat:'hero', action: action||'', amount: _amt, ts: Date.now() };
-      if(street === 'preflop'){
-        G._handRecord.street_actions.preflop.push(_entry);
-      } else if(street === 'flop' || street === 'turn' || street === 'river'){
-        G._handRecord.street_actions[street].actions.push(_entry);
-      }
-      // 累计英雄投入
-      if(action === 'raise' || action === 'raise_big' || action === 'call' || action === 'weak_call' || action === 'bet' || action === 'allin'){
-        G._heroInvested += _amt;
-      }
-    }catch(e){
-      console.log('[HandReplay] recordHeroAction异常: '+e.message);
-    }
-  },
-
-  // ===== 4. 翻牌圈/转牌/河牌时记录公共牌 =====
-  recordStreetCards: function(street, cards){
-    try{
-      if(!G._handRecord || !cards) return;
-      if(street === 'flop'){
-        G._handRecord.street_actions.flop.cards = cards.slice(0,3);
-      } else if(street === 'turn'){
-        G._handRecord.street_actions.turn.card = cards[3] || '';
-      } else if(street === 'river'){
-        G._handRecord.street_actions.river.card = cards[4] || '';
-      }
-    }catch(e){
-      console.log('[HandReplay] recordStreetCards异常: '+e.message);
-    }
-  },
-
-  // ===== 5. 检测phase变化（从onVisionResult调用） =====
-  checkPhaseChange: function(newPhase, newStreet){
-    try{
-      if(!G._handRecord) return;
-      var _oldPhase = G._lastPhase || '';
-      if(_oldPhase !== newPhase){
-        console.log('[HandReplay] phase变化: '+_oldPhase+' → '+newPhase);
-        G._lastPhase = newPhase;
-        // 如果从pre变post，记录翻牌
-        if(_oldPhase === 'pre' && newPhase === 'post'){
-          var _comm = G.comm.filter(function(c){return c!==null;}).map(function(c){return c.rank+(c.suit||'');});
-          if(_comm.length >= 3){
-            this.recordStreetCards('flop', _comm);
-          }
-        }
-        // 更新公共牌（翻后）
-        if(newPhase === 'post' && newStreet){
-          var _comm2 = G.comm.filter(function(c){return c!==null;}).map(function(c){return c.rank+(c.suit||'');});
-          if(newStreet === 'turn' && _comm2.length >= 4){
-            this.recordStreetCards('turn', _comm2);
-          } else if(newStreet === 'river' && _comm2.length >= 5){
-            this.recordStreetCards('river', _comm2);
-          }
-        }
-      }
-    }catch(e){
-      console.log('[HandReplay] checkPhaseChange异常: '+e.message);
-    }
-  },
-
-  // ===== 6. 结束一手牌，保存到历史 =====
-  finishHand: function(result, netProfit, finalPot){
-    try{
-      if(!G._handRecord){
-        console.log('[HandReplay] finishHand: 当前无手牌记录，跳过');
-        return;
-      }
-      var _rec = G._handRecord;
-      _rec.result = result || 'unknown';
-      _rec.net_profit = typeof netProfit === 'number' ? netProfit : 0;
-      _rec.final_pot = typeof finalPot === 'number' ? finalPot : (G.pot || 0);
-      // 保存最终手牌（可能之前不完整）
-      if(G.hole && G.hole.length >= 2 && G.hole[0] && G.hole[1]){
-        _rec.hero_cards = G.hole.map(function(c){return c?c.rank+(c.suit||''):'?';});
-      }
-      // 保存位置（可能后来更新了）
-      _rec.position = G.pos || _rec.position;
-      _rec.game_mode = G.game_mode || _rec.game_mode;
-      _rec.platform = G.platform || _rec.platform;
-
-      this._handHistory.unshift(_rec);
-      G._handCount++;
-      // 限制最多100手
-      if(this._handHistory.length > this.MAX_HANDS){
-        this._handHistory = this._handHistory.slice(0, this.MAX_HANDS);
-      }
-      console.log('[HandReplay] 手牌 #'+_rec.handId+' 结束: 结果='+_rec.result+', 盈亏='+_rec.net_profit+', 底池='+_rec.final_pot);
-      // 清空当前手牌记录（不重置_handHistory）
-      G._handRecord = null;
-      G._streetActions = {};
-    }catch(e){
-      console.log('[HandReplay] finishHand异常: '+e.message);
-    }
-  },
-
-  // ===== 7. Session统计 =====
-  _getSessionStats: function(){
-    try{
-      var _hands = this._handHistory;
-      var _total = _hands.length;
-      if(_total === 0){
-        return {
-          handsPlayed: G._handCount || 0,
-          totalProfit: 0,
-          winRate: 0,
-          biggestPot: 0,
-          avgPot: 0,
-          roi: 0
-        };
-      }
-      var _totalProfit = 0;
-      var _wins = 0;
-      var _biggestPot = 0;
-      var _totalPot = 0;
-      var _totalInvest = 0;
-      for(var i=0; i<_hands.length; i++){
-        var h = _hands[i];
-        _totalProfit += h.net_profit || 0;
-        if(h.result === 'won') _wins++;
-        if(h.final_pot > _biggestPot) _biggestPot = h.final_pot;
-        _totalPot += h.final_pot || 0;
-        if(h.net_profit < 0){
-          _totalInvest += Math.abs(h.net_profit);
-        }
-      }
-      var _winRate = _total > 0 ? Math.round(_wins / _total * 1000) / 10 : 0;
-      var _avgPot = _total > 0 ? Math.round(_totalPot / _total) : 0;
-      var _roi = _totalInvest > 0 ? Math.round(_totalProfit / _totalInvest * 1000) / 10 : 0;
-      return {
-        handsPlayed: Math.max(G._handCount || 0, _total),
-        totalProfit: Math.round(_totalProfit * 100) / 100,
-        winRate: _winRate,
-        biggestPot: _biggestPot,
-        avgPot: _avgPot,
-        roi: _roi
-      };
-    }catch(e){
-      console.log('[HandReplay] _getSessionStats异常: '+e.message);
-      return { handsPlayed:0, totalProfit:0, winRate:0, biggestPot:0, avgPot:0, roi:0 };
-    }
-  },
-
-  // ===== 8. 获取当前手牌进度 + session统计（供decide输出） =====
-  getHandHistoryOutput: function(){
-    try{
-      return {
-        current_hand: G._handRecord || null,
-        session_stats: this._getSessionStats()
-      };
-    }catch(e){
-      return { current_hand: null, session_stats: { handsPlayed:0, totalProfit:0, winRate:0, biggestPot:0, avgPot:0, roi:0 } };
-    }
-  },
-
-  // ===== 9. 获取完整历史 =====
-  getAllHands: function(){ return this._handHistory; },
-
-  // ===== 10. 清空历史（session级重置，可选手动调用） =====
-  clearAll: function(){
-    try{
-      this._handHistory = [];
-      this._handIdCounter = 0;
-      G._handCount = 0;
-      G._handRecord = null;
-      console.log('[HandReplay] 历史已清空');
-    }catch(e){}
-  }
-};
-
 
 // V2.9.47: 运行日志缓冲——捕获console.log用于导出分析
 var LogBuffer={
@@ -1824,7 +1587,7 @@ var OppProfiler={
         if(raw.action==='raise'||raw.action==='call'||raw.action==='allin')bet=chips; // 简化：用chips作为bet占位
       }
       var active=raw.active!==undefined?raw.active:(raw.action!=='fold');
-      _normalizedSeats.push({pos:pos,nickname:nk,chips:chips,bet:bet,stack:chips,action:raw.action||'',active:active,seat:raw.seat||0});
+      _normalizedSeats.push({pos:pos,nickname:nk,chips:chips,bet:bet,action:raw.action||'',active:active,seat:raw.seat||0});
       _currSeats[pos]=nk;
       // 检测玩家进出
       if(!_prevSeats[pos]){
@@ -1944,8 +1707,6 @@ var OppProfiler={
     // V2.9.105: 筹码深度分类
     this._updateStackTypes();
     G.oppSeats=oppSeats;
-    // V2.9 HUD: 更新HUD数据（风格标签 + 动作趋势）
-    try { if (typeof HUDManager !== 'undefined') HUDManager.updateFromOppSeats(oppSeats); } catch (_he) {}
     this._updateTypes();
     // V2.9.142: 定期自动保存对手画像
     this._autoSave();
@@ -2341,238 +2102,6 @@ var PostValidation={
   applyHudData:function(hud){if(!hud||!hud.length)return;for(var i=0;i<hud.length;i++){var h=hud[i];if(!h.seat||(!h.vpip&&!h.pfr))continue;if(!G._hudData)G._hudData={};G._hudData[h.seat]={vpip:h.vpip||0,pfr:h.pfr||0,ats:h.ats||0,threeBet:h.threeBet||0,_ts:Date.now()};var t='unknown',v=h.vpip||0;if(v<=22)t='nit';else if(v<=30)t='tag';else if(v<=40)t='lag';else t='fish';if(typeof OppProfiler!=='undefined'){var p=seatToPosStr(h.seat);for(var nk in OppProfiler._profiles){if(OppProfiler._profiles[nk].pos===p&&v>0){OppProfiler._profiles[nk]._hudVpip=v;OppProfiler._profiles[nk]._hudPfr=h.pfr||0;if(OppProfiler._profiles[nk].hands<50)OppProfiler._profiles[nk].type=t;break;}}}console.log('[SmartHUD]s'+h.seat+' v='+v+'→'+t);}},
   runAll:function(d){var r=[];if(d.hole_cards&&d.community_cards){r=r.concat(this.dedupCards(d.hole_cards,d.community_cards));r=r.concat(this.validateSuits(d.hole_cards,d.community_cards));}if(d.pot_size!==undefined){var b=G._lockedBB||200;r=r.concat(this.validatePotChips(b>0?Math.round((parseInt(d.pot_size)||0)/b):0,0,b>0?Math.round((parseInt(d.to_call)||0)/b):0,b,d.community_cards));}if(d.opp_hud)this.applyHudData(d.opp_hud);return r;}
 };
-
-// ===== V2.9 HUD: HUDManager =====
-// 实时对手风格标签 + HUD 数据维护 + 策略微调
-var HUDManager = {
-  // 计算单个对手的风格标签与攻击性评分
-  // 输入: {vpip,pfr,af,hands,...}  // 数值百分比(0-100)或小数(0-1)自动归一
-  // 输出: {style, aggressionFactor, hands}
-  _calcPlayerStyle: function(stats) {
-    try {
-      if (!stats) return { style: 'unknown', aggressionFactor: 0, hands: 0 };
-      var hands = stats.hands || 0;
-      // 样本不足直接 unknown
-      if (hands < 3) return { style: 'unknown', aggressionFactor: 0, hands: hands };
-      var vpip = stats.vpip || 0;
-      var pfr = stats.pfr || 0;
-      var af = stats.af || stats.aggressionFactor || 0;
-      // 归一化: 若为小数(<=1)则转百分比
-      if (vpip > 0 && vpip <= 1) vpip = vpip * 100;
-      if (pfr > 0 && pfr <= 1) pfr = pfr * 100;
-      var style = 'unknown';
-      // 简化判断逻辑（按需求）
-      if (vpip < 20 && pfr > 15) style = 'TAG';
-      else if (vpip >= 20 && pfr > 15) style = 'LAG';
-      else if (vpip < 15 && pfr < 10) style = 'nit';
-      else if (vpip >= 25 && pfr < 15) style = 'fish';
-      else style = 'unknown';
-      // 攻击性评分 1-5
-      var aggr = 1;
-      if (af > 0) {
-        // af=攻击因子 = bet+raise / call
-        if (af < 0.5) aggr = 1;
-        else if (af < 1.0) aggr = 2;
-        else if (af < 2.0) aggr = 3;
-        else if (af < 3.5) aggr = 4;
-        else aggr = 5;
-      } else {
-        // 无af时用 pfr/vpip 比例估算
-        var ratio = vpip > 0 ? pfr / vpip : 0;
-        if (ratio < 0.3) aggr = 1;
-        else if (ratio < 0.5) aggr = 2;
-        else if (ratio < 0.7) aggr = 3;
-        else if (ratio < 0.9) aggr = 4;
-        else aggr = 5;
-      }
-      return { style: style, aggressionFactor: aggr, hands: hands };
-    } catch (e) {
-      console.log('[HUD] _calcPlayerStyle异常: ' + e.message);
-      return { style: 'unknown', aggressionFactor: 0, hands: 0 };
-    }
-  },
-
-  // 从OppProfiler画像生成stats
-  _statsFromProfile: function(p) {
-    try {
-      if (!p || p.hands < 1) return null;
-      var vpip = p.hands > 0 ? (p.entered / p.hands) * 100 : 0;
-      // PFR估算: _pfRaise / max(hands,1) * 100
-      var pfr = p.hands > 0 ? ((p._pfRaise || 0) / Math.max(p.hands, 1)) * 100 : 0;
-      // AF估算: raise / max(call,1) —— call=entered-folded-raise
-      var calls = Math.max((p.entered || 0) - (p.folded || 0) - (p._raiseCount || 0), 1);
-      var af = calls > 0 ? (p._raiseCount || 0) / calls : 0;
-      return { vpip: vpip, pfr: pfr, af: af, hands: p.hands };
-    } catch (e) {
-      return null;
-    }
-  },
-
-  // 从外部HUD数据(vpip/pfr百分比)生成stats
-  _statsFromHudEntry: function(h) {
-    try {
-      if (!h) return null;
-      return { vpip: h.vpip || 0, pfr: h.pfr || 0, af: h.af || 0, hands: h.hands || 10 };
-    } catch (e) { return null; }
-  },
-
-  // 更新HUD数据: 基于oppSeats + OppProfiler画像 + 外部HUD数据
-  updateFromOppSeats: function(oppSeats) {
-    try {
-      if (!G._hudData) G._hudData = {};
-      if (!oppSeats || !oppSeats.length) return;
-      for (var i = 0; i < oppSeats.length; i++) {
-        var s = oppSeats[i];
-        var seatKey = s.seat ? ('seat' + s.seat) : (s.pos || ('seat' + i));
-        // 已有外部HUD数据优先（来自applyHudData的vpip/pfr）
-        var extHud = null;
-        if (s.seat && G._hudData[s.seat] && G._hudData[s.seat].vpip !== undefined) {
-          extHud = G._hudData[s.seat];
-        }
-        // 从OppProfiler画像取
-        var profileStats = null;
-        try {
-          if (typeof OppProfiler !== 'undefined' && OppProfiler._profiles) {
-            var nk = s.nickname || s.pos;
-            if (nk && OppProfiler._profiles[nk]) {
-              profileStats = this._statsFromProfile(OppProfiler._profiles[nk]);
-            }
-          }
-        } catch (e1) {}
-        // 优先级: 外部HUD > 本地画像
-        var stats = extHud ? this._statsFromHudEntry(extHud) : profileStats;
-        if (!stats) {
-          // 数据不足，标记unknown
-          if (!G._hudData[seatKey]) {
-            G._hudData[seatKey] = { style: 'unknown', af: 0, hands: 0, lastAction: '', trend: 'stable' };
-          }
-          continue;
-        }
-        var calc = this._calcPlayerStyle(stats);
-        var lastAction = s.action || '';
-        // 趋势判断: 对比上次记录的action
-        var trend = 'stable';
-        var prev = G._hudData[seatKey];
-        if (prev && prev.lastAction) {
-          if ((lastAction === 'raise' || lastAction === 'allin') && prev.lastAction !== 'raise') trend = 'aggressive';
-          else if (lastAction === 'fold' && prev.lastAction !== 'fold') trend = 'passive';
-        }
-        G._hudData[seatKey] = {
-          style: calc.style,
-          af: calc.aggressionFactor,
-          hands: calc.hands,
-          lastAction: lastAction,
-          trend: trend,
-          vpip: stats.vpip || 0,
-          pfr: stats.pfr || 0
-        };
-      }
-    } catch (e) {
-      console.log('[HUD] updateFromOppSeats异常: ' + e.message);
-    }
-  },
-
-  // 获取decide输出用的HUD字典（只包含活跃对手）
-  getHudOutput: function(oppSeats) {
-    try {
-      var out = {};
-      if (!G._hudData || !oppSeats || !oppSeats.length) return out;
-      for (var i = 0; i < oppSeats.length; i++) {
-        var s = oppSeats[i];
-        // 只输出活跃对手
-        if (s.active === false || s.action === 'fold') continue;
-        var seatKey = s.seat ? ('seat' + s.seat) : (s.pos || ('seat' + i));
-        var d = G._hudData[seatKey];
-        if (d) {
-          out[seatKey] = { style: d.style, aggr: d.af, hands: d.hands };
-        } else {
-          out[seatKey] = { style: 'unknown', aggr: 0, hands: 0 };
-        }
-      }
-      return out;
-    } catch (e) {
-      console.log('[HUD] getHudOutput异常: ' + e.message);
-      return {};
-    }
-  },
-
-  // 获取面对对手(raiser/主要对手)的HUD风格
-  getFacingStyle: function() {
-    try {
-      var seatKey = null;
-      // 尝试从_raiserRole找座位
-      var raiserPos = G._raiserRole || G._raiserPos || '';
-      if (raiserPos && G.oppSeats) {
-        for (var i = 0; i < G.oppSeats.length; i++) {
-          if (G.oppSeats[i].pos === raiserPos) {
-            seatKey = G.oppSeats[i].seat ? ('seat' + G.oppSeats[i].seat) : raiserPos;
-            break;
-          }
-        }
-      }
-      // fallback: 第一个活跃对手
-      if (!seatKey && G.oppSeats && G.oppSeats.length > 0) {
-        for (var j = 0; j < G.oppSeats.length; j++) {
-          if (G.oppSeats[j].active !== false && G.oppSeats[j].action !== 'fold') {
-            seatKey = G.oppSeats[j].seat ? ('seat' + G.oppSeats[j].seat) : (G.oppSeats[j].pos || 'seat0');
-            break;
-          }
-        }
-      }
-      if (seatKey && G._hudData && G._hudData[seatKey]) {
-        return G._hudData[seatKey].style;
-      }
-      return 'unknown';
-    } catch (e) { return 'unknown'; }
-  },
-
-  // HUD微调: 在applyOppActionShift管道末尾追加，不超过±10%幅度
-  // 直接修改 action（同管道风格）
-  applyHudAdjustment: function(action, eq) {
-    try {
-      var a = action;
-      if (a === 'check') return a;
-      var style = this.getFacingStyle();
-      if (style === 'unknown') return a;
-      // 用eq百分比(0-100)判定阈值
-      var e = eq || 50;
-      // nit: 其raise可信度高，hero应该更紧
-      if (style === 'nit') {
-        if (a === 'call' && e < 52) a = 'fold';
-        if (a === 'weak_call' && e < 55) a = 'fold';
-        if (a === 'raise' && e < 58) a = 'call';
-      }
-      // fish: range宽，价值bet可以更薄
-      else if (style === 'fish') {
-        if (a === 'fold' && e >= 48) a = 'call';
-        if (a === 'call' && e >= 53) a = 'raise';
-        if (a === 'weak_call' && e >= 45) a = 'call';
-      }
-      // LAG: bluff频率高，call范围放宽
-      else if (style === 'LAG') {
-        if (a === 'fold' && e >= 45) a = 'call';
-        if (a === 'weak_call' && e >= 42) a = 'call';
-        if (a === 'raise' && e < 55 && e >= 45) a = 'call'; // 控池
-      }
-      // TAG: 紧凶，中等牌控池
-      else if (style === 'TAG') {
-        if (a === 'raise' && e < 56) a = 'call';
-      }
-      return a;
-    } catch (e) {
-      console.log('[HUD] applyHudAdjustment异常: ' + e.message);
-      return action;
-    }
-  },
-
-  // 重置HUD数据
-  reset: function() {
-    try {
-      G._hudData = {};
-    } catch (e) {}
-  }
-};
-
 function seatToPosStr(s){return{1:'bottom',2:'left-bottom',3:'left-top',4:'top-center',5:'right-top',6:'right-bottom'}[s]||'seat_'+s;}
 function _isStreetChange(d){if(!d||!d.street)return false;var n=0;if(d.community_cards){for(var i=0;i<d.community_cards.length;i++){if(d.community_cards[i]&&d.community_cards[i].rank)n++;}}var c=G.comm?G.comm.filter(function(x){return x!==null;}).length:0;return n!==c&&n>=3;}
 
@@ -2595,7 +2124,7 @@ var FrameDiffEngine={
     if(this._nh(f)){this._al=[];this._hid=f.hid;console.log('[FD]新:'+f.hid);}
     if(this._fb.length>0){var pf=this._fb[this._fb.length-1];var acts=this._df(pf,f);for(var i=0;i<acts.length;i++){this._al.push(acts[i]);this._ap(acts[i]);}}
     this._fb.push(f);if(this._fb.length>10)this._fb.shift();
-    if(f._t==='auto'&&typeof AndroidBridge!=='undefined'&&AndroidBridge.setAutoSpeed){var _b=f.tp<=2?2000:f.tp<=3?2500:f.tp<=5?3000:4000;AndroidBridge.setAutoSpeed(f.hb?Math.max(1500,Math.round(_b*0.75)):_b);}
+    if(f._t==='auto'&&typeof AndroidBridge!=='undefined'&&AndroidBridge.setAutoSpeed)AndroidBridge.setAutoSpeed(f.hb?2000:4000);
   },
   _ex:function(d){
     var os=[];if(d.opp_seats){for(var i=0;i<d.opp_seats.length;i++){var o=d.opp_seats[i];os.push({s:o.seat||0,c:parseInt(o.chips)||0,a:o.action!=='fold'});}}
@@ -3592,36 +3121,6 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
         foldMult = Math.max(1.0, foldMult * 0.9);
         raiseMult = raiseMult * 1.1;
       }
-      // 5) V2.9.214: 简化ICM筹码占比微调（基于chipRatio的连续调整）
-      try{
-        var totalStack = avgStack * pLeft;
-        if(totalStack > 0 && heroStack > 0){
-          var heroShare = heroStack / totalStack;
-          var chipRatio = heroShare * pLeft; // =1为平均, <1短码, >1深码
-          if(chipRatio < 0.5){
-            // 极短码: 极度收紧
-            foldMult *= 1.4;
-            raiseMult *= 1.3;
-          }else if(chipRatio < 1.0){
-            // 短码: 偏紧
-            foldMult *= 1.2;
-            raiseMult *= 1.1;
-          }else if(chipRatio > 3.0){
-            // 极大筹码优势: 激进覆盖
-            foldMult *= 0.85;
-            raiseMult *= 1.1;
-          }else if(chipRatio > 2.0){
-            // 深码: 可以更多施压
-            foldMult *= 0.9;
-            raiseMult *= 1.05;
-          }
-          // 边界保护
-          if(foldMult < 0.7) foldMult = 0.7;
-          if(raiseMult > 1.6) raiseMult = 1.6;
-        }
-      }catch(eIcm){
-        console.log('[ICM] chipRatio微调失败: '+eIcm.message);
-      }
       return {foldMult:foldMult, raiseMult:raiseMult, callMult:callMult};
     }catch(e){
       console.log('[ICM] 压力计算失败: '+e.message);
@@ -3668,21 +3167,7 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
     // 3) 多人池
     if(isMW){
       if(context==='facing'){/* FCB内部已处理 */}
-      else{
-        // V2.9.214: 多人池按手牌强度分级衰减（强牌几乎不衰减，弱牌大幅衰减）
-        try{
-          var mwFactor;
-          if(hcKey <= 2) mwFactor = 0.95;      // 坚果/暗三条/两对 → 几乎不衰减
-          else if(hcKey <= 5) mwFactor = 0.80;  // 超对/顶对好踢 → 轻微衰减
-          else if(hcKey <= 8) mwFactor = 0.60;  // 顶对弱踢/第二对/弱对 → 显著衰减
-          else if(hcKey <= 11) mwFactor = 0.50; // 听牌/组合听牌 → 大幅衰减
-          else mwFactor = 0.35;                 // 卡顺/超牌/后门/空气 → 极度衰减
-          f = f * mwFactor;
-        }catch(eMw){
-          console.log('[SE161] 多人池衰减失败: '+eMw.message);
-          f = f * 0.7; // 降级为统一衰减
-        }
-      }
+      else{f=f*0.7;}
     }
     // 4) ExploitAdjuster
     var ea=ExploitAdjuster(f,action,hcKey,oppType,street||'flop',context);
@@ -4327,43 +3812,8 @@ freq=_applyPipeline(freq,'bet',hcKey,_oppType2||'unknown',_street2||'flop','donk
   // ====== V2.9.161: ExploitAdjuster 剥削闭环 ======
   var _exploitHistory={bluffAttempts:0,bluffWins:0,valueAttempts:0,valueCalls:0,valueWins:0,foldToFaced:0,foldToTotal:0,lastReset:Date.now()};
   function _resetExploitHistory(){if(Date.now()-_exploitHistory.lastReset>3600000){_exploitHistory={bluffAttempts:0,bluffWins:0,valueAttempts:0,valueCalls:0,valueWins:0,foldToFaced:0,foldToTotal:0,lastReset:Date.now()};}}
-  // V2.9.214: 从OppProfiler获取当前对手的细化剥削统计数据
-  function _getOppExploitData(){
-    try{
-      var d = {foldTo3bet:-1, foldToCbet:-1, checkRaisePct:-1, cbetFreq:-1, sampleSize:0};
-      var profiles = G._oppProfiles || {};
-      var activeOpp = null;
-      // 优先找到当前加注者的profile
-      var raiserRole = G._raiserRole || '';
-      for(var nk in profiles){
-        var p = profiles[nk];
-        if(p._enteredThisHand && p.pos === raiserRole){
-          activeOpp = p; break;
-        }
-      }
-      // fallback: 取hands最多的active profile
-      if(!activeOpp){
-        for(var nk2 in profiles){
-          var p2 = profiles[nk2];
-          if(!activeOpp || p2.hands > activeOpp.hands) activeOpp = p2;
-        }
-      }
-      if(!activeOpp || activeOpp.hands < 5) return d;
-      d.sampleSize = activeOpp.hands;
-      if(activeOpp._faced3bet > 0) d.foldTo3bet = Math.round(activeOpp._foldTo3bet / activeOpp._faced3bet * 100);
-      if(activeOpp._facedCBet > 0) d.foldToCbet = Math.round(activeOpp._foldToCBet / activeOpp._facedCBet * 100);
-      if(activeOpp._sawFlopAsOOP > 0) d.checkRaisePct = Math.round(activeOpp._checkRaise / activeOpp._sawFlopAsOOP * 100);
-      if(activeOpp._sawFlopAsNonPFR > 0) d.cbetFreq = Math.round(activeOpp._cbetFlop / activeOpp._sawFlopAsNonPFR * 100);
-      return d;
-    }catch(eOed){
-      console.log('[Exploit] 获取对手细化数据失败: '+eOed.message);
-      return {foldTo3bet:-1, foldToCbet:-1, checkRaisePct:-1, cbetFreq:-1, sampleSize:0};
-    }
-  }
   function ExploitAdjuster(freq,action,hcKey,oppType,street,scene){
     _resetExploitHistory();var adj=freq;var label='';
-    // V2.9.214: 获取对手细化剥削数据
-    var oppExp = _getOppExploitData();
     if(OppProfiler&&OppProfiler.getStat){
       var ftCB=OppProfiler.getStat('foldToCBetFlop')||0;
       var oppCB=OppProfiler.getStat('cbetFlop')||0;
@@ -4375,31 +3825,6 @@ freq=_applyPipeline(freq,'bet',hcKey,_oppType2||'unknown',_street2||'flop','donk
       if(oppType==='nit'&&(action==='bet'||action==='raise')&&hcKey>=13){adj=Math.min(.9,adj*1.5);label='nit诈唬剥削';}
       if((oppType==='calling_station'||oppType==='fish')&&hcKey>=13){adj=adj*0.2;label='跟注站不诈唬';}
       if((oppType==='calling_station'||oppType==='fish')&&hcKey<=4){adj=Math.min(.95,adj*1.3);label='跟注站价值加码';}
-    }
-    // V2.9.214: 基于细化对手数据的剥削调整（保守幅度±10-15%，避免小样本过拟合）
-    try{
-      if(oppExp.sampleSize >= 5){
-        // 1) 高fold-to-3bet → 增加3bet bluff频率（对nit/tight尤其有效）
-        if(oppExp.foldTo3bet >= 0 && oppExp.foldTo3bet > 60 && (action==='3b'||action==='raise') && hcKey >= 12){
-          adj = Math.min(.95, adj * 1.15);
-          if(!label) label = '高弃3bet诈唬';
-          else label += '+高弃3bet';
-        }
-        // 2) 高fold-to-cbet → 增加cbet频率
-        if(oppExp.foldToCbet >= 0 && oppExp.foldToCbet > 55 && (scene==='cbet'||action==='bet')){
-          adj = Math.min(.95, adj * 1.1);
-          if(!label) label = '高弃CBet剥削';
-          else label += '+高弃CBet';
-        }
-        // 3) 高CR频率 → 中等强度手牌增加check频率（减少bet）
-        if(oppExp.checkRaisePct >= 0 && oppExp.checkRaisePct > 15 && action==='bet' && hcKey >= 5 && hcKey <= 9){
-          adj = adj * 0.9;
-          if(!label) label = '高CR谨慎下注';
-          else label += '+高CR谨慎';
-        }
-      }
-    }catch(eEa2){
-      console.log('[Exploit] 细化调整失败: '+eEa2.message);
     }
     if(_exploitHistory.bluffAttempts>=3){var br=_exploitHistory.bluffWins/_exploitHistory.bluffAttempts;if(br<.3&&(action==='bet'||action==='raise')&&hcKey>=13){adj=adj*0.3;label='bluff被catch减频';}}
     if(_exploitHistory.valueCalls>=5){var vr=_exploitHistory.valueWins/_exploitHistory.valueCalls;if(vr>.8&&hcKey<=4){adj=Math.min(.98,adj*1.15);label='价值尺度加码';}}
@@ -8575,41 +8000,6 @@ function _decideInner(){
       }catch(e){console.log('[SelfTiltGuard] decide末尾异常: '+e.message);}
     }
   }
-  // V2.9 HUD: 输出HUD数据到结果
-  try {
-    if (typeof HUDManager !== 'undefined' && G.oppSeats) {
-      result.hud = HUDManager.getHudOutput(G.oppSeats);
-    } else {
-      result.hud = {};
-    }
-  } catch (_hudErr) {
-    console.log('[HUD] decide输出异常: ' + _hudErr.message);
-    result.hud = {};
-  }
-  // V2.9.180+: 附加手牌复盘数据（只记录不干预决策）
-  try{
-    if(typeof HandReplay !== 'undefined' && result){
-      var _reStreet = G.phase === 'pre' ? 'preflop' : (function(){
-        var _cc = G.comm.filter(function(c){return c;}).length;
-        return _cc >= 5 ? 'river' : _cc === 4 ? 'turn' : 'flop';
-      })();
-      var _conf = 0.6;
-      try{
-        if(result._reliability && result._reliability.level){
-          var _lv = result._reliability.level;
-          _conf = _lv === 'high' ? 0.9 : _lv === 'medium' ? 0.7 : 0.5;
-        }
-      }catch(_e){}
-      HandReplay.recordAIDecision(_reStreet, result.a, _conf, result.eq || 0);
-      // 记录英雄动作金额
-      var _amt = result.v || G.bet || 0;
-      HandReplay.recordHeroAction(_reStreet, result.a, _amt);
-      // 附加到输出
-      result.hand_history = HandReplay.getHandHistoryOutput();
-    }
-  }catch(e){
-    console.log('[HandReplay] decide附加数据异常: '+e.message);
-  }
   return result;
 }
 // V2.9.71: action→颜色纯映射(策略引擎是唯一决策源)
@@ -8671,14 +8061,6 @@ function applyOppActionShift(action,eq,oppType,tiltInfo,ceResult,pulse){
     if(pulse.type==='loose'&&a==='raise'&&eq<55)a='call';
     if(pulse.type==='crazy'&&a==='raise'&&eq<60)a='call';
   }
-  // V2.9 HUD: 基于HUD风格的微调（±10%以内，最后一道管道）
-  try {
-    if (typeof HUDManager !== 'undefined') {
-      var _origA = a;
-      a = HUDManager.applyHudAdjustment(a, eq);
-      if (a !== _origA) console.log('[HUD微调] ' + _origA + '→' + a + ' style=' + HUDManager.getFacingStyle());
-    }
-  } catch (_hudAdjErr) { console.log('[HUD] 微调异常: ' + _hudAdjErr.message); }
   return a;
 }
 // V2.9.71: equity底线——直接修改action(从SafetyGuard.guard迁移)
@@ -10137,10 +9519,6 @@ function clr(){
   document.body.classList.remove('speed-mode');
   G.hole=[null,null];G.comm=[null,null,null,null,null];G._heroDid4bet=false;G._slowplayed=false;G._icmFoldMult=1;G._icmRaiseMult=1;G._icmCallMult=1;
   G.scene=G.phase==='pre'?'open':'check';
-  // V2.9.180+: 重置当前手牌记录(不重置历史session数据)
-  G._handRecord=null;G._streetActions={};G._heroInvested=0;
-  // V2.9 HUD: 重置HUD数据
-  try { if (typeof HUDManager !== 'undefined') HUDManager.reset(); } catch (_he) {}
   G.bet=0;G.pot=10;G.limpers=0;mxVisible=true;
   document.getElementById('mxWrap').classList.remove('collapsed');
   uCards();setScene(G.scene);
@@ -10934,25 +10312,6 @@ function onVisionResult(data){
       // V2.9.79: 新一手牌→重置行动线
       var _newHandId=(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'');
       ActionLine.startHand(_newHandId);
-      // V2.9.180+: 确保当前手牌记录存在（同一手牌被锁定时也需要）
-      if(!G._handRecord){
-        HandReplay.startNewHand();
-      }
-      // V2.9.180+: 新一手牌→上一手结束，保存到复盘历史
-      // 从上一手筹码变化推断盈亏（与SessionStats.setResult逻辑一致）
-      var _prevChips = G._prevRawChips || 0;
-      var _curChips = parseInt(data.my_chips) || 0;
-      var _netProfit = (_prevChips > 0 && _curChips > 0) ? (_curChips - _prevChips) : 0;
-      var _handResult = 'unknown';
-      if(_prevChips > 0 && _curChips > 0){
-        if(_netProfit > 0) _handResult = 'won';
-        else if(_netProfit < 0) _handResult = 'lost';
-      }
-      if(G._handRecord){
-        HandReplay.finishHand(_handResult, _netProfit, G.pot || 0);
-      }
-      // 启动新手牌记录
-      HandReplay.startNewHand();
       // V2.9.83: 新一手牌(rank变了)→重置锁定
       if(_isNewHand){
         G._handLockKey='';
@@ -10974,10 +10333,6 @@ function onVisionResult(data){
       }
     } else {
       G.phase='post';
-      // V2.9.180+: 翻后→检测phase变化并记录街牌
-      var _curStreet = (data.street || 'flop').toLowerCase();
-      if(_curStreet === 'pre' || _curStreet === 'preflop') _curStreet = 'flop';
-      HandReplay.checkPhaseChange('post', _curStreet);
     }
     var detectedScene=detectSceneFromButtons(data.buttons||[],street,activeP);
     G.scene=detectedScene;
@@ -12478,39 +11833,12 @@ function disableAutoExec() {
   console.log('[AutoExec] 全自动执行已停止');
 }
 
-// 自动执行决策——在bridgeAdvice之后调用 V2.9.215: 增加决策日志回传
+// 自动执行决策——在bridgeAdvice之后调用
 function autoExecuteDecision(r, isAutoMode) {
   if (!isAutoMode || !_autoExecEnabled) return false;
 
   var exec = AutoConfidence.execute(r);
   console.log('[AutoExec] result=' + JSON.stringify(exec));
-
-  // V2.9.215: 构建决策日志数据——回传Kotlin端记录，供复盘学习
-  function _buildDecisionLog(execResult) {
-    try {
-      var _cc = G.communityCards || [];
-      var _hc = G.holeCards || [];
-      return JSON.stringify({
-        street: G.street || r.street || '',
-        holeCards: _hc.length >= 2 ? (_hc[0].rank+_hc[0].suit+','+_hc[1].rank+_hc[1].suit) : '',
-        communityCards: _cc.map(function(c){return c.rank+c.suit;}).join(','),
-        pot: G.pot || r.pot || 0,
-        myChips: G.myChips || 0,
-        toCall: G.toCall || 0,
-        totalPlayers: G.totalPlayers || 0,
-        activePlayers: G.activePlayers || 0,
-        position: G.myPosition || '',
-        action: exec.action,
-        sizing: r.v || 0,
-        eq: r.eq || 0,
-        confidence: exec.confidence,
-        reason: exec.reason || '',
-        hClass: r.hClass ? r.hClass.name : 'UNKNOWN',
-        auto: true,
-        execResult: execResult
-      });
-    } catch(e) { console.log('[AutoExec] buildDecisionLog err: ' + e.message); return '{}'; }
-  }
 
   if (exec.confidence === 'low') {
     // 低置信→强制弃牌
@@ -12523,10 +11851,6 @@ function autoExecuteDecision(r, isAutoMode) {
         eq: r.eq || 0,
         hClass: r.hClass ? r.hClass.name : '?'
       }));
-    }
-    // V2.9.215: 记录决策日志
-    if (typeof AndroidBridge !== 'undefined' && AndroidBridge.logDecision) {
-      try { AndroidBridge.logDecision(_buildDecisionLog('success')); } catch(_e){}
     }
     return true;
   }
@@ -12545,22 +11869,13 @@ function autoExecuteDecision(r, isAutoMode) {
         pot: G.pot || 0
       }));
     }
-    // V2.9.215: 记录决策日志
-    if (typeof AndroidBridge !== 'undefined' && AndroidBridge.logDecision) {
-      try { AndroidBridge.logDecision(_buildDecisionLog('success')); } catch(_e){}
-    }
     return true;
   }
 
   // 中置信+全押→不自动执行，等用户确认
   console.log('[AutoExec] 需要人工确认: ' + exec.action + ' (' + exec.reason + ')');
-  // V2.9.215: 也记录（人工确认的决策同样有价值）
-  if (typeof AndroidBridge !== 'undefined' && AndroidBridge.logDecision) {
-    try { AndroidBridge.logDecision(_buildDecisionLog('manual_confirm')); } catch(_e){}
-  }
   return false;
 }
-
 
 // ===== 初始化 =====
 (function() {

@@ -10,30 +10,108 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 /**
- * 诊断日志记录器 - 记录每次识别的完整信息
- * 用于分析识别准确性、筹码变化、性能指标等
+ * 诊断日志记录器 V2.9.215
+ * - 记录每次识别的完整信息
+ * - 记录每次策略决策（供复盘学习）
+ * - 错误分类与严重级别
+ * - 复盘导出：按手牌维度组织完整决策链
  */
 object DiagnosticLogger {
     
-    private const val MAX_LOGS = 100  // 最多保留100次识别记录
+    // ===== 错误分类 V2.9.215 =====
+    enum class ErrorCategory(val label: String) {
+        RECOGNITION("识别错误"),      // 图像识别失败/不准
+        STRATEGY("策略错误"),         // JS策略引擎异常
+        COMMUNICATION("通信错误"),    // WebView bridge 失败
+        AUTO_EXEC("执行错误"),        // 自动点击/tap 失败
+        TIMEOUT("超时错误"),          // Shot Clock / API超时
+        NETWORK("网络错误"),          // 网络连接/API调用失败
+        UNKNOWN("未知错误")
+    }
+    
+    // ===== 严重级别 =====
+    enum class Severity(val level: Int) {
+        LOW(0),       // 不影响使用，信息性
+        MEDIUM(1),    // 功能降级，有兜底
+        HIGH(2),      // 功能受损，需要关注
+        CRITICAL(3)   // 完全不可用
+    }
+    
+    // ===== 决策日志 V2.9.215 =====
+    data class DecisionLog(
+        val timestamp: Long,
+        val timeStr: String,
+        // 牌局状态
+        val street: String,
+        val holeCards: String,       // "Ah,Kd"
+        val communityCards: String,  // "Ts,9h,2c" 或空
+        val potSize: Int,
+        val myChips: Int,
+        val toCall: Int,
+        val totalPlayers: Int,
+        val activePlayers: Int,
+        val position: String,
+        // 策略结果
+        val action: String,          // fold/call/raise/check/allin
+        val sizing: Int,             // 下注量
+        val eq: Int,                 // 胜率
+        val confidence: String,      // high/medium/low
+        val reason: String,          // 决策理由
+        val hClass: String,          // 手牌分类 NUTS/STRONG/TOP_PAIR/...
+        val isAuto: Boolean,         // 是否自动执行
+        val autoExecResult: String   // 自动执行结果 success/fail/skip
+    )
+    
+    // ===== 错误日志条目 V2.9.215 =====
+    data class ErrorEntry(
+        val timestamp: Long,
+        val timeStr: String,
+        val category: ErrorCategory,
+        val severity: Severity,
+        val message: String,
+        val detail: String? = null
+    )
+    
+    private const val MAX_LOGS = 100          // 最多保留100次识别记录
+    private const val MAX_DECISIONS = 200     // 最多保留200次决策记录
+    private const val MAX_ERRORS = 200        // 最多保留200条错误
+    
     private val recognitionLogs = mutableListOf<RecognitionLog>()
+    private val decisionLogs = mutableListOf<DecisionLog>()
+    private val errorEntries = mutableListOf<ErrorEntry>()
+    
+    // 手牌复盘追踪 V2.9.215
+    private val currentHandDecisions = mutableListOf<DecisionLog>()
+    private var currentHandId: String = ""
+    
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val logFileLock = Any()
+    private val decisionFileLock = Any()
     
-    // V2.9.182: 日志文件持久化——每次识别自动追加，滚动保留最近5MB
+    // ===== 文件路径 =====
     private fun getLogFile(): File {
         val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         return File(downloadsDir, "poker_log.txt")
     }
     
+    private fun getDecisionLogFile(): File {
+        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        return File(downloadsDir, "poker_decisions.txt")
+    }
+    
+    private fun getReviewFile(): File {
+        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        return File(downloadsDir, "poker_review.txt")
+    }
+    
+    // ===== 识别日志持久化 =====
     private fun autoFlushToFile(log: RecognitionLog) {
         try {
             synchronized(logFileLock) {
                 val file = getLogFile()
                 val entry = logToJson(log).toString(2) + ",\n"
                 file.appendText(entry, Charsets.UTF_8)
-                
                 // 滚动保留最近5MB
                 if (file.length() > 5 * 1024 * 1024) {
                     val content = file.readText(Charsets.UTF_8)
@@ -41,9 +119,124 @@ object DiagnosticLogger {
                     file.writeText(content.substring(content.length - keepLength), Charsets.UTF_8)
                 }
             }
-        } catch (_: Exception) {
-            // 文件日志失败不影响主流程
+        } catch (_: Exception) {}
+    }
+    
+    // ===== V2.9.215: 决策日志持久化 =====
+    private fun autoFlushDecisionToFile(log: DecisionLog) {
+        try {
+            synchronized(decisionFileLock) {
+                val file = getDecisionLogFile()
+                val entry = decisionToJson(log).toString(2) + ",\n"
+                file.appendText(entry, Charsets.UTF_8)
+                // 滚动保留最近3MB
+                if (file.length() > 3 * 1024 * 1024) {
+                    val content = file.readText(Charsets.UTF_8)
+                    val keepLength = content.length / 2
+                    file.writeText(content.substring(content.length - keepLength), Charsets.UTF_8)
+                }
+            }
+        } catch (_: Exception) {}
+    }
+    
+    /**
+     * V2.9.215: 记录一次策略决策——核心"学习"数据
+     */
+    fun logDecision(
+        street: String,
+        holeCards: String,
+        communityCards: String,
+        potSize: Int,
+        myChips: Int,
+        toCall: Int,
+        totalPlayers: Int,
+        activePlayers: Int,
+        position: String,
+        action: String,
+        sizing: Int,
+        eq: Int,
+        confidence: String,
+        reason: String,
+        hClass: String,
+        isAuto: Boolean,
+        autoExecResult: String
+    ) {
+        val now = System.currentTimeMillis()
+        val timeStr = timeFormat.format(Date(now))
+        
+        val log = DecisionLog(
+            timestamp = now,
+            timeStr = timeStr,
+            street = street,
+            holeCards = holeCards,
+            communityCards = communityCards,
+            potSize = potSize,
+            myChips = myChips,
+            toCall = toCall,
+            totalPlayers = totalPlayers,
+            activePlayers = activePlayers,
+            position = position,
+            action = action,
+            sizing = sizing,
+            eq = eq,
+            confidence = confidence,
+            reason = reason,
+            hClass = hClass,
+            isAuto = isAuto,
+            autoExecResult = autoExecResult
+        )
+        
+        synchronized(decisionLogs) {
+            decisionLogs.add(log)
+            if (decisionLogs.size > MAX_DECISIONS) {
+                decisionLogs.removeAt(0)
+            }
         }
+        
+        // 追踪当前手牌的决策链
+        // 检测新牌局：手牌变化或street回到preflop
+        val handKey = holeCards + "_" + (if (street == "preflop") now.toString() else currentHandId)
+        if (currentHandId.isEmpty() || (street == "preflop" && currentHandDecisions.any { it.holeCards != holeCards })) {
+            currentHandId = holeCards + "_" + now
+            currentHandDecisions.clear()
+        }
+        currentHandDecisions.add(log)
+        
+        // 持久化
+        autoFlushDecisionToFile(log)
+    }
+    
+    /**
+     * V2.9.215: 记录分类错误
+     */
+    fun logError(category: ErrorCategory, severity: Severity, message: String, detail: String? = null) {
+        val now = System.currentTimeMillis()
+        val timeStr = timeFormat.format(Date(now))
+        val entry = ErrorEntry(now, timeStr, category, severity, message, detail)
+        
+        synchronized(errorEntries) {
+            errorEntries.add(entry)
+            if (errorEntries.size > MAX_ERRORS) {
+                errorEntries.removeAt(0)
+            }
+        }
+        
+        // 同时写入文件日志
+        try {
+            synchronized(logFileLock) {
+                val file = getLogFile()
+                val json = JSONObject().apply {
+                    put("type", "ERROR")
+                    put("time", timeStr)
+                    put("timestamp", now)
+                    put("category", category.label)
+                    put("severity", severity.name)
+                    put("message", message)
+                    if (detail != null) put("detail", detail)
+                }
+                file.appendText(json.toString() + ",\n", Charsets.UTF_8)
+            }
+        } catch (_: Exception) {}
     }
     
     /**
@@ -54,7 +247,15 @@ object DiagnosticLogger {
             synchronized(logFileLock) {
                 val file = getLogFile()
                 val timeStr = timeFormat.format(Date())
-                file.appendText("[$timeStr] [JS] $message\n", Charsets.UTF_8)
+                // 智能分类JS日志
+                val prefix = when {
+                    message.contains("error", ignoreCase = true) || message.contains("err:", ignoreCase = true) -> "JS_ERR"
+                    message.contains("warn", ignoreCase = true) -> "JS_WARN"
+                    message.contains("策略") || message.contains("Strategy") -> "JS_STRATEGY"
+                    message.contains("识别") || message.contains("recognize") -> "JS_RECOG"
+                    else -> "JS"
+                }
+                file.appendText("[$timeStr] [$prefix] $message\n", Charsets.UTF_8)
             }
         } catch (_: Exception) {}
     }
@@ -71,12 +272,19 @@ object DiagnosticLogger {
                 throwable.printStackTrace(PrintWriter(sw))
                 file.appendText("\n=== CRASH $timeStr ===\n${sw.toString()}\n", Charsets.UTF_8)
                 
-                // 同步写入内存中的最后5条日志
+                // 同步写入崩溃前的识别日志和决策日志
                 synchronized(recognitionLogs) {
                     val recent = recognitionLogs.takeLast(5)
                     file.appendText("=== 崩溃前最后5条识别日志 ===\n", Charsets.UTF_8)
                     for (log in recent) {
                         file.appendText(logToJson(log).toString(2) + ",\n", Charsets.UTF_8)
+                    }
+                }
+                synchronized(decisionLogs) {
+                    val recent = decisionLogs.takeLast(10)
+                    file.appendText("=== 崩溃前最后10条决策日志 ===\n", Charsets.UTF_8)
+                    for (log in recent) {
+                        file.appendText(decisionToJson(log).toString(2) + ",\n", Charsets.UTF_8)
                     }
                 }
             }
@@ -93,13 +301,13 @@ object DiagnosticLogger {
         // 本地CV识别结果
         val localCVEnabled: Boolean,
         val localCVTimeMs: Long,
-        val localHandCards: String,  // 如 "Ah,Kd"
-        val localCommunityCards: String,  // 如 "Ts,9h,2c"
-        val localStreet: String?,  // 本地CV推断的street
+        val localHandCards: String,
+        val localCommunityCards: String,
+        val localStreet: String?,
         
         // 本地CV锁定的信息
-        val streetLocked: String?,  // 实际锁定的street
-        val holeCardsLocked: Boolean,  // 是否锁定了手牌
+        val streetLocked: String?,
+        val holeCardsLocked: Boolean,
         
         // VisionAPI识别结果
         val vlmTimeMs: Long,
@@ -121,21 +329,22 @@ object DiagnosticLogger {
         val finalCommunityCards: String,
         
         // 筹码追踪
-        val chipDelta: Long?,  // 筹码变化量
-        val chipStatus: String,  // 筹码状态：betting/won/active/folded
-        val potDelta: Int,  // 底池变化量
+        val chipDelta: Long?,
+        val chipStatus: String,
+        val potDelta: Int,
         
         // 性能指标
-        val totalTimeMs: Long,  // 总耗时
+        val totalTimeMs: Long,
         
-        // 错误信息
+        // 错误信息 V2.9.215: 增加分类
         val hasError: Boolean,
         val errorMessage: String?,
+        val errorCategory: ErrorCategory = ErrorCategory.UNKNOWN,
         
         // 是否成功发送策略引擎
         val strategySent: Boolean,
         
-        // V2.9.193: API原始响应——诊断识别失败根因
+        // V2.9.193: API原始响应
         val rawResponse: String?
     )
     
@@ -156,15 +365,31 @@ object DiagnosticLogger {
         hasError: Boolean,
         errorMessage: String?,
         strategySent: Boolean,
-        rawResponse: String? = null  // V2.9.193: API原始响应
+        rawResponse: String? = null,
+        errorCategory: ErrorCategory = ErrorCategory.UNKNOWN
     ) {
         val now = System.currentTimeMillis()
         val timeStr = timeFormat.format(Date(now))
         
-        // 计算筹码变化
         val chipDelta = vlmResult?.let { calcChipDelta(it.playerChips) }
         val chipStatus = determineChipStatus(chipDelta)
         val potDelta = vlmResult?.let { calcPotDelta(it.potSize) } ?: 0
+        
+        // V2.9.215: 自动推断错误分类
+        val cat = if (hasError) {
+            when {
+                errorMessage?.contains("timeout", ignoreCase = true) == true ||
+                errorMessage?.contains("超时") == true -> ErrorCategory.TIMEOUT
+                errorMessage?.contains("network", ignoreCase = true) == true ||
+                errorMessage?.contains("connect", ignoreCase = true) == true ||
+                errorMessage?.contains("网络") == true -> ErrorCategory.NETWORK
+                errorMessage?.contains("parse", ignoreCase = true) == true ||
+                errorMessage?.contains("识别") == true -> ErrorCategory.RECOGNITION
+                else -> errorCategory
+            }
+        } else {
+            ErrorCategory.UNKNOWN
+        }
         
         val log = RecognitionLog(
             timestamp = now,
@@ -197,8 +422,9 @@ object DiagnosticLogger {
             totalTimeMs = totalTimeMs,
             hasError = hasError,
             errorMessage = errorMessage,
+            errorCategory = cat,
             strategySent = strategySent,
-            rawResponse = rawResponse  // V2.9.193
+            rawResponse = rawResponse
         )
         
         synchronized(recognitionLogs) {
@@ -208,8 +434,12 @@ object DiagnosticLogger {
             }
         }
         
-        // V2.9.182: 自动持久化到文件
         autoFlushToFile(log)
+        
+        // V2.9.215: 如果有错误，同步记录到错误日志
+        if (hasError) {
+            logError(cat, Severity.HIGH, errorMessage ?: "unknown", "totalTimeMs=$totalTimeMs")
+        }
     }
     
     private var lastChips = 0
@@ -231,36 +461,56 @@ object DiagnosticLogger {
         return when {
             delta == null -> "unknown"
             delta == 0L -> "active"
-            delta < -100 -> "betting"  // 筹码减少超过100，认为在下注
-            delta > 100 -> "won"  // 筹码增加超过100，认为赢了
-            else -> "active"  // 小额变化，可能是盲注等
+            delta < -100 -> "betting"
+            delta > 100 -> "won"
+            else -> "active"
         }
     }
     
-    /**
-     * 重置筹码追踪（新一手牌时调用）
-     */
     fun resetChipTracking() {
         lastChips = 0
         lastPot = 0
     }
     
+    // ===== 导出功能 V2.9.215 =====
+    
     /**
-     * 导出所有诊断日志为JSON格式
+     * 导出所有诊断日志为JSON格式（识别+决策+错误）
      */
     fun exportAsJson(): String {
         val json = JSONObject()
         json.put("exportTime", dateFormat.format(Date()))
-        json.put("version", "2.9.184")
+        json.put("version", "2.9.215")
         json.put("totalLogs", recognitionLogs.size)
+        json.put("totalDecisions", decisionLogs.size)
+        json.put("totalErrors", errorEntries.size)
         
+        // 识别日志
         val logsArray = JSONArray()
         synchronized(recognitionLogs) {
             for (log in recognitionLogs) {
                 logsArray.put(logToJson(log))
             }
         }
-        json.put("logs", logsArray)
+        json.put("recognitions", logsArray)
+        
+        // 决策日志 V2.9.215
+        val decisionsArray = JSONArray()
+        synchronized(decisionLogs) {
+            for (log in decisionLogs) {
+                decisionsArray.put(decisionToJson(log))
+            }
+        }
+        json.put("decisions", decisionsArray)
+        
+        // 错误日志 V2.9.215
+        val errorsArray = JSONArray()
+        synchronized(errorEntries) {
+            for (entry in errorEntries) {
+                errorsArray.put(errorToJson(entry))
+            }
+        }
+        json.put("errors", errorsArray)
         
         // 统计信息
         json.put("stats", generateStats())
@@ -268,12 +518,140 @@ object DiagnosticLogger {
         return json.toString(2)
     }
     
+    /**
+     * V2.9.215: 复盘导出——按手牌维度组织完整决策链
+     * 输出格式：每手牌一个完整的timeline
+     */
+    fun exportReview(): String {
+        val json = JSONObject()
+        json.put("exportTime", dateFormat.format(Date()))
+        json.put("version", "2.9.215")
+        
+        // 按手牌分组决策
+        val hands = JSONArray()
+        synchronized(decisionLogs) {
+            var currentHand: JSONObject? = null
+            var lastCards = ""
+            val actions = JSONArray()
+            
+            for (log in decisionLogs) {
+                // 新牌局判断
+                if (log.holeCards != lastCards || (log.street == "preflop" && actions.length() > 0)) {
+                    // 保存上一手
+                    if (currentHand != null) {
+                        currentHand.put("actions", actions)
+                        hands.put(currentHand)
+                    }
+                    currentHand = JSONObject().apply {
+                        put("startTime", timeFormat.format(Date(log.timestamp)))
+                        put("holeCards", log.holeCards)
+                        put("totalPlayers", log.totalPlayers)
+                        put("position", log.position)
+                    }
+                    actions = JSONArray()
+                    lastCards = log.holeCards
+                }
+                
+                // 添加决策动作
+                actions.put(JSONObject().apply {
+                    put("time", log.timeStr)
+                    put("street", log.street)
+                    put("communityCards", log.communityCards)
+                    put("pot", log.potSize)
+                    put("toCall", log.toCall)
+                    put("activePlayers", log.activePlayers)
+                    put("action", log.action)
+                    put("sizing", log.sizing)
+                    put("eq", log.eq)
+                    put("confidence", log.confidence)
+                    put("hClass", log.hClass)
+                    put("reason", log.reason)
+                    put("auto", log.isAuto)
+                    put("execResult", log.autoExecResult)
+                })
+            }
+            
+            // 最后一手
+            if (currentHand != null) {
+                currentHand.put("actions", actions)
+                hands.put(currentHand)
+            }
+        }
+        
+        json.put("hands", hands)
+        json.put("totalHands", hands.length())
+        
+        // 复盘统计
+        json.put("reviewStats", generateReviewStats())
+        
+        return json.toString(2)
+    }
+    
+    private fun generateReviewStats(): JSONObject {
+        return JSONObject().apply {
+            synchronized(decisionLogs) {
+                put("totalDecisions", decisionLogs.size)
+                put("autoExecuted", decisionLogs.count { it.isAuto && it.autoExecResult == "success" })
+                put("manualConfirm", decisionLogs.count { !it.isAuto })
+                put("lowConfFold", decisionLogs.count { it.confidence == "low" })
+                
+                // 按 action 统计
+                val actionCounts = JSONObject()
+                val actionGroups = decisionLogs.groupBy { it.action }
+                for ((action, logs) in actionGroups) {
+                    actionCounts.put(action, logs.size)
+                }
+                put("actionDistribution", actionCounts)
+                
+                // 按 street 统计
+                val streetCounts = JSONObject()
+                val streetGroups = decisionLogs.groupBy { it.street }
+                for ((street, logs) in streetGroups) {
+                    streetCounts.put(street, logs.size)
+                }
+                put("streetDistribution", streetCounts)
+                
+                // 按 confidence 统计
+                val confCounts = JSONObject()
+                val confGroups = decisionLogs.groupBy { it.confidence }
+                for ((conf, logs) in confGroups) {
+                    confCounts.put(conf, logs.size)
+                }
+                put("confidenceDistribution", confCounts)
+                
+                // 平均胜率
+                if (decisionLogs.isNotEmpty()) {
+                    val avgEq = decisionLogs.map { it.eq }.average()
+                    put("avgEquity", String.format("%.1f%%", avgEq))
+                }
+            }
+            
+            // 错误统计
+            synchronized(errorEntries) {
+                val catCounts = JSONObject()
+                val catGroups = errorEntries.groupBy { it.category }
+                for ((cat, entries) in catGroups) {
+                    catCounts.put(cat.label, entries.size)
+                }
+                put("errorByCategory", catCounts)
+                
+                val sevCounts = JSONObject()
+                val sevGroups = errorEntries.groupBy { it.severity }
+                for ((sev, entries) in sevGroups) {
+                    sevCounts.put(sev.name, entries.size)
+                }
+                put("errorBySeverity", sevCounts)
+            }
+        }
+    }
+    
+    // ===== JSON序列化 =====
+    
     private fun logToJson(log: RecognitionLog): JSONObject {
         return JSONObject().apply {
             put("time", log.timeStr)
             put("timestamp", log.timestamp)
             
-            // 本地CV信息
             val localCV = JSONObject().apply {
                 put("enabled", log.localCVEnabled)
                 put("timeMs", log.localCVTimeMs)
@@ -283,14 +661,12 @@ object DiagnosticLogger {
             }
             put("localCV", localCV)
             
-            // 锁定状态
             val locking = JSONObject().apply {
                 put("streetLocked", log.streetLocked ?: JSONObject.NULL)
                 put("holeCardsLocked", log.holeCardsLocked)
             }
             put("locking", locking)
             
-            // VLM识别结果
             val vlm = JSONObject().apply {
                 put("timeMs", log.vlmTimeMs)
                 put("handCards", log.vlmHandCards)
@@ -307,15 +683,13 @@ object DiagnosticLogger {
             }
             put("vlm", vlm)
             
-            // 最终结果
-            val final = JSONObject().apply {
+            val finalResult = JSONObject().apply {
                 put("street", log.finalStreet)
                 put("handCards", log.finalHandCards)
                 put("communityCards", log.finalCommunityCards)
             }
-            put("final", final)
+            put("final", finalResult)
             
-            // 筹码追踪
             val chips = JSONObject().apply {
                 put("delta", log.chipDelta ?: JSONObject.NULL)
                 put("status", log.chipStatus)
@@ -323,17 +697,53 @@ object DiagnosticLogger {
             }
             put("chips", chips)
             
-            // 性能和错误
             put("totalTimeMs", log.totalTimeMs)
             put("hasError", log.hasError)
             if (log.errorMessage != null) {
                 put("error", log.errorMessage)
+                put("errorCategory", log.errorCategory.label)
             }
             put("strategySent", log.strategySent)
-            // V2.9.193: 导出API原始响应——仅失败时记录，截取前500字符避免日志过大
             if (log.rawResponse != null && log.hasError) {
                 put("rawApiResponse", log.rawResponse.take(500))
             }
+        }
+    }
+    
+    private fun decisionToJson(log: DecisionLog): JSONObject {
+        return JSONObject().apply {
+            put("time", log.timeStr)
+            put("timestamp", log.timestamp)
+            // 牌局状态
+            put("street", log.street)
+            put("holeCards", log.holeCards)
+            put("communityCards", log.communityCards)
+            put("pot", log.potSize)
+            put("myChips", log.myChips)
+            put("toCall", log.toCall)
+            put("totalPlayers", log.totalPlayers)
+            put("activePlayers", log.activePlayers)
+            put("position", log.position)
+            // 策略结果
+            put("action", log.action)
+            put("sizing", log.sizing)
+            put("eq", log.eq)
+            put("confidence", log.confidence)
+            put("reason", log.reason)
+            put("hClass", log.hClass)
+            put("auto", log.isAuto)
+            put("execResult", log.autoExecResult)
+        }
+    }
+    
+    private fun errorToJson(entry: ErrorEntry): JSONObject {
+        return JSONObject().apply {
+            put("time", entry.timeStr)
+            put("timestamp", entry.timestamp)
+            put("category", entry.category.label)
+            put("severity", entry.severity.name)
+            put("message", entry.message)
+            if (entry.detail != null) put("detail", entry.detail)
         }
     }
     
@@ -369,27 +779,52 @@ object DiagnosticLogger {
             val chipDecreases = recognitionLogs.count { (it.chipDelta ?: 0) < -100 }
             put("chipIncreaseCount", chipIncreases)
             put("chipDecreaseCount", chipDecreases)
+            
+            // V2.9.215: 错误分类统计
+            synchronized(errorEntries) {
+                val catStats = JSONObject()
+                for (cat in ErrorCategory.values()) {
+                    catStats.put(cat.label, errorEntries.count { it.category == cat })
+                }
+                put("errorsByCategory", catStats)
+            }
+            
+            // V2.9.215: 决策统计
+            synchronized(decisionLogs) {
+                put("totalDecisions", decisionLogs.size)
+                put("autoExecCount", decisionLogs.count { it.isAuto })
+                if (decisionLogs.isNotEmpty()) {
+                    put("avgEquity", String.format("%.1f", decisionLogs.map { it.eq }.average()))
+                }
+            }
         }
     }
     
-    /**
-     * 清空日志
-     */
     fun clear() {
-        synchronized(recognitionLogs) {
-            recognitionLogs.clear()
-        }
+        synchronized(recognitionLogs) { recognitionLogs.clear() }
+        synchronized(decisionLogs) { decisionLogs.clear() }
+        synchronized(errorEntries) { errorEntries.clear() }
+        currentHandDecisions.clear()
+        currentHandId = ""
         resetChipTracking()
     }
     
-    /**
-     * 获取最近的错误日志（用于通知栏显示）
-     */
     fun getRecentErrors(count: Int = 5): List<String> {
-        return synchronized(recognitionLogs) {
-            recognitionLogs.filter { it.hasError && it.errorMessage != null }
-                .takeLast(count)
-                .map { "${it.timeStr}: ${it.errorMessage}" }
+        return synchronized(errorEntries) {
+            errorEntries.sortedByDescending { it.severity.level }
+                .take(count)
+                .map { "${it.timeStr} [${it.category.label}/${it.severity.name}] ${it.message}" }
+        }
+    }
+    
+    /**
+     * V2.9.215: 获取最近决策摘要（供通知栏/悬浮球显示）
+     */
+    fun getRecentDecisionSummary(): String {
+        return synchronized(decisionLogs) {
+            if (decisionLogs.isEmpty()) return "暂无决策记录"
+            val last = decisionLogs.last()
+            "${last.holeCards} ${last.street} → ${last.action} (eq=${last.eq}% ${last.confidence})"
         }
     }
 }

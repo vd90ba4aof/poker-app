@@ -1308,6 +1308,64 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     }
                 }
             }
+            // V2.9.215: 策略决策回传——记录每次决策供复盘学习
+            @JavascriptInterface
+            fun logDecision(jsonData: String) {
+                try {
+                    val data = org.json.JSONObject(jsonData)
+                    DiagnosticLogger.logDecision(
+                        street = data.optString("street", ""),
+                        holeCards = data.optString("holeCards", ""),
+                        communityCards = data.optString("communityCards", ""),
+                        potSize = data.optInt("pot", 0),
+                        myChips = data.optInt("myChips", 0),
+                        toCall = data.optInt("toCall", 0),
+                        totalPlayers = data.optInt("totalPlayers", 0),
+                        activePlayers = data.optInt("activePlayers", 0),
+                        position = data.optString("position", ""),
+                        action = data.optString("action", "fold"),
+                        sizing = data.optInt("sizing", 0),
+                        eq = data.optInt("eq", 0),
+                        confidence = data.optString("confidence", "medium"),
+                        reason = data.optString("reason", ""),
+                        hClass = data.optString("hClass", "UNKNOWN"),
+                        isAuto = data.optBoolean("auto", false),
+                        autoExecResult = data.optString("execResult", "skip")
+                    )
+                    Log.d(TAG, "📝 决策已记录: ${data.optString("action")} eq=${data.optInt("eq")}% conf=${data.optString("confidence")}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "logDecision error: ${e.message}", e)
+                }
+            }
+            // V2.9.215: 策略决策回传——记录每次决策供复盘学习
+            @JavascriptInterface
+            fun logDecision(jsonData: String) {
+                try {
+                    val data = org.json.JSONObject(jsonData)
+                    DiagnosticLogger.logDecision(
+                        street = data.optString("street", ""),
+                        holeCards = data.optString("holeCards", ""),
+                        communityCards = data.optString("communityCards", ""),
+                        potSize = data.optInt("pot", 0),
+                        myChips = data.optInt("myChips", 0),
+                        toCall = data.optInt("toCall", 0),
+                        totalPlayers = data.optInt("totalPlayers", 0),
+                        activePlayers = data.optInt("activePlayers", 0),
+                        position = data.optString("position", ""),
+                        action = data.optString("action", "fold"),
+                        sizing = data.optInt("sizing", 0),
+                        eq = data.optInt("eq", 0),
+                        confidence = data.optString("confidence", "medium"),
+                        reason = data.optString("reason", ""),
+                        hClass = data.optString("hClass", "UNKNOWN"),
+                        isAuto = data.optBoolean("auto", false),
+                        autoExecResult = data.optString("execResult", "skip")
+                    )
+                    Log.d(TAG, "📝 决策已记录: ${data.optString("action")} eq=${data.optInt("eq")}% conf=${data.optString("confidence")}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "logDecision error: ${e.message}", e)
+                }
+            }
             // V2.9.70: JS可获取Kotlin端错误日志，导出时一并带走
             @JavascriptInterface
             fun getErrorLogs(): String {
@@ -2358,12 +2416,19 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
     // V2.9.167: 增强版诊断日志导出
     private fun exportLogFromNotification() {
         try {
-            // 使用 DiagnosticLogger 导出完整的诊断日志
+            // V2.9.215: 导出完整日志（识别+决策+错误）+ 复盘日志
             val logData = DiagnosticLogger.exportAsJson()
+            val reviewData = DiagnosticLogger.exportReview()
             val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
             val fileName = "poker_log_${java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())}.json"
             val exportFile = File(downloadDir, fileName)
             exportFile.writeText(logData, Charsets.UTF_8)
+            
+            // V2.9.215: 同时导出复盘日志
+            try {
+                val reviewFile = File(downloadDir, "poker_review_${java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())}.json")
+                reviewFile.writeText(reviewData, Charsets.UTF_8)
+            } catch (_: Exception) {}
 
             // 复制到剪贴板
             try {
