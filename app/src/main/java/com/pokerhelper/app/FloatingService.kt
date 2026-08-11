@@ -98,14 +98,22 @@ class FloatingService : Service() {
     private var autoCaptureEnabled = false
     private var autoCaptureRunnable: Runnable? = null
     private var autoCaptureInterval = 4000L
-    // V2.9.183: 根据street自适应截屏间隔——翻前慢翻后快
-    private fun updateAutoCaptureInterval(street: String) {
+    // V2.9.215: 根据street+人数双维自适应截屏间隔——人少节奏快，间隔短
+    private fun updateAutoCaptureInterval(street: String, playerCount: Int = 6) {
+        // 基础间隔按人数：HU最快2s，3人2.5s，4-5人3s，6+人4s
+        val baseInterval = when {
+            playerCount <= 2 -> 2000L   // HU极快
+            playerCount <= 3 -> 2500L   // 3人快
+            playerCount <= 5 -> 3000L   // 4-5人中等
+            else -> 4000L               // 6+人常规
+        }
+        // street系数：翻后更短（行动更快）
         autoCaptureInterval = when (street.lowercase()) {
-            "preflop" -> 4000L
-            "flop" -> 2500L
-            "turn" -> 2000L
-            "river" -> 2000L
-            else -> 4000L
+            "preflop" -> baseInterval
+            "flop" -> (baseInterval * 0.85).toLong().coerceAtLeast(1500L)
+            "turn" -> (baseInterval * 0.70).toLong().coerceAtLeast(1500L)
+            "river" -> (baseInterval * 0.70).toLong().coerceAtLeast(1500L)
+            else -> baseInterval
         }
     }
     // V2.9.180: 最新按钮坐标（Vision API返回，用于全自动执行）
@@ -814,7 +822,7 @@ class FloatingService : Service() {
 if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}else isVisionInProgress=false}};ScreenOptService.captureScreen()}},multiFrameDelay)}else{showOverlay();isVisionInProgress=false}}}
         handler.postDelayed({ScreenOptService.captureScreen()}, 100)  // V2.9.192: 延迟100ms等View渲染
     }
-    fun setAutoCaptureSpeed(ms:Long){autoCaptureInterval=ms.coerceIn(2000L,10000L);if(autoCaptureEnabled)scheduleNextAutoCapture()}
+    fun setAutoCaptureSpeed(ms:Long){autoCaptureInterval=ms.coerceIn(1500L,10000L);if(autoCaptureEnabled)scheduleNextAutoCapture()}
 
 /**
      * V2.9.38: 触发截屏（通知栏按钮调用）
@@ -2199,7 +2207,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         Log.d(TAG, "★ onVisionResult已调用")
                         // V2.9.70: 正常识别→停止闪烁
                         isBlinkingError = false
-                        updateAutoCaptureInterval(result.street)  // V2.9.183: 自适应截屏间隔
+                        updateAutoCaptureInterval(result.street, result.totalPlayers)  // V2.9.215: 自适应截屏间隔(按人数+street)
                         updateAdviceNotification("3/4 API识别OK", "策略计算中... WV:$webViewReady")
                         val hole = result.holeCards.map { (if(it.rank=="T") "10" else it.rank) + it.suit }.joinToString(" ")
                         tvStatus?.text = "✅ $hole | ${result.street} | ${result.totalPlayers}人"

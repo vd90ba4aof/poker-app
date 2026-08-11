@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script>var API_BASE="http://127.0.0.1:8666";</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-<title>青云 v2.9.214 · 数据链修复+ICM精度+剥削深化+多人池精细化</title>
+<title>青云 v2.9.215 · 自适应截图间隔(人数+street双维)</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#080e08;color:#fff;height:100vh;padding:6px;user-select:none;font-size:14px;display:flex;flex-direction:column;overflow-y:auto}
@@ -2595,7 +2595,7 @@ var FrameDiffEngine={
     if(this._nh(f)){this._al=[];this._hid=f.hid;console.log('[FD]新:'+f.hid);}
     if(this._fb.length>0){var pf=this._fb[this._fb.length-1];var acts=this._df(pf,f);for(var i=0;i<acts.length;i++){this._al.push(acts[i]);this._ap(acts[i]);}}
     this._fb.push(f);if(this._fb.length>10)this._fb.shift();
-    if(f._t==='auto'&&typeof AndroidBridge!=='undefined'&&AndroidBridge.setAutoSpeed)AndroidBridge.setAutoSpeed(f.hb?2000:4000);
+    if(f._t==='auto'&&typeof AndroidBridge!=='undefined'&&AndroidBridge.setAutoSpeed){var _b=f.tp<=2?2000:f.tp<=3?2500:f.tp<=5?3000:4000;AndroidBridge.setAutoSpeed(f.hb?Math.max(1500,Math.round(_b*0.75)):_b);}
   },
   _ex:function(d){
     var os=[];if(d.opp_seats){for(var i=0;i<d.opp_seats.length;i++){var o=d.opp_seats[i];os.push({s:o.seat||0,c:parseInt(o.chips)||0,a:o.action!=='fold'});}}
