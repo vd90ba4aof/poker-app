@@ -1337,35 +1337,6 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     Log.e(TAG, "logDecision error: ${e.message}", e)
                 }
             }
-            // V2.9.215: 策略决策回传——记录每次决策供复盘学习
-            @JavascriptInterface
-            fun logDecision(jsonData: String) {
-                try {
-                    val data = org.json.JSONObject(jsonData)
-                    DiagnosticLogger.logDecision(
-                        street = data.optString("street", ""),
-                        holeCards = data.optString("holeCards", ""),
-                        communityCards = data.optString("communityCards", ""),
-                        potSize = data.optInt("pot", 0),
-                        myChips = data.optInt("myChips", 0),
-                        toCall = data.optInt("toCall", 0),
-                        totalPlayers = data.optInt("totalPlayers", 0),
-                        activePlayers = data.optInt("activePlayers", 0),
-                        position = data.optString("position", ""),
-                        action = data.optString("action", "fold"),
-                        sizing = data.optInt("sizing", 0),
-                        eq = data.optInt("eq", 0),
-                        confidence = data.optString("confidence", "medium"),
-                        reason = data.optString("reason", ""),
-                        hClass = data.optString("hClass", "UNKNOWN"),
-                        isAuto = data.optBoolean("auto", false),
-                        autoExecResult = data.optString("execResult", "skip")
-                    )
-                    Log.d(TAG, "📝 决策已记录: ${data.optString("action")} eq=${data.optInt("eq")}% conf=${data.optString("confidence")}")
-                } catch (e: Exception) {
-                    Log.e(TAG, "logDecision error: ${e.message}", e)
-                }
-            }
             // V2.9.70: JS可获取Kotlin端错误日志，导出时一并带走
             @JavascriptInterface
             fun getErrorLogs(): String {
