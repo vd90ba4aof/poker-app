@@ -401,8 +401,8 @@ class LocalSceneRecognizer(
             intArrayOf(-60, 0, -20, 0),
             // seat 4 (bottom-center): bet在筹码上方
             intArrayOf(0, -50, 0, -20),
-            // seat 5 (left-bottom): bet在筹码右侧
-            intArrayOf(20, 0, 60, 0)
+            // seat 5 (left-bottom/Hero): bet在筹码右上方（朝桌面中心）
+            intArrayOf(20, -60, 80, -20)
         )
 
         for (i in chipRegions.indices) {
@@ -702,7 +702,12 @@ class LocalSceneRecognizer(
      * 检测活跃玩家（行动者白色光圈）
      * 返回活跃玩家座位索引列表
      */
-    private fun detectActivePlayers(screenshot: Bitmap, chipValues: IntArray): List<Int> {
+    private data class ActivePlayerInfo(
+        val inHandSeats: List<Int>,      // 所有在局玩家座位索引
+        val actingSeat: Int              // 当前行动者座位索引（-1=未检测到）
+    )
+
+    private fun detectActivePlayers(screenshot: Bitmap, chipValues: IntArray): ActivePlayerInfo {
         val nameRegions = GameModeConfig.getPlayerNameRegions()
         val chipRegions = GameModeConfig.getPlayerChipRegions()
 
@@ -720,16 +725,17 @@ class LocalSceneRecognizer(
             )
         }
 
-        val activeSeat = CardRecognizer.detectActivePlayer(screenshot, scaledNames, scaledChips)
+        // 当前行动者（白色光圈检测）
+        val actingSeat = CardRecognizer.detectActivePlayer(screenshot, scaledNames, scaledChips)
 
-        // 所有有筹码的玩家视为活跃玩家（preflop阶段）
-        val activePlayers = mutableListOf<Int>()
+        // 所有有筹码的玩家视为在局玩家
+        val inHandSeats = mutableListOf<Int>()
         for (i in chipValues.indices) {
-            if (chipValues[i] > 0) activePlayers.add(i)
+            if (chipValues[i] > 0) inHandSeats.add(i)
         }
 
-        Log.d(TAG, "活跃玩家检测: activeSeat=$activeSeat, totalActive=${activePlayers.size}")
-        return activePlayers
+        Log.d(TAG, "活跃玩家检测: actingSeat=$actingSeat, inHand=${inHandSeats.size}")
+        return ActivePlayerInfo(inHandSeats, actingSeat)
     }
 
     // ============================================================
@@ -779,7 +785,7 @@ class LocalSceneRecognizer(
             val t7 = System.currentTimeMillis()
 
             // Step 8: 活跃玩家检测
-            val activePlayerIndices = detectActivePlayers(screenshot, playerChips)
+            val activeInfo = detectActivePlayers(screenshot, playerChips)
             val t8 = System.currentTimeMillis()
 
             // Step 9: 特殊状态检测
@@ -791,8 +797,8 @@ class LocalSceneRecognizer(
 
             // 组装结果
             val myChips = if (playerChips.size > 5) playerChips[5] else 0 // Hero = seat 5
-            val totalPlayers = playerChips.count { it > 0 }.coerceAtLeast(2)
-            val activePlayers = activePlayerIndices.size.coerceAtLeast(2).coerceAtMost(totalPlayers)
+            val totalPlayers = activeInfo.inHandSeats.size.coerceAtLeast(2)
+            val activePlayers = totalPlayers // 在局人数即活跃人数
 
             // 组装玩家信息列表
             val playersList = mutableListOf<VisionApiClient.PlayerInfo>()
@@ -803,7 +809,7 @@ class LocalSceneRecognizer(
                         position = SEAT_POSITIONS[i],
                         bet = playerBets[i],
                         chips = playerChips[i],
-                        active = i in activePlayerIndices
+                        active = i == activeInfo.actingSeat
                     )
                 )
             }
