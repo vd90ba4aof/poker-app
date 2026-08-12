@@ -1330,11 +1330,22 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         reason = data.optString("reason", ""),
                         hClass = data.optString("hClass", "UNKNOWN"),
                         isAuto = data.optBoolean("auto", false),
-                        autoExecResult = data.optString("execResult", "skip")
+                        autoExecResult = data.optString("execResult", "skip"),
+                        oppStats = data.optString("oppStats", "")
                     )
                     Log.d(TAG, "📝 决策已记录: ${data.optString("action")} eq=${data.optInt("eq")}% conf=${data.optString("confidence")}")
                 } catch (e: Exception) {
                     Log.e(TAG, "logDecision error: ${e.message}", e)
+                }
+            }
+            // V2.9.220: 接收JS端对手统计数据
+            @JavascriptInterface
+            fun opponentStats(jsonData: String) {
+                try {
+                    // 接收对手统计信息，可用于UI展示或分析
+                    Log.d(TAG, "👤 对手统计: $jsonData")
+                } catch (e: Exception) {
+                    Log.e(TAG, "opponentStats error: ${e.message}", e)
                 }
             }
             // V2.9.70: JS可获取Kotlin端错误日志，导出时一并带走

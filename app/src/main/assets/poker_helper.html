@@ -1531,6 +1531,255 @@ var CacheManager={
 };
 
 // V2.9.79: 行动线追踪——同一手牌内串联翻前→翻牌→转牌→河牌
+
+// ====== V2.9.220: 多街计划系统 ======
+// 在flop决策时规划turn/river行动线，使决策更连贯
+var StreetPlan = {
+  // 当前手牌的计划：{flop, turn, river}
+  _currentPlan: null,
+  _handId: '',
+  
+  // 根据手牌强度、牌面质地、SPR、对手类型创建多街计划
+  createPlan:function(handStrength, hcKey, boardTexture, spr, oppType, ip){
+    try{
+      var plan = {
+        flop: {action: null, sizing: 0, confidence: 0},
+        turn: {action: null, sizing: 0, confidence: 0, reason: ''},
+        river: {action: null, sizing: 0, confidence: 0, reason: ''},
+        handStrength: handStrength,
+        boardCategory: boardTexture ? boardTexture.category : 'dry',
+        boardWetness: boardTexture ? boardTexture.wetness : 0,
+        spr: spr,
+        oppType: oppType || 'unknown',
+        inPosition: ip || false,
+        createdAt: Date.now()
+      };
+      
+      // 手牌强度分级
+      var strength = 'medium';
+      if(hcKey <= 2) strength = 'monster';        // 坚果/葫芦/三条/两对
+      else if(hcKey <= 5) strength = 'strong';    // 超对/顶对好踢
+      else if(hcKey <= 8) strength = 'medium';    // 顶对弱踢/第二对
+      else if(hcKey <= 12) strength = 'weak';     // 听牌/弱牌
+      else strength = 'air';                      // 空气
+      
+      plan.strength = strength;
+      
+      // 牌面质地分类
+      var texture = 'dry';
+      if(boardTexture){
+        if(boardTexture.category === 'wet') texture = 'wet';
+        else if(boardTexture.category === 'paired') texture = 'paired';
+        else if(boardTexture.wetness >= 2) texture = 'connected';
+        else texture = 'dry';
+      }
+      plan.texture = texture;
+      
+      // SPR区域
+      var sprZone = 'standard';
+      if(spr < 3) sprZone = 'ultra_short';
+      else if(spr < 6) sprZone = 'short';
+      else if(spr < 12) sprZone = 'med_short';
+      else if(spr < 25) sprZone = 'standard';
+      else sprZone = 'deep';
+      plan.sprZone = sprZone;
+      
+      // ===== 规划各条街的行动 =====
+      
+      // Monster 牌: 慢打或快速打光
+      if(strength === 'monster'){
+        if(texture === 'dry' || texture === 'paired'){
+          // 干面/对子面: 慢打诱导对手打
+          plan.flop.action = 'check'; plan.flop.sizing = 0;
+          plan.turn.action = 'raise'; plan.turn.sizing = 0.75; plan.turn.reason = 'monster慢打后转牌打大注';
+          plan.river.action = 'raise'; plan.river.sizing = 1.0; plan.river.reason = 'monster河牌打满';
+        }else{
+          // 湿面: 快打保价值
+          plan.flop.action = 'raise'; plan.flop.sizing = 0.66;
+          plan.turn.action = 'raise'; plan.turn.sizing = 0.75; plan.turn.reason = 'monster湿面快打';
+          plan.river.action = 'raise'; plan.river.sizing = 1.0; plan.river.reason = 'monster河牌全垒打';
+        }
+      }
+      // Strong 牌: 价值下注线
+      else if(strength === 'strong'){
+        if(texture === 'dry'){
+          plan.flop.action = 'raise'; plan.flop.sizing = 0.33;
+          plan.turn.action = 'raise'; plan.turn.sizing = 0.66; plan.turn.reason = '强牌干面持续下注';
+          plan.river.action = 'raise'; plan.river.sizing = 0.75; plan.river.reason = '强牌河牌价值下注';
+        }else if(texture === 'wet'){
+          plan.flop.action = 'raise'; plan.flop.sizing = 0.66;
+          plan.turn.action = 'check'; plan.turn.sizing = 0; plan.turn.reason = '强牌湿面转牌控pot';
+          plan.river.action = 'call'; plan.river.sizing = 0; plan.river.reason = '强牌湿面河牌跟注';
+        }else{ // paired/connected
+          plan.flop.action = 'raise'; plan.flop.sizing = 0.5;
+          plan.turn.action = 'raise'; plan.turn.sizing = 0.66; plan.turn.reason = '强牌中等面继续';
+          plan.river.action = 'check'; plan.river.sizing = 0; plan.river.reason = '强牌中等面河牌check';
+        }
+      }
+      // Medium 牌: 选择性价值+控池
+      else if(strength === 'medium'){
+        if(texture === 'dry'){
+          plan.flop.action = 'raise'; plan.flop.sizing = 0.33;
+          plan.turn.action = 'check'; plan.turn.sizing = 0; plan.turn.reason = '中对干面转牌check';
+          plan.river.action = 'call'; plan.river.sizing = 0; plan.river.reason = '中对河牌选择性跟注';
+        }else if(texture === 'wet'){
+          plan.flop.action = 'call'; plan.flop.sizing = 0;
+          plan.turn.action = 'check'; plan.turn.sizing = 0; plan.turn.reason = '中对湿面转牌check';
+          plan.river.action = 'check'; plan.river.sizing = 0; plan.river.reason = '中对湿面河牌check';
+        }else{
+          plan.flop.action = 'call'; plan.flop.sizing = 0;
+          plan.turn.action = 'check'; plan.turn.sizing = 0; plan.turn.reason = '中对中等面控池';
+          plan.river.action = 'check'; plan.river.sizing = 0; plan.river.reason = '中对中等面河牌check';
+        }
+      }
+      // Weak/Draw 牌: 半诈唬+听牌
+      else if(strength === 'weak'){
+        if(texture === 'dry'){
+          plan.flop.action = 'raise'; plan.flop.sizing = 0.5;
+          plan.turn.action = 'check'; plan.turn.sizing = 0; plan.turn.reason = '弱牌干面c-bet后放弃';
+          plan.river.action = 'fold'; plan.river.sizing = 0; plan.river.reason = '弱牌未中河牌弃牌';
+        }else{ // 湿面=听牌
+          plan.flop.action = 'call'; plan.flop.sizing = 0;
+          plan.turn.action = 'raise'; plan.turn.sizing = 0.66; plan.turn.reason = '听牌转牌半诈唬';
+          plan.river.action = 'check'; plan.river.sizing = 0; plan.river.reason = '听牌不中河牌放弃';
+        }
+      }
+      // Air 牌: 选择性诈唬
+      else{ // air
+        if(texture === 'dry' && sprZone !== 'ultra_short' && sprZone !== 'short'){
+          plan.flop.action = 'raise'; plan.flop.sizing = 0.33;
+          plan.turn.action = 'raise'; plan.turn.sizing = 0.5; plan.turn.reason = '空气干面双管诈唬';
+          plan.river.action = 'check'; plan.river.sizing = 0; plan.river.reason = '空气河牌停止诈唬';
+        }else{
+          plan.flop.action = 'check'; plan.flop.sizing = 0;
+          plan.turn.action = 'check'; plan.turn.sizing = 0; plan.turn.reason = '空气转牌放弃';
+          plan.river.action = 'fold'; plan.river.sizing = 0; plan.river.reason = '空气河牌弃牌';
+        }
+      }
+      
+      // 位置影响: OOP更加谨慎
+      if(!ip){
+        if(strength === 'medium'){
+          plan.turn.action = 'check'; plan.turn.reason += '(OOP保守)';
+        }
+        if(strength === 'weak' || strength === 'air'){
+          plan.flop.action = 'check'; plan.flop.sizing = 0;
+        }
+      }
+      
+      // 对手类型影响
+      if(oppType === 'fish' || oppType === 'calling_station'){
+        // vs鱼: 增加价值下注，减少诈唬
+        if(strength === 'strong' || strength === 'monster'){
+          plan.river.sizing = Math.min(1.0, (plan.river.sizing||0.75) * 1.3);
+        }
+        if(strength === 'weak' || strength === 'air'){
+          plan.flop.action = 'check'; plan.flop.sizing = 0;
+          plan.turn.action = 'check'; plan.turn.sizing = 0;
+        }
+      }else if(oppType === 'nit' || oppType === 'tight'){
+        // vs nit: 增加诈唬频率
+        if(strength === 'weak' || strength === 'air'){
+          if(plan.flop.action !== 'raise'){
+            plan.flop.action = 'raise'; plan.flop.sizing = 0.5;
+            plan.flop.reason = 'vs nit扩大诈唬';
+          }
+        }
+      }
+      
+      this._currentPlan = plan;
+      this._handId = G._handLockKey || '';
+      console.log('[V2.9.220] 多街计划已创建: '+strength+'/'+texture+'/'+sprZone+' flop='+plan.flop.action+' turn='+plan.turn.action+' river='+plan.river.action);
+      return plan;
+    }catch(e){
+      console.log('[V2.9.220] createPlan error: '+e.message);
+      return null;
+    }
+  },
+  
+  // 更新计划（根据实际局势变化）
+  updatePlan:function(street, newInfo){
+    try{
+      if(!this._currentPlan)return;
+      var plan = this._currentPlan;
+      
+      // 转牌更新
+      if(street === 'turn'){
+        // 如果牌面变得更湿而手牌强度下降
+        if(newInfo.handStrength && newInfo.handStrength < plan.handStrength * 0.7){
+          // 强牌变弱: 改为check/call模式
+          if(plan.turn.action === 'raise'){
+            plan.turn.action = 'check';
+            plan.turn.reason += ' （转牌发后强度下降，修正为check）';
+            plan.river.action = 'call';
+            plan.river.reason = '手牌减弱河牌改为跟注';
+            plan._modified = true;
+            console.log('[V2.9.220] 计划修正: 转牌后强度下降→check/call');
+          }
+        }
+        // 如果对手主动下注（我们本来计划check）→ 评估是否防守
+        if(newInfo.oppAction === 'bet' || newInfo.oppAction === 'raise'){
+          plan._oppBet = true;
+        }
+      }
+      
+      // 河牌更新
+      if(street === 'river'){
+        if(newInfo.handStrength && newInfo.handStrength < 0.3 && plan.river.action === 'raise'){
+          plan.river.action = 'check';
+          plan.river.reason += ' （河牌没中，修正为check）';
+          plan._modified = true;
+        }
+      }
+      
+      plan.lastUpdate = Date.now();
+      plan.streetReached = street;
+    }catch(e){console.log('[V2.9.220] updatePlan error: '+e.message);}
+  },
+  
+  // 应用计划到当前决策: 返回调整建议
+  applyPlan:function(street, currentAction, scene){
+    try{
+      var plan = this._currentPlan;
+      if(!plan)return {match:false, confidenceBoost:0, shouldDeviate:false, reason:'no_plan'};
+      
+      var plannedAction = null;
+      if(street === 'flop') plannedAction = plan.flop.action;
+      else if(street === 'turn') plannedAction = plan.turn.action;
+      else if(street === 'river') plannedAction = plan.river.action;
+      
+      if(!plannedAction) return {match:false, confidenceBoost:0, reason:'no_planned_action'};
+      
+      // 检查是否匹配（raise和bet视为同类，check和call视场景而定）
+      var isMatch = false;
+      if(plannedAction === currentAction) isMatch = true;
+      else if((plannedAction === 'raise' || plannedAction === 'bet') && (currentAction === 'raise' || currentAction === 'bet')) isMatch = true;
+      else if(plannedAction === 'check' && currentAction === 'check') isMatch = true;
+      else if(plannedAction === 'call' && currentAction === 'call') isMatch = true;
+      else if(plannedAction === 'fold' && currentAction === 'fold') isMatch = true;
+      
+      if(isMatch){
+        return {match:true, confidenceBoost:0.05, plannedAction:plannedAction, reason:'matches_plan'};
+      }else{
+        return {match:false, confidenceBoost:0, plannedAction:plannedAction, 
+                shouldDeviate:true, reason:'action_differs_from_plan planned='+plannedAction+' actual='+currentAction};
+      }
+    }catch(e){
+      console.log('[V2.9.220] applyPlan error: '+e.message);
+      return {match:false, confidenceBoost:0, reason:'error'};
+    }
+  },
+  
+  // 获取当前计划
+  getPlan:function(){return this._currentPlan;},
+  
+  // 重置计划（新手牌）
+  resetPlan:function(){
+    this._currentPlan = null;
+    this._handId = '';
+  }
+};
+
 var ActionLine={
   _lines:[],       // [{street, scene, heroAction, oppAction, eq, sizing}]
   _handId:'',      // 当前手牌ID（hole cards）
@@ -1542,6 +1791,8 @@ var ActionLine={
       this._lines=[];
       this._handId=handId;
       this._prevStreet='';
+      // V2.9.220: 新手牌重置多街计划
+      try{if(typeof StreetPlan!=='undefined')StreetPlan.resetPlan();}catch(_spe){}
     }
   },
   
@@ -1618,6 +1869,275 @@ var OppProfiler={
   // 每个对手记录: {small:0, medium:0, large:0, huge:0} (下注档位次数)
   // + {showdown:{small:{n:0,w:0},medium:{n:0,w:0},large:{n:0,w:0},huge:{n:0,w:0}}} (摊牌时各档位赢率)
   
+
+  // ====== V2.9.220: 对手建模三大核心统计量 ======
+  // VPIP: Voluntarily Put $ In Pot (自愿入池率)
+  // PFR: Pre-Flop Raise (翻前加注率)
+  // AF: Aggression Factor (进攻系数 = (bet+raise) / (call+check+fold))
+  
+  // 根据行动更新对手统计量
+  // action: 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'limp' | 'allin'
+  // street: 'preflop' | 'flop' | 'turn' | 'river'
+  _updateOppStats:function(nickname, action, street){
+    try{
+      if(!nickname||!action)return;
+      var p=this._profiles[nickname];
+      if(!p)return;
+      
+      // 初始化统计字段（兼容旧profile）
+      if(p._vpipHands===undefined){p._vpipHands=0; p._vpipCount=0; p._pfrCount=0;
+        p._afBetRaiseCount=0; p._afCallCheckFoldCount=0;
+        p._foldToCbetCount=0; p._facedCbetTotal=0;
+        p._streetActions={}; // 按街记录行动
+      }
+      
+      // 每手只计一次VPIP
+      if(street==='preflop'){
+        if(!p._vpipCountedThisHand){
+          if(action==='call'||action==='raise'||action==='bet'||action==='limp'||action==='allin'){
+            p._vpipCount++;
+            p._vpipCountedThisHand=true;
+          }
+        }
+        // PFR: 翻前首次加注/3bet
+        if(!p._pfrCountedThisHand){
+          if(action==='raise'||action==='reraise'){
+            p._pfrCount++;
+            p._pfrCountedThisHand=true;
+          }
+        }
+      }
+      
+      // AF统计：(bet+raise) / (call+check+fold)
+      if(action==='bet'||action==='raise'||action==='reraise'){
+        p._afBetRaiseCount++;
+      }else if(action==='call'||action==='check'||action==='fold'||action==='limp'){
+        p._afCallCheckFoldCount++;
+      }
+      
+      // fold-to-cbet统计（翻后面对下注弃牌）
+      if(street==='flop'||street==='turn'||street==='river'){
+        if(p._facingBetThisStreet && action==='fold'){
+          p._foldToCbetCount++;
+        }
+        if(action==='bet'||action==='raise'){
+          p._facingBetThisStreet=false; // 对手主动下注=不是facing
+        }
+      }
+      
+      // 记录按街行动
+      if(!p._streetActions[street])p._streetActions[street]=[];
+      p._streetActions[street].push(action);
+    }catch(e){console.log('[V2.9.220] _updateOppStats error: '+e.message);}
+  },
+  
+  // 获取VPIP百分比
+  getVPIP:function(nickname){
+    try{
+      var p=this._profiles[nickname];
+      if(!p||p.hands<2)return -1;
+      var hands=Math.max(p.hands,1);
+      // 优先用_vpipCount，回退到entered
+      if(p._vpipCount!==undefined && p._vpipHands>0){
+        return Math.round(p._vpipCount/p._vpipHands*100);
+      }
+      return Math.round(p.entered/hands*100);
+    }catch(e){return -1;}
+  },
+  
+  // 获取PFR百分比
+  getPFR:function(nickname){
+    try{
+      var p=this._profiles[nickname];
+      if(!p||p.hands<2)return -1;
+      var hands=Math.max(p.hands,1);
+      if(p._pfrCount!==undefined && p._vpipHands>0){
+        return Math.round(p._pfrCount/p._vpipHands*100);
+      }
+      if(p._pfRaise!==undefined){
+        var opp=Math.max(p._pfOpenOpp||p.hands||1,1);
+        return Math.round(p._pfRaise/opp*100);
+      }
+      return -1;
+    }catch(e){return -1;}
+  },
+  
+  // 获取进攻系数AF
+  getAF:function(nickname){
+    try{
+      var p=this._profiles[nickname];
+      if(!p)return 1;
+      var aggressive=p._afBetRaiseCount||0;
+      var passive=p._afCallCheckFoldCount||1;
+      return Math.round(aggressive/passive*100)/100;
+    }catch(e){return 1;}
+  },
+  
+  // V2.9.220: 精细玩家分类（VPIP+PFR+AF三维度）
+  _classifyOpp:function(nickname){
+    try{
+      var p=this._profiles[nickname];
+      if(!p)return {type:'unknown', subtype:'unknown', afType:'neutral', hands:0};
+      var hands=p.hands||0;
+      if(hands<10)return {type:'unknown', subtype:'unknown', afType:'neutral', hands:hands};
+      
+      var vpip=this.getVPIP(nickname);
+      var pfr=this.getPFR(nickname);
+      var af=this.getAF(nickname);
+      
+      var type='unknown', subtype='';
+      // 主类型（基于VPIP+PFR）
+      if(vpip>40){
+        type='fish';
+        if(pfr<10)subtype='calling_station';
+        else if(pfr>25)subtype='maniac';
+        else subtype='loose_passive';
+      }else if(vpip>30 && pfr>20){
+        type='lag';
+        if(pfr>30)subtype='super_lag';
+        else subtype='lag';
+      }else if(vpip>=18 && vpip<=30 && pfr>=15 && pfr<=25){
+        type='tag';
+        subtype='standard_tag';
+      }else if(vpip<18){
+        type='nit';
+        if(pfr<12)subtype='rock';
+        else subtype='tight_aggressive';
+      }else{
+        type='unknown';
+        subtype='insufficient_data';
+      }
+      
+      // AF分类
+      var afType='neutral';
+      if(af<1.0)afType='passive';
+      else if(af>3.0)afType='aggressive';
+      else afType='neutral';
+      
+      return {type:type, subtype:subtype, afType:afType, vpip:vpip, pfr:pfr, af:af, hands:hands};
+    }catch(e){
+      console.log('[V2.9.220] _classifyOpp error: '+e.message);
+      return {type:'unknown', subtype:'unknown', afType:'neutral', hands:0};
+    }
+  },
+  
+  // V2.9.220: 获取对手剥削调整系数
+  // 返回: {valueBetMult, bluffMult, foldEquityMult, callAdj, type, vpip, pfr, af}
+  _getOppAdjustments:function(nickname){
+    try{
+      var cls=this._classifyOpp(nickname);
+      var type=cls.type;
+      var adj={valueBetMult:1.0, bluffMult:1.0, foldEquityMult:1.0, 
+               callAdj:0, type:type, subtype:cls.subtype, afType:cls.afType,
+               vpip:cls.vpip||0, pfr:cls.pfr||0, af:cls.af||1,
+               hands:cls.hands||0, source:'unknown'};
+      
+      if(type==='fish'){
+        adj.valueBetMult=1.3;    // 鱼多打价值
+        adj.bluffMult=0.5;       // 少诈唬（不弃牌）
+        adj.foldEquityMult=0.6;  // 弃牌率低，fold equity差
+        adj.callAdj=8;           // 跟注阈值提高
+        adj.source='fish_class';
+      }else if(type==='nit'){
+        adj.valueBetMult=0.8;    // nit价值下注要少（弃牌多拿不到价值）
+        adj.bluffMult=1.3;       // 多诈唬（容易弃牌）
+        adj.foldEquityMult=1.4;  // fold equity高
+        adj.callAdj=-5;          // 跟注阈值降低
+        adj.source='nit_class';
+      }else if(type==='lag'){
+        adj.valueBetMult=1.1;    // LAG也会跟注价值
+        adj.bluffMult=0.8;       // 少诈唬（LAG防守宽）
+        adj.foldEquityMult=0.8;
+        adj.callAdj=3;
+        adj.source='lag_class';
+      }else if(type==='tag'){
+        adj.valueBetMult=1.0;
+        adj.bluffMult=1.0;
+        adj.foldEquityMult=1.0;
+        adj.callAdj=0;
+        adj.source='tag_class';
+      }
+      // unknown保持默认1.0
+      
+      // AF微调
+      if(cls.afType==='passive'){
+        adj.valueBetMult*=1.1;
+        adj.bluffMult*=0.8;
+      }else if(cls.afType==='aggressive'){
+        adj.bluffMult*=1.1;
+        adj.foldEquityMult*=1.1;
+      }
+      
+      return adj;
+    }catch(e){
+      console.log('[V2.9.220] _getOppAdjustments error: '+e.message);
+      return {valueBetMult:1.0, bluffMult:1.0, foldEquityMult:1.0, callAdj:0, type:'unknown', hands:0, source:'error_fallback'};
+    }
+  },
+  
+  // 获取主要对手（当前面对的）调整系数
+  getFacingAdjustments:function(){
+    try{
+      var opp=this.getFacingOppType();
+      if(opp && opp.nickname){
+        return this._getOppAdjustments(opp.nickname);
+      }
+      // fallback: 找样本最多的
+      var bestNk=null, bestHands=0;
+      for(var nk in this._profiles){
+        var p=this._profiles[nk];
+        if(p.hands>bestHands){bestHands=p.hands; bestNk=nk;}
+      }
+      if(bestNk && bestHands>=5){
+        return this._getOppAdjustments(bestNk);
+      }
+      return {valueBetMult:1.0, bluffMult:1.0, foldEquityMult:1.0, callAdj:0, type:'unknown', hands:0, source:'no_data'};
+    }catch(e){
+      return {valueBetMult:1.0, bluffMult:1.0, foldEquityMult:1.0, callAdj:0, type:'unknown', hands:0, source:'error'};
+    }
+  },
+  
+  // 重置单只手的统计标记（在_onNewHand中调用）
+  _resetPerHandMarkers:function(p){
+    try{
+      p._vpipCountedThisHand=false;
+      p._pfrCountedThisHand=false;
+      p._facingBetThisStreet=false;
+      if(p._vpipHands===undefined)p._vpipHands=0;
+      if(p._enteredThisHand)p._vpipHands++; // 每参与一手+1
+    }catch(e){}
+  },
+  
+  // 生成对手统计摘要字符串（用于日志）
+  getStatsSummary:function(){
+    try{
+      var parts=[];
+      var count=0;
+      for(var nk in this._profiles){
+        var p=this._profiles[nk];
+        if(!p||p.hands<1)continue;
+        var vpip=this.getVPIP(nk);
+        var pfr=this.getPFR(nk);
+        var af=this.getAF(nk);
+        var cls=this._classifyOpp(nk);
+        parts.push((p.nickname||nk)+':'+cls.type+'(VP'+vpip+'/PF'+pfr+'/AF'+af.toFixed(1)+'/'+p.hands+'h)');
+        count++;
+        if(count>=4)break; // 最多记录4个对手
+      }
+      return parts.length>0?parts.join(' | '):'no_data';
+    }catch(e){return 'err:'+e.message;}
+  },
+  
+  // 玩家离开/换桌时重置所有对手
+  _resetOpponents:function(){
+    try{
+      this._profiles={};
+      this._posMap={};
+      this._prevSeats={};
+      console.log('[V2.9.220] 对手建模已全部重置');
+    }catch(e){console.log('[V2.9.220] resetOpponents error: '+e.message);}
+  },
+  
   // V2.9.142: 保存对手画像到localStorage
   saveProfiles:function(){
     try{
@@ -1642,6 +2162,10 @@ var OppProfiler={
           _facedRiverCBet:p._facedRiverCBet||0, _foldToRiverCBet:p._foldToRiverCBet||0,
           _cbetFlop:p._cbetFlop||0, _cbetTurn:p._cbetTurn||0, _cbetRiver:p._cbetRiver||0,
           _raiseFlop:p._raiseFlop||0, _raiseTurn:p._raiseTurn||0, _raiseRiver:p._raiseRiver||0,
+          // V2.9.220: VPIP/PFR/AF三大统计量
+          _vpipHands:p._vpipHands||0, _vpipCount:p._vpipCount||0, _pfrCount:p._pfrCount||0,
+          _afBetRaiseCount:p._afBetRaiseCount||0, _afCallCheckFoldCount:p._afCallCheckFoldCount||0,
+          _foldToCbetCount:p._foldToCbetCount||0, _facedCbetTotal:p._facedCbetTotal||0,
           // V2.9.142: bet sizing tells
           _betSizes:p._betSizes||{small:0,medium:0,large:0,huge:0},
           _betSizeShowdown:p._betSizeShowdown||{small:{n:0,w:0},medium:{n:0,w:0},large:{n:0,w:0},huge:{n:0,w:0}},
@@ -1678,7 +2202,10 @@ var OppProfiler={
             // V2.9.164: 翻后对手统计
             _sawTurn:0,_sawRiver:0,_facedTurnCBet:0,_foldToTurnCBet:0,
             _facedRiverCBet:0,_foldToRiverCBet:0,_cbetFlop:0,_cbetTurn:0,_cbetRiver:0,
-            _raiseFlop:0,_raiseTurn:0,_raiseRiver:0
+            _raiseFlop:0,_raiseTurn:0,_raiseRiver:0,
+            _vpipHands:0,_vpipCount:0,_pfrCount:0,
+            _afBetRaiseCount:0,_afCallCheckFoldCount:0,
+            _foldToCbetCount:0,_facedCbetTotal:0
           },p);
           count++;
         }else{
@@ -1861,6 +2388,11 @@ var OppProfiler={
       var nk=s.nickname||s.pos;
       if(!this._profiles[nk]){
         this._profiles[nk]={nickname:nk,pos:s.pos,hands:0,entered:0,folded:0,chipsHistory:[],betHistory:[],type:'unknown',_lastChips:0,_enteredThisHand:false,_foldedThisHand:false,_lastBet:0,_raiseCount:0,
+          // V2.9.220: VPIP/PFR/AF统计量
+          _vpipHands:0,_vpipCount:0,_pfrCount:0,
+          _afBetRaiseCount:0,_afCallCheckFoldCount:0,
+          _foldToCbetCount:0,_facedCbetTotal:0,
+          _vpipCountedThisHand:false,_pfrCountedThisHand:false,_facingBetThisStreet:false,
           // V2.9.105: 3bet频率追踪
           _pfRaise:0,_pf3bet:0,_pfOpenOpp:0, // 翻前加注/3bet次数/翻前开池面对机会
           _pos3bet:{},_posPFR:{}, // 按位置3bet/PFR统计 {pos:count}
@@ -1946,6 +2478,16 @@ var OppProfiler={
     G.oppSeats=oppSeats;
     // V2.9 HUD: 更新HUD数据（风格标签 + 动作趋势）
     try { if (typeof HUDManager !== 'undefined') HUDManager.updateFromOppSeats(oppSeats); } catch (_he) {}
+    // V2.9.220: 从action字段更新VPIP/PFR/AF统计
+    try{
+      for(var _ui=0;_ui<oppSeats.length;_ui++){
+        var _us=oppSeats[_ui];
+        var _un=_us.nickname||_us.pos;
+        if(_us.action && _us.action!==''){
+          OppProfiler._updateOppStats(_un, _us.action, street);
+        }
+      }
+    }catch(_ue){console.log('[V2.9.220] 行动统计更新失败: '+_ue.message);}
     this._updateTypes();
     // V2.9.142: 定期自动保存对手画像
     this._autoSave();
@@ -1971,6 +2513,8 @@ var OppProfiler={
       if(p._enteredThisHand){
         p.hands++;
       }
+      // V2.9.220: 重置每手统计标记
+      try{OppProfiler._resetPerHandMarkers(p);}catch(_me){}
       // V2.9.106: 保存弃牌状态再重置（V2.9.105 bug: 先重置_wastFolded再检查→计数器永远不递增）
       var _wasFolded=p._foldedThisHand;
       p._enteredThisHand=false;
@@ -3124,6 +3668,18 @@ var HandStateMachine=(function(){
     // Ante
     if(G.ante>0){var _ac=G.ante*(G.tt||6);var _ar=_ac/Math.max(pot,1);var _ab=Math.min(Math.round(_ar*12),5);if(_ab>0)eq+=_ab;}
 
+    // V2.9.220: 精细对手建模调整（VPIP/PFR/AF三维剥削）
+    try{
+      if(typeof OppProfiler!=='undefined' && OppProfiler.getFacingAdjustments){
+        var _adv220=OppProfiler.getFacingAdjustments();
+        if(_adv220 && _adv220.hands>=10){ // 样本足够才应用
+          if(_adv220.callAdj !== undefined && _adv220.callAdj !== 0){
+            eq += _adv220.callAdj;
+            _oppAdjDesc += (_oppAdjDesc?' ':'') + 'VP/PF/AF调'+(_adv220.callAdj>0?'+':'')+_adv220.callAdj;
+          }
+        }
+      }
+    }catch(_e220){console.log('[V2.9.220] 翻前对手建模调整失败: '+_e220.message);}
     // Tilt
     var tiltInfo=TiltDetector.detectTilt(profile);
 
@@ -3300,6 +3856,15 @@ var HandStateMachine=(function(){
     if(bc.length===5){var rs=riverExactEquity(hole,comm,getOppRange('postflop','cbet',bTexture.wetness>=2?'wet':'dry'));eq=rs.eq;}
     else{var mcI=bc.length===4?2500:2000;if(bet/(pot+bet)>=.66)mcI=Math.round(mcI*2);else if(bet/(pot+bet)>=.33)mcI=Math.round(mcI*1.3);var ms=mcVsRange(hole,comm,getOppRange('postflop','cbet',bTexture.wetness>=2?'wet':'dry'),Math.min(mcI,5000));eq=ms.eq;}
     _mcSimCache=null;
+    // V2.9.220: equity异常时用Range vs Range作为fallback
+    try{
+      if(!eq||eq<=0||isNaN(eq)){
+        if(_rvrAdj&&_rvrAdj.rangeEq>0){
+          eq=_rvrAdj.rangeEq;
+          console.log('[V2.9.220] EQ fallback: 使用RvR权益='+eq+'%');
+        }
+      }
+    }catch(_eqfe){}
 
     // V2.9.161: 3bet底池+多人池检测
     var _is3betPot=spr<10&&(ActionLine.didPreflopRaise()||G._faced3bet||G._heroDid4bet);
@@ -3311,6 +3876,22 @@ var HandStateMachine=(function(){
     G._isMultiway=_isMultiway;
 
 
+    // V2.9.220: Range vs Range 分析（对手范围推断 + 权益计算 + 调整）
+    var _rvrAdj=null;
+    try{
+      if(typeof RangeVsRange!=='undefined'){
+        var _oppNk=null;
+        var _fo=OppProfiler&&OppProfiler.getFacingOppType?OppProfiler.getFacingOppType():null;
+        if(_fo&&_fo.nickname)_oppNk=_fo.nickname;
+        var _pfAct='call';
+        if(_wasHeroPFR)_pfAct='call'; else _pfAct='raise';
+        var _streetAct=scene==='check'?'check':(scene==='raise'?'bet':scene);
+        var _rvrActions={preflop:_pfAct};
+        _rvrActions[street]=_streetAct;
+        _rvrAdj=RangeVsRange.getQuickAdjustments(_oppNk,street,_rvrActions,bc,hcKey,bTexture,hole,oppType);
+        G._rvrAdj=_rvrAdj;
+      }
+    }catch(_rvre){console.log('[V2.9.220] RvR分析失败: '+_rvre.message); _rvrAdj=null;}
     // V2.9.161: SPR区频率调整
     var _sprZone=SPRZone.getZone(spr);
     var _sprAdj={cbet:1,fcb:1,bluff:1};
@@ -3383,6 +3964,11 @@ var HandStateMachine=(function(){
           var exploitR=applyExploit(eq,ip?'bet':'bet',oppType,{bet:bet,pot:pot});
           var _oppStatStr1g='';
           try{if(OppProfiler&&OppProfiler._profiles){var _oppNk1g=OppProfiler._getOppNk?OppProfiler._getOppNk():null;if(_oppNk1g){var _fCB1g=OppProfiler.getFoldToCBetPct(_oppNk1g);var _cbf1g=OppProfiler.getCbetFlopPct(_oppNk1g);if(_fCB1g!==null||_cbf1g!==null)_oppStatStr1g=' H:'+(_fCB1g!==null?_fCB1g+'%fcb':'')+(_cbf1g!==null?'/'+_cbf1g+'%cb':'');}}}catch(e){}
+          // V2.9.220: 创建多街计划
+          try{
+            var _planEq=exploitR.eq||eq;
+            StreetPlan.createPlan(_planEq, hcKey, bTexture, spr, oppType, ip);
+          }catch(_pe){console.log('[V2.9.220] 创建多街计划失败: '+_pe.message);}
           return{a:'raise',v:cbSz,r:'GTO CBet '+btKey+'/'+hcKey+'('+Math.round(cbFreq*100)+'%) '+(cbPct<.5?'小':'大')+'尺度'+_oppStatStr1g,eq:exploitR.eq,c:eq>=55?'h':eq>=45?'m':'l',sizing:cbSz,scene:'CBet',spr:spr,sprAdvice:getSPRAdvice(spr),hClass:hClass,bTexture:bTexture,multiTableAdvice:MultiTableDetector.getAdvice(hcKey,'cbet'),exploit:exploitR.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights},_se:true,_seFreq:cbFreq};
         }else{
           // 不CBet → check
@@ -3498,6 +4084,12 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
     
     // V2.9.161: Flop未CBet时降低Turn barrel频率(G._heroDidFlopCBet由实际操作设置)
     var _didFlopCBet=G._heroDidFlopCBet!==false;
+    // V2.9.220: Turn街更新多街计划
+    try{
+      if(street==='turn' && typeof StreetPlan!=='undefined' && StreetPlan.getPlan()){
+        StreetPlan.updatePlan('turn', {handStrength:eq, oppAction:(scene==='raise'?'bet':'check')});
+      }
+    }catch(_te){console.log('[V2.9.220] Turn计划更新失败: '+_te.message);}
     if(_wasHeroPFR&&scene==='check'&&street==='turn'){
       // V2.9.162: 转牌完全枚举EV前置层 (经验频率→数学最优) - 失败fallback到_turnBarrel查表
       try{
@@ -3523,6 +4115,12 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
       }
     }
 
+    // V2.9.220: River街更新多街计划
+    try{
+      if(street==='river' && typeof StreetPlan!=='undefined' && StreetPlan.getPlan()){
+        StreetPlan.updatePlan('river', {handStrength:eq, oppAction:(scene==='raise'?'bet':'check')});
+      }
+    }catch(_re){console.log('[V2.9.220] River计划更新失败: '+_re.message);}
     // ====== V2.9.157: River完整决策 ======
     if(street==='river'){
       var rivScene=scene==='check'?'check':'face';
@@ -3689,6 +4287,18 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
     f=ea.freq;if(ea.label)console.log('[SE161] EA: '+ea.label);
     // 5) RangeEstimator
     f=RangeEstimator.adjustForRange(f,oppType,street||'flop',action);
+    // V2.9.220: Range vs Range 精确调整
+    try{
+      if(typeof RangeVsRange!=='undefined' && G._rvrAdj){var _ra=G._rvrAdj;
+        if(action==='raise'||action==='bet'||action==='cr'||context==='cbet'||context==='barrel'){
+          if(hcKey<=4)f=f*_ra.valueBetMult;  // 强牌用valueBetMult
+          else if(hcKey>=12)f=f*_ra.bluffFreqAdj; // 弱牌用bluff调整
+          else f=f*_ra.betFreqAdj; // 中等牌用betFreqAdj
+        }else if(action==='call'||context==='facing'||context==='fcb'){
+          f=f*_ra.callFreqAdj;
+        }
+      }
+    }catch(_rve2){/* 静默失败 */}
     // V2.9.190: 锦标赛ICM频率调整
     try{
       if(G.game_mode === 'tournament'){
@@ -4279,6 +4889,339 @@ freq=_applyPipeline(freq,'bet',hcKey,_oppType2||'unknown',_street2||'flop','donk
   }
 
   
+
+// ====== V2.9.220: Range vs Range 翻后分析 ======
+// 根据对手行动推断range，计算hero vs range的权益
+var RangeVsRange = {
+  
+  // 基于位置的翻前open range百分比（近似值）
+  _positionRanges:{
+    utg: {open: 12, call3b: 40, fold3b: 60},
+    utg1: {open: 15, call3b: 42, fold3b: 58},
+    mp: {open: 18, call3b: 45, fold3b: 55},
+    mp1: {open: 22, call3b: 48, fold3b: 52},
+    hj: {open: 28, call3b: 50, fold3b: 50},
+    co: {open: 35, call3b: 52, fold3b: 48},
+    btn: {open: 45, call3b: 55, fold3b: 45},
+    sb: {open: 30, call3b: 45, fold3b: 55},
+    bb: {open: 10, call3b: 60, fold3b: 40, defend: 55}
+  },
+  
+  // 估算对手range构成
+  // 返回: {topPairPlus:%, draws:%, air:%, midPairs:%, overcards:%, totalCombos:N, confidence:%}
+  estimateOppRange:function(seatNick, street, actions, board, oppType){
+    try{
+      var range = {topPairPlus:0, draws:0, air:0, midPairs:0, overcards:0, totalCombos:0, confidence:0, source:''};
+      
+      if(!street)street='flop';
+      if(!actions)actions={preflop:'call', flop:'check', turn:'check', river:'check'};
+      oppType = oppType || 'unknown';
+      
+      // 基础范围：从翻前行动确定
+      var baseRangePct = 50; // 默认50%
+      if(actions.preflop === 'raise' || actions.preflop === 'reraise'){
+        // 翻前加注者: 范围较强
+        var posKey = this._getPosKey(seatNick);
+        var posRange = this._positionRanges[posKey] || {open: 30};
+        baseRangePct = posRange.open || 30;
+        if(actions.preflop === 'reraise'){
+          // 3bet范围更紧
+          baseRangePct = baseRangePct * 0.4;
+        }
+        range.source = 'pfr_range';
+      }else if(actions.preflop === 'call'){
+        // 冷跟范围
+        baseRangePct = 40;
+        range.source = 'call_range';
+      }else if(actions.preflop === 'limp'){
+        baseRangePct = 60;
+        range.source = 'limp_range';
+      }else{
+        range.source = 'default_range';
+      }
+      
+      // 对手类型调整
+      if(oppType === 'fish' || oppType === 'calling_station' || oppType === 'maniac'){
+        baseRangePct = Math.min(90, baseRangePct * 1.5);
+      }else if(oppType === 'nit' || oppType === 'tight'){
+        baseRangePct = Math.max(8, baseRangePct * 0.7);
+      }else if(oppType === 'lag'){
+        baseRangePct = Math.min(80, baseRangePct * 1.2);
+      }
+      
+      // 翻后行动进一步缩小范围
+      var postflopAction = actions[street] || 'check';
+      
+      // 假设总组合数 = baseRangePct * 1326 / 100（粗略）
+      var totalCombos = Math.round(baseRangePct * 13.26);
+      
+      // 根据翻后行动分配range构成
+      if(postflopAction === 'bet' || postflopAction === 'raise'){
+        // 对手下注: 强牌+听牌+一些诈唬
+        if(oppType === 'nit' || oppType === 'tight'){
+          // nit下注通常是强牌
+          range.topPairPlus = 65;
+          range.draws = 15;
+          range.midPairs = 15;
+          range.air = 5;
+          range.overcards = 0;
+        }else if(oppType === 'lag' || oppType === 'maniac'){
+          // LAG下注包含很多诈唬
+          range.topPairPlus = 35;
+          range.draws = 25;
+          range.midPairs = 15;
+          range.air = 20;
+          range.overcards = 5;
+        }else if(oppType === 'fish' || oppType === 'calling_station'){
+          // 鱼下注通常是真牌
+          range.topPairPlus = 55;
+          range.draws = 20;
+          range.midPairs = 20;
+          range.air = 3;
+          range.overcards = 2;
+        }else{
+          // 默认/unknown
+          range.topPairPlus = 45;
+          range.draws = 20;
+          range.midPairs = 20;
+          range.air = 10;
+          range.overcards = 5;
+        }
+        // 下注代表比check更强的范围
+        totalCombos = Math.round(totalCombos * 0.6); // 下注频率约60%范围
+      }else if(postflopAction === 'check'){
+        // 对手check: 包含弱牌+一些强牌慢打
+        if(oppType === 'nit'){
+          range.topPairPlus = 25;
+          range.draws = 15;
+          range.midPairs = 25;
+          range.overcards = 20;
+          range.air = 15;
+        }else if(oppType === 'lag'){
+          range.topPairPlus = 30;
+          range.draws = 20;
+          range.midPairs = 20;
+          range.overcards = 15;
+          range.air = 15;
+        }else{
+          range.topPairPlus = 20;
+          range.draws = 15;
+          range.midPairs = 25;
+          range.overcards = 20;
+          range.air = 20;
+        }
+      }else if(postflopAction === 'call'){
+        // 跟注: 中等牌+听牌+一些强牌慢打
+        range.topPairPlus = 30;
+        range.draws = 30;
+        range.midPairs = 25;
+        range.overcards = 10;
+        range.air = 5;
+      }else if(postflopAction === 'fold'){
+        range.topPairPlus = 5;
+        range.draws = 15;
+        range.midPairs = 20;
+        range.overcards = 30;
+        range.air = 30;
+      }
+      
+      // 牌面质地影响: 湿面draws更多
+      if(board && board.wetness !== undefined){
+        if(board.wetness >= 3){
+          range.draws = Math.min(50, range.draws + 10);
+          range.topPairPlus = Math.max(5, range.topPairPlus - 5);
+        }else if(board.wetness <= 1){
+          range.draws = Math.max(5, range.draws - 10);
+          range.topPairPlus = Math.min(70, range.topPairPlus + 5);
+        }
+      }
+      
+      // 随著街数增加，范围越来越强（弱牌已被过滤）
+      if(street === 'turn'){
+        range.topPairPlus = Math.min(80, range.topPairPlus + 10);
+        range.air = Math.max(0, range.air - 10);
+      }else if(street === 'river'){
+        range.topPairPlus = Math.min(90, range.topPairPlus + 15);
+        range.air = Math.max(0, range.air - 15);
+      }
+      
+      range.totalCombos = totalCombos;
+      range.confidence = Math.min(100, 30 + baseRangePct * 0.5);
+      range.baseRangePct = baseRangePct;
+      
+      // 归一化（确保总和≈100%）
+      var total = range.topPairPlus + range.draws + range.midPairs + range.overcards + range.air;
+      if(total > 0){
+        range.topPairPlus = Math.round(range.topPairPlus / total * 100);
+        range.draws = Math.round(range.draws / total * 100);
+        range.midPairs = Math.round(range.midPairs / total * 100);
+        range.overcards = Math.round(range.overcards / total * 100);
+        range.air = 100 - range.topPairPlus - range.draws - range.midPairs - range.overcards;
+      }
+      
+      return range;
+    }catch(e){
+      console.log('[V2.9.220] estimateOppRange error: '+e.message);
+      return {topPairPlus:30, draws:15, midPairs:25, overcards:15, air:15, totalCombos:300, confidence:10, source:'error_fallback'};
+    }
+  },
+  
+  // 辅助：从nickname推断位置key
+  _getPosKey:function(nickname){
+    try{
+      var posMap = OppProfiler && OppProfiler._posMap ? OppProfiler._posMap : {};
+      for(var pos in posMap){
+        if(posMap[pos] === nickname) return pos;
+      }
+      if(G._raiserRole) return G._raiserRole;
+      return 'btn';
+    }catch(e){return 'btn';}
+  },
+  
+  // 计算hero手牌 vs 对手range的权益
+  // heroCards: [{rank,suit}, {rank,suit}]
+  // oppRange: estimateOppRange返回的对象
+  // board: 公共牌数组
+  // hcKey: 手牌强度key (0-15)
+  calcRangeEquity:function(heroCards, oppRange, board, hcKey, bTexture){
+    try{
+      if(!oppRange) return 50;
+      
+      var hc = hcKey !== undefined ? hcKey : 8; // 默认中等
+      var eq = 0;
+      var totalWeight = 0;
+      
+      // 各类手牌 vs hero的权益估算
+      // hero手牌强度映射到基准权益
+      // hcKey越小=牌越强
+      var heroStrengthLevel = 0;
+      if(hc <= 2) heroStrengthLevel = 5; // 坚果/葫芦/三条
+      else if(hc <= 4) heroStrengthLevel = 4; // STRONG (超对/顶对好踢)
+      else if(hc <= 6) heroStrengthLevel = 3; // MEDIUM (顶对弱踢/第二对)
+      else if(hc <= 9) heroStrengthLevel = 2; // 听牌/弱对
+      else if(hc <= 12) heroStrengthLevel = 1; // 卡顺/超牌
+      else heroStrengthLevel = 0; // AIR
+      
+      // 权益矩阵: heroStrength vs opponentCategory
+      // 行: hero (0=air, 5=nuts)
+      // 列: 对手范围类别
+      var equityMatrix = {
+        // 对手topPairPlus: hero各等级对应权益
+        topPairPlus: [5, 15, 30, 45, 60, 85],
+        // 对手draws
+        draws: [35, 45, 55, 65, 75, 90],
+        // 对手midPairs
+        midPairs: [20, 35, 50, 65, 80, 95],
+        // 对手overcards
+        overcards: [45, 55, 70, 80, 90, 98],
+        // 对手air
+        air: [60, 75, 85, 92, 97, 99]
+      };
+      
+      // 加权计算
+      var weights = {
+        topPairPlus: oppRange.topPairPlus || 0,
+        draws: oppRange.draws || 0,
+        midPairs: oppRange.midPairs || 0,
+        overcards: oppRange.overcards || 0,
+        air: oppRange.air || 0
+      };
+      
+      for(var cat in weights){
+        var w = weights[cat];
+        if(w <= 0) continue;
+        var eqArr = equityMatrix[cat];
+        if(!eqArr) continue;
+        var idx = Math.min(5, Math.max(0, heroStrengthLevel));
+        var baseEq = eqArr[idx];
+        
+        // 牌面质地调整
+        if(bTexture && bTexture.wetness !== undefined){
+          if(cat === 'draws'){
+            // 湿面听牌多，听牌vs听牌权益接近
+            baseEq = baseEq - (bTexture.wetness * 2);
+          }
+        }
+        
+        eq += baseEq * w;
+        totalWeight += w;
+      }
+      
+      if(totalWeight > 0){
+        eq = eq / totalWeight;
+      }else{
+        eq = 50;
+      }
+      
+      // 边界
+      eq = Math.max(1, Math.min(99, Math.round(eq)));
+      
+      return eq;
+    }catch(e){
+      console.log('[V2.9.220] calcRangeEquity error: '+e.message);
+      return 50;
+    }
+  },
+  
+  // 根据range权益给出调整建议
+  // 返回: {betFreqAdj, bluffFreqAdj, callFreqAdj, valueBetMult, foldEquityMult, rangeEq}
+  rangeVsRangeAdjustments:function(rangeEq, oppType){
+    try{
+      var adj = {betFreqAdj:1, bluffFreqAdj:1, callFreqAdj:1, valueBetMult:1, foldEquityMult:1, rangeEq:rangeEq||50};
+      
+      if(rangeEq >= 70){
+        // 范围权益高: 增加下注频率和价值下注尺度
+        adj.betFreqAdj = 1.2;
+        adj.valueBetMult = 1.15;
+        adj.callFreqAdj = 1.2;
+        adj.foldEquityMult = 0.9; // 我们范围强，不用太依赖fold equity
+      }else if(rangeEq >= 55){
+        adj.betFreqAdj = 1.05;
+        adj.valueBetMult = 1.05;
+        adj.callFreqAdj = 1.05;
+      }else if(rangeEq >= 40){
+        // 范围均势
+        adj.betFreqAdj = 1.0;
+        adj.valueBetMult = 1.0;
+        adj.callFreqAdj = 1.0;
+      }else if(rangeEq >= 25){
+        // 范围权益低
+        adj.betFreqAdj = 0.85;
+        adj.bluffFreqAdj = 0.7;
+        adj.callFreqAdj = 0.8;
+        adj.valueBetMult = 0.9;
+        adj.foldEquityMult = 1.2; // 对手范围强，fold equity差
+      }else{
+        // 范围权益很低
+        adj.betFreqAdj = 0.7;
+        adj.bluffFreqAdj = 0.5;
+        adj.callFreqAdj = 0.6;
+        adj.valueBetMult = 0.8;
+        adj.foldEquityMult = 1.4;
+      }
+      
+      return adj;
+    }catch(e){
+      console.log('[V2.9.220] rangeVsRangeAdjustments error: '+e.message);
+      return {betFreqAdj:1, bluffFreqAdj:1, callFreqAdj:1, valueBetMult:1, foldEquityMult:1, rangeEq:50};
+    }
+  },
+  
+  // 快速接口：在decidePostflop中直接调用，一站式计算并返回调整
+  getQuickAdjustments:function(seatNick, street, actions, board, hcKey, bTexture, heroCards, oppType){
+    try{
+      var range = this.estimateOppRange(seatNick, street, actions, bTexture, oppType);
+      var eq = this.calcRangeEquity(heroCards, range, board, hcKey, bTexture);
+      var adj = this.rangeVsRangeAdjustments(eq, oppType);
+      adj.rangeBreakdown = range;
+      return adj;
+    }catch(e){
+      console.log('[V2.9.220] getQuickAdjustments error: '+e.message);
+      return {betFreqAdj:1, bluffFreqAdj:1, callFreqAdj:1, valueBetMult:1, foldEquityMult:1, rangeEq:50, rangeBreakdown:null};
+    }
+  }
+};
+
   // ====== V2.9.161: RangeEstimator 对手范围推断 ======
   var RangeEstimator={
     // 从OppProfiler统计推断范围宽度
@@ -12507,7 +13450,34 @@ function autoExecuteDecision(r, isAutoMode) {
         reason: exec.reason || '',
         hClass: r.hClass ? r.hClass.name : 'UNKNOWN',
         auto: true,
-        execResult: execResult
+        execResult: execResult,
+        // V2.9.220: 对手统计摘要
+        oppStats: (function(){
+          try{
+            if(typeof OppProfiler!=='undefined' && OppProfiler.getStatsSummary){
+              return OppProfiler.getStatsSummary();
+            }
+            return '';
+          }catch(_oe){return 'err:'+_oe.message;}
+        })(),
+        // V2.9.220: 多街计划状态
+        streetPlan: (function(){
+          try{
+            if(typeof StreetPlan!=='undefined'){
+              var _sp=StreetPlan.getPlan();
+              if(_sp)return _sp.strength+'/'+_sp.texture+' t='+(_sp.turn?_sp.turn.action:'?')+' r='+(_sp.river?_sp.river.action:'?');
+            }
+            return 'no_plan';
+          }catch(_spe){return 'err';}
+        })(),
+        // V2.9.220: Range vs Range分析结果
+        rvrInfo: (function(){
+          try{
+            var _ra=G._rvrAdj;
+            if(_ra)return 'eq'+_ra.rangeEq+'% betAdj'+_ra.betFreqAdj.toFixed(2);
+            return 'no_rvr';
+          }catch(_rvre){return 'err';}
+        })()
       });
     } catch(e) { console.log('[AutoExec] buildDecisionLog err: ' + e.message); return '{}'; }
   }

@@ -59,7 +59,8 @@ object DiagnosticLogger {
         val reason: String,          // 决策理由
         val hClass: String,          // 手牌分类 NUTS/STRONG/TOP_PAIR/...
         val isAuto: Boolean,         // 是否自动执行
-        val autoExecResult: String   // 自动执行结果 success/fail/skip
+        val autoExecResult: String,  // 自动执行结果 success/fail/skip
+        val oppStats: String = ""   // V2.9.220: 对手统计摘要
     )
     
     // ===== 错误日志条目 V2.9.215 =====
@@ -159,7 +160,8 @@ object DiagnosticLogger {
         reason: String,
         hClass: String,
         isAuto: Boolean,
-        autoExecResult: String
+        autoExecResult: String,
+        oppStats: String = ""
     ) {
         val now = System.currentTimeMillis()
         val timeStr = timeFormat.format(Date(now))
@@ -183,7 +185,8 @@ object DiagnosticLogger {
             reason = reason,
             hClass = hClass,
             isAuto = isAuto,
-            autoExecResult = autoExecResult
+            autoExecResult = autoExecResult,
+            oppStats = oppStats
         )
         
         synchronized(decisionLogs) {
@@ -733,6 +736,7 @@ object DiagnosticLogger {
             put("hClass", log.hClass)
             put("auto", log.isAuto)
             put("execResult", log.autoExecResult)
+            put("oppStats", log.oppStats)
         }
     }
     
