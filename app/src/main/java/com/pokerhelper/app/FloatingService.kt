@@ -1154,6 +1154,15 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             }
         }
 
+        // V2.9.300: HUD对手记忆系统初始化 — 本地持久化 + Gitee云同步
+        try {
+            val giteeToken = prefs?.getString("gitee_hud_token", null)
+            HudLearner.init(this, giteeToken)
+            Log.d(TAG, "★ HudLearner初始化完成: ${if (giteeToken != null) "云端模式" else "本地模式"}")
+        } catch (e: Exception) {
+            Log.e(TAG, "HudLearner初始化失败: ${e.message}", e)
+        }
+
         // ★ 关键：addJavascriptInterface必须在loadUrl之前注册 ★
         wv.addJavascriptInterface(object : Any() {
             @JavascriptInterface
@@ -1338,14 +1347,68 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     Log.e(TAG, "logDecision error: ${e.message}", e)
                 }
             }
-            // V2.9.220: 接收JS端对手统计数据
+            // V2.9.300: 接收JS端对手统计数据并持久化到HudLearner
             @JavascriptInterface
             fun opponentStats(jsonData: String) {
                 try {
-                    // 接收对手统计信息，可用于UI展示或分析
-                    Log.d(TAG, "👤 对手统计: $jsonData")
+                    val data = org.json.JSONObject(jsonData)
+                    val level = data.optString("level", "micro_nl2")
+                    val statsMap = mutableMapOf<String, Float>()
+                    val keys = arrayOf("vpip", "pfr", "threeBet", "foldTo3Bet",
+                        "cbetFlop", "cbetTurn", "foldToCBetFlop", "foldToCBetTurn",
+                        "callRiver", "checkRaiseFlop", "handsObserved")
+                    for (k in keys) {
+                        if (data.has(k)) {
+                            statsMap[k] = (data.optDouble(k, -1.0)).toFloat()
+                        }
+                    }
+                    HudLearner.recordHand(statsMap, level)
+                    Log.d(TAG, "👤 对手统计已记录: level=$level vpip=${statsMap["vpip"]} hands=${statsMap["handsObserved"]}")
                 } catch (e: Exception) {
                     Log.e(TAG, "opponentStats error: ${e.message}", e)
+                }
+            }
+            // V2.9.300: 获取HudLearner中已学习的对手画像
+            @JavascriptInterface
+            fun getLearnedProfile(level: String): String {
+                return try {
+                    val profile = HudLearner.getOpponentProfile(level)
+                    val json = org.json.JSONObject()
+                    json.put("vpip", profile.vpip.toDouble())
+                    json.put("pfr", profile.pfr.toDouble())
+                    json.put("threeBet", profile.threeBet.toDouble())
+                    json.put("foldTo3Bet", profile.foldTo3Bet.toDouble())
+                    json.put("cbetFlop", profile.cbetFlop.toDouble())
+                    json.put("cbetTurn", profile.cbetTurn.toDouble())
+                    json.put("foldToCBetFlop", profile.foldToCBetFlop.toDouble())
+                    json.put("foldToCBetTurn", profile.foldToCBetTurn.toDouble())
+                    json.put("callRiver", profile.callRiver.toDouble())
+                    json.put("checkRaiseFlop", profile.checkRaiseFlop.toDouble())
+                    json.put("confidence", profile.confidence.toDouble())
+                    json.put("totalHandsObserved", profile.totalHandsObserved)
+                    json.put("type", profile.type)
+                    json.toString()
+                } catch (e: Exception) {
+                    Log.e(TAG, "getLearnedProfile error: ${e.message}", e)
+                    "{}"
+                }
+            }
+            // V2.9.300: 获取当前级别已学习的手数
+            @JavascriptInterface
+            fun getLearnedHandCount(level: String): Int {
+                return try {
+                    HudLearner.getHandCount(level)
+                } catch (e: Exception) {
+                    0
+                }
+            }
+            // V2.9.300: 手动触发HUD云同步
+            @JavascriptInterface
+            fun syncHudData() {
+                try {
+                    HudLearner.sync()
+                } catch (e: Exception) {
+                    Log.e(TAG, "syncHudData error: ${e.message}", e)
                 }
             }
             // V2.9.70: JS可获取Kotlin端错误日志，导出时一并带走

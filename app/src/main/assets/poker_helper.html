@@ -2252,6 +2252,8 @@ var OppProfiler={
         }
       }
       if(count>0)console.log('[OppProfiler持久化] 加载'+count+'个对手画像(跳过'+(Object.keys(loaded).length-count)+'个过期)');
+      // ★ V2.9.300: 从HudLearner云存储加载已学习的画像
+      try{OppProfiler._loadFromHudLearner();}catch(_hlE){console.log('[HudLearner] 加载失败: '+_hlE.message);}
     }catch(e){console.log('[OppProfiler持久化] 加载失败: '+e.message);}
   },
   // V2.9.142: 定期保存（在update中调用）
@@ -2534,8 +2536,10 @@ var OppProfiler={
       p._pfEnteredThisHand=false;
       p._lastPfBet=0;
     }
+    // ★ V2.9.300: 每新手牌时，把上一手的对手统计同步到HudLearner云存储
+    try{OppProfiler._recordHandToHudLearner();}catch(_hudE){console.log('[HudLearner] 记录失败: '+_hudE.message);}
   },
-  
+
   _updateTypes:function(){
     for(var nk in this._profiles){
       var p=this._profiles[nk];
@@ -2884,6 +2888,62 @@ var PostValidation={
   validatePotChips:function(p,s,t,b,cc){var r=[];var n=cc?cc.filter(function(x){return x!==null;}).length:0;if(p>0&&p<1.5&&b>0)r.push('pot<1.5BB');if(t>0&&p>0&&t>p*2)r.push('to_call>2xpot');if(p===0&&n>=3)r.push('翻后pot=0');return r;},
   applyHudData:function(hud){if(!hud||!hud.length)return;for(var i=0;i<hud.length;i++){var h=hud[i];if(!h.seat||(!h.vpip&&!h.pfr))continue;if(!G._hudData)G._hudData={};G._hudData[h.seat]={vpip:h.vpip||0,pfr:h.pfr||0,ats:h.ats||0,threeBet:h.threeBet||0,_ts:Date.now()};var t='unknown',v=h.vpip||0;if(v<=22)t='nit';else if(v<=30)t='tag';else if(v<=40)t='lag';else t='fish';if(typeof OppProfiler!=='undefined'){var p=seatToPosStr(h.seat);for(var nk in OppProfiler._profiles){if(OppProfiler._profiles[nk].pos===p&&v>0){OppProfiler._profiles[nk]._hudVpip=v;OppProfiler._profiles[nk]._hudPfr=h.pfr||0;if(OppProfiler._profiles[nk].hands<50)OppProfiler._profiles[nk].type=t;break;}}}console.log('[SmartHUD]s'+h.seat+' v='+v+'→'+t);}},
   runAll:function(d){var r=[];if(d.hole_cards&&d.community_cards){r=r.concat(this.dedupCards(d.hole_cards,d.community_cards));r=r.concat(this.validateSuits(d.hole_cards,d.community_cards));}if(d.pot_size!==undefined){var b=G._lockedBB||200;r=r.concat(this.validatePotChips(b>0?Math.round((parseInt(d.pot_size)||0)/b):0,0,b>0?Math.round((parseInt(d.to_call)||0)/b):0,b,d.community_cards));}if(d.opp_hud)this.applyHudData(d.opp_hud);return r;}
+,
+
+  // ★ V2.9.300: HudLearner云同步 — 每手牌结束时把对手统计推送到Kotlin持久化
+  _recordHandToHudLearner:function(){
+    try{
+      if(typeof AndroidBridge==='undefined'||!AndroidBridge.opponentStats)return;
+      var lvl=G.ggLevel||'micro_nl2';
+      var stats={level:lvl, handsObserved:0, vpip:-1, pfr:-1, threeBet:-1, foldTo3Bet:-1,
+        cbetFlop:-1, cbetTurn:-1, foldToCBetFlop:-1, foldToCBetTurn:-1, callRiver:-1, checkRaiseFlop:-1};
+      var count=0;
+      for(var nk in this._profiles){
+        var p=this._profiles[nk];
+        if(!p||p.hands<3)continue;
+        count++;
+        stats.handsObserved=Math.max(stats.handsObserved,p.hands);
+        var v=this.getVPIP(nk);
+        if(v>=0)stats.vpip=stats.vpip<0?v/100:(stats.vpip+v/100)/2;
+        var pf=this.getPFR(nk);
+        if(pf>=0)stats.pfr=stats.pfr<0?pf/100:(stats.pfr+pf/100)/2;
+        var f3b=this.getFoldTo3betPct(nk);
+        if(f3b!==null&&f3b>=0)stats.foldTo3Bet=stats.foldTo3Bet<0?f3b/100:(stats.foldTo3Bet+f3b/100)/2;
+        var cbf=this.getCbetFlopPct(nk);
+        if(cbf!==null&&cbf>=0)stats.cbetFlop=stats.cbetFlop<0?cbf/100:(stats.cbetFlop+cbf/100)/2;
+        var cbt=this.getCbetTurnPct(nk);
+        if(cbt!==null&&cbt>=0)stats.cbetTurn=stats.cbetTurn<0?cbt/100:(stats.cbetTurn+cbt/100)/2;
+        var fcbf=this.getFoldToCBetPct(nk);
+        if(fcbf!==null&&fcbf>=0)stats.foldToCBetFlop=stats.foldToCBetFlop<0?fcbf/100:(stats.foldToCBetFlop+fcbf/100)/2;
+        var fcbt=this.getFoldToTurnCBetPct(nk);
+        if(fcbt!==null&&fcbt>=0)stats.foldToCBetTurn=stats.foldToCBetTurn<0?fcbt/100:(stats.foldToCBetTurn+fcbt/100)/2;
+      }
+      if(count>0){
+        stats.handsObserved=Math.min(stats.handsObserved,500);
+        AndroidBridge.opponentStats(JSON.stringify(stats));
+      }
+    }catch(e){console.log('[V2.9.300] _recordHandToHudLearner异常: '+e.message);}
+  },
+
+  // ★ V2.9.300: 从HudLearner拉取已学习的对手画像
+  _loadFromHudLearner:function(){
+    try{
+      if(typeof AndroidBridge==='undefined'||!AndroidBridge.getLearnedProfile)return;
+      var lvl=G.ggLevel||'micro_nl2';
+      var profileJson=AndroidBridge.getLearnedProfile(lvl);
+      if(!profileJson||profileJson==='{}')return;
+      var p=JSON.parse(profileJson);
+      if(!p||!p.confidence||p.confidence<0.3)return;
+      this._hudLearned=p;
+      this._hudLearnedLevel=lvl;
+      console.log('[V2.9.300] HudLearned画像已加载: hands='+p.totalHandsObserved+' conf='+p.confidence+' type='+p.type);
+    }catch(e){console.log('[V2.9.300] _loadFromHudLearner异常: '+e.message);}
+  },
+
+  // ★ V2.9.300: 获取HudLearned画像（用于剥削调整）
+  getHudLearnedProfile:function(){
+    try{return this._hudLearned||null;}catch(e){return null;}
+  }
 };
 
 // ===== V2.9 HUD: HUDManager =====
@@ -3505,6 +3565,54 @@ var HandStateMachine=(function(){
   // River诈唬比: {pot倍数: 诈唬频率}
   var _RIV_BLUFF={.25:.2,.33:.25,.5:.33,.66:.4,.75:.43,1:.5,1.5:.6,"2":.67};
 
+  // ★ V2.9.300: GG扑克各级别人群基准 (GTO基线 + 标准差)
+  var _GG_LEVEL_BASELINE={
+    micro_nl2:{   // NL2-NL5
+      vpip:36, pfr:18, threeBet:6, foldTo3Bet:35, cbetFlop:40, cbetTurn:32,
+      foldToCBetFlop:55, foldToCBetTurn:50, callRiver:65, checkRaiseFlop:6,
+      sd:{vpip:10,pfr:7,threeBet:3,foldTo3Bet:15,cbetFlop:12,cbetTurn:10,foldToCBetFlop:15,foldToCBetTurn:15,callRiver:18,checkRaiseFlop:4}
+    },
+    low_nl10:{    // NL10-NL25
+      vpip:30, pfr:22, threeBet:8, foldTo3Bet:45, cbetFlop:48, cbetTurn:38,
+      foldToCBetFlop:50, foldToCBetTurn:48, callRiver:55, checkRaiseFlop:8,
+      sd:{vpip:9,pfr:7,threeBet:4,foldTo3Bet:13,cbetFlop:11,cbetTurn:10,foldToCBetFlop:14,foldToCBetTurn:14,callRiver:16,checkRaiseFlop:5}
+    },
+    mid_nl50:{   // NL50-NL100
+      vpip:26, pfr:22, threeBet:9, foldTo3Bet:52, cbetFlop:52, cbetTurn:40,
+      foldToCBetFlop:48, foldToCBetTurn:46, callRiver:48, checkRaiseFlop:10,
+      sd:{vpip:8,pfr:6,threeBet:4,foldTo3Bet:12,cbetFlop:10,cbetTurn:11,foldToCBetFlop:13,foldToCBetTurn:14,callRiver:14,checkRaiseFlop:5}
+    }
+  };
+
+  // ★ V2.9.300: Turn防御表 — OOP面对CBet后的继续范围
+  // 键: 纹理key, 值: {手牌类:[fold%, call%, raise%]}
+  var _TURN_DEFENSE={
+    '0':{0:[.0,.5,.5],1:[.1,.5,.4],3:[.2,.5,.3],4:[.3,.5,.2],6:[.5,.4,.1],8:[.3,.3,.4],9:[.4,.4,.2],13:[.7,.2,.1],14:[.8,.15,.05],15:[.85,.1,.05]},
+    '2':{0:[.0,.3,.7],1:[.1,.3,.6],2:[.15,.35,.5],3:[.3,.4,.3],4:[.4,.4,.2],8:[.2,.3,.5],9:[.35,.4,.25],11:[.15,.25,.6],13:[.6,.3,.1],14:[.75,.2,.05],15:[.8,.15,.05]},
+    '3':{0:[.0,.4,.6],1:[.2,.4,.4],2:[.25,.4,.35],3:[.4,.4,.2],11:[.2,.3,.5],9:[.4,.4,.2],13:[.7,.25,.05],15:[.85,.1,.05]},
+    '4':{0:[.0,.3,.7],1:[.15,.35,.5],4:[.4,.4,.2],8:[.15,.25,.6],9:[.3,.4,.3],11:[.1,.2,.7],13:[.6,.3,.1],15:[.8,.15,.05]},
+    '5':{0:[.0,.6,.4],1:[.1,.55,.35],3:[.25,.5,.25],4:[.4,.45,.15],9:[.5,.4,.1],13:[.65,.3,.05],15:[.8,.15,.05]}
+  };
+
+  // ★ V2.9.300: Turn Double Barrel 表
+  var _DB_TURN={
+    '0':{0:[.8],1:[.7],3:[.6],4:[.5],8:[.6],9:[.4],15:[.15]},
+    '2':{0:[.7],1:[.55],8:[.6],9:[.35],11:[.5],15:[.08]},
+    '3':{0:[.6],1:[.4],11:[.35],15:[.03]},
+    '4':{0:[.7],1:[.5],8:[.6],9:[.35],15:[.05]},
+    '5':{0:[.8],1:[.7],3:[.6],4:[.5],9:[.35],15:[.15]}
+  };
+
+  // ★ V2.9.300: River价值下注表 [频率, 尺寸倍数(×pot)]
+  var _RIV_VALUE={
+    '0':{0:[.95,.8],1:[.9,.75],2:[.85,.7],3:[.7,.6],4:[.65,.55],6:[.4,.4],9:[.3,.45],13:[.1,.33],15:[.05,.33]},
+    '2':{0:[.9,.85],1:[.85,.8],2:[.8,.75],3:[.65,.65],4:[.55,.6],8:[.7,.7],9:[.45,.55],11:[.65,.65],13:[.15,.4],15:[.05,.33]},
+    '3':{0:[.85,.9],1:[.8,.85],2:[.75,.8],3:[.55,.7],4:[.5,.65],11:[.6,.7],9:[.4,.6],13:[.1,.45],15:[.03,.33]},
+    '4':{0:[.9,.85],1:[.85,.8],4:[.6,.65],8:[.75,.7],9:[.45,.6],11:[.7,.7],13:[.15,.45],15:[.05,.33]},
+    '5':{0:[.9,.7],1:[.85,.65],3:[.7,.6],4:[.6,.55],9:[.4,.5],13:[.15,.4],15:[.05,.33]}
+  };
+
+
   // ====== 第三部分: 核心引擎 ======
 
   // 5-max位置映射: G.pos → RFI/3B表的位置key
@@ -3513,8 +3621,99 @@ var HandStateMachine=(function(){
     return m[p]||'BTN';
   }
 
+  // ★ V2.9.300: 根据级别选GTO基线
+  var _GTO_MICRO={vpip:.36,pfr:.18,threeBet:.06,foldTo3Bet:.35,cbetFlop:.40,cbetTurn:.32,foldToCBetFlop:.55,foldToCBetTurn:.50,callRiver:.65,checkRaiseFlop:.06};
+  var _GTO_SD_M  ={vpip:.10,pfr:.07,threeBet:.03,foldTo3Bet:.15,cbetFlop:.12,cbetTurn:.10,foldToCBetFlop:.15,foldToCBetTurn:.15,callRiver:.18,checkRaiseFlop:.04};
+  var _GTO={vpip:.28,pfr:.22,threeBet:.09,foldTo3Bet:.5,cbetFlop:.55,cbetTurn:.42,foldToCBetFlop:.47,foldToCBetTurn:.45,callRiver:.5,checkRaiseFlop:.1};
+  var _GTO_SD={vpip:.08,pfr:.06,threeBet:.04,foldTo3Bet:.12,cbetFlop:.1,cbetTurn:.12,foldToCBetFlop:.12,foldToCBetTurn:.15,callRiver:.15,checkRaiseFlop:.06};
+
+  function _getBaseline(){
+    try{
+      var lvl = G.ggLevel || 'micro_nl2';
+      var bl = _GG_LEVEL_BASELINE[lvl];
+      if(!bl) return {gto:_GTO, sd:_GTO_SD};
+      var gto={}, sd={};
+      for(var k in bl){
+        if(k==='sd') continue;
+        gto[k] = (bl[k]||0) / 100;
+      }
+      for(var k2 in bl.sd||{}){
+        sd[k2] = (bl.sd[k2]||5) / 100;
+      }
+      return {gto:gto, sd:sd};
+    }catch(e){return {gto:_GTO, sd:_GTO_SD};}
+  }
+
+  function _oppDev(stat,actual,gto,sd){
+    try{
+      if(actual<0||!sd||sd===0)return 0;
+      return(actual-gto)/sd;
+    }catch(e){return 0;}
+  }
+
+  // ★ V2.9.300: 定量剥削调整 — 基于对手统计偏离GTO的标准差
+  function _quantExploitAdjust(freq, act, oppProfile, boardTexture){
+    try{
+      var adj={freq:freq, sizingMult:1.0, note:''};
+      if(!oppProfile||oppProfile.confidence<0.15) return adj;
+      var bl = _getBaseline();
+      var gto=bl.gto, sd=bl.sd;
+
+      var vpipDev = _oppDev('vpip', oppProfile.vpip, gto.vpip, sd.vpip);
+      if(vpipDev>2 && act==='raise'){
+        adj.freq = Math.max(0.1, freq*(1-vpipDev*0.1));
+        adj.sizingMult = 1.0 + Math.min(vpipDev*0.05, 0.3);
+        adj.note = 'vpip'+(oppProfile.vpip*100).toFixed(0)+'%→价值下注加大';
+      }
+
+      var pfrRatio = oppProfile.vpip>0 ? oppProfile.pfr/oppProfile.vpip : 0.5;
+      if(pfrRatio>0.75 && act==='raise'){
+        adj.freq = Math.min(0.95, freq*1.15);
+        adj.sizingMult = 0.85;
+        adj.note = 'vs激进(VPIP/PFR'+(oppProfile.vpip*100).toFixed(0)+'/'+(oppProfile.pfr*100).toFixed(0)+')→小尺寸';
+      }
+
+      var ftCBDev = _oppDev('foldToCBetFlop', oppProfile.foldToCBetFlop, gto.foldToCBetFlop, sd.foldToCBetFlop);
+      if(ftCBDev>1 && act==='raise'){
+        adj.freq = Math.min(0.95, freq*1.2);
+        adj.sizingMult = Math.max(0.45, adj.sizingMult*0.7);
+        adj.note = 'f2CB'+(oppProfile.foldToCBetFlop*100).toFixed(0)+'%→高频小尺寸';
+      }
+
+      return adj;
+    }catch(e){return {freq:freq, sizingMult:1.0, note:''};}
+  }
+
+  // ★ V2.9.300: SPR尺寸调整
+  function _sprSizingAdjust(spr, baseSizing, scene){
+    try{
+      if(spr<2) return Math.min(baseSizing, spr*0.6);
+      if(spr<5) return Math.min(baseSizing, spr*0.35);
+      if(spr>12) return baseSizing*1.2;
+      return baseSizing;
+    }catch(e){return baseSizing;}
+  }
+
+  // ★ V2.9.300: 多尺度sizing选择 — 基于牌面纹理选dry/wet/paired尺寸
+  function _pickSizing(sizingObj, bTexture, spr){
+    try{
+      var pct;
+      if(typeof sizingObj==='object' && sizingObj.d!==undefined){
+        var cat=bTexture.category||'dry';
+        var wet=bTexture.wetness||0;
+        if(cat==='paired'||cat==='static') pct=sizingObj.p;
+        else if(wet>=2) pct=sizingObj.w;
+        else pct=sizingObj.d;
+      } else {
+        pct = sizingObj;
+      }
+      return _sprSizingAdjust(spr, pct, 'cbet');
+    }catch(e){return _sprSizingAdjust(spr||10, 0.5, 'cbet');}
+  }
+
   // 纹理分类 → 数字key
   function _bt2key(bt){
+
     if(!bt||bt.category==='preflop')return '0';
     var w=bt.wetness||0;
     var c=bt.category||'dry';
@@ -3922,6 +4121,94 @@ var HandStateMachine=(function(){
       }
       return _fold(exploitAllin.eq,'SE vs allin eq'+Math.round(exploitAllin.eq)+'%<'+callThresh+'%',spr);
     }
+
+    // ★ V2.9.300: River价值下注 (PFR, check场景)
+    try{
+      if(street==='river' && didPFR && scene==='check'){
+        var rvBtKey=_bt2key(bTexture);
+        var rvHcKey=_hc2key(hClass);
+        var rvTbl=_RIV_VALUE[rvBtKey];
+        if(rvTbl&&rvTbl[rvHcKey]){
+          var rv=rvTbl[rvHcKey];
+          var rvFreq=rv[0], rvMult=rv[1];
+          var rvAdj=_quantExploitAdjust(rvFreq,'raise',profile,bTexture);
+          rvFreq=rvAdj.freq>rvFreq?rvAdj.freq:rvFreq;
+          if(Math.random()<rvFreq){
+            var rvSz=Math.round(pot*rvMult);
+            rvSz=_sprSizingAdjust(spr,Math.min(rvSz,stk),'river_value');
+            var exploitRV=applyExploit(eq,'raise',oppType,{bet:0,pot:pot});
+            return{a:'raise',v:rvSz,r:'GTO River价值('+Math.round(rvFreq*100)+'%) '+(rvMult*100).toFixed(0)+'%pot',
+              eq:exploitRV.eq,c:'h',sizing:rvSz,scene:'River价值',spr:spr,sprAdvice:getSPRAdvice(spr),
+              hClass:hClass,bTexture:bTexture,exploit:rvAdj.note||exploitRV.exploit,
+              drta:{type:profile.type,conf:profile.confidence,weights:weights},_se:true,_seFreq:rvFreq};
+          }else{
+            var exploitRC=applyExploit(eq,'check',oppType,{bet:0,pot:pot});
+            return{a:'check',r:'GTO River check('+Math.round((1-rvFreq)*100)+'%)',eq:exploitRC.eq,c:'m',
+              scene:'River check',spr:spr,sprAdvice:getSPRAdvice(spr),hClass:hClass,bTexture:bTexture,
+              exploit:exploitRC.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights},_se:true};
+          }
+        }
+      }
+    }catch(_rvE){console.log('[V2.9.300] River价值决策异常: '+_rvE.message);}
+
+    // ★ V2.9.300: Turn Double Barrel (IP, PFR+FlopCBet, check场景)
+    try{
+      if(street==='turn' && ip && scene==='check' && didPFR){
+        var dbBtKey=_bt2key(bTexture);
+        var dbHcKey=_hc2key(hClass);
+        var dbTbl=_DB_TURN[dbBtKey];
+        if(dbTbl&&dbTbl[dbHcKey]){
+          var dbFreq=dbTbl[dbHcKey][0];
+          var dbAdj=_quantExploitAdjust(dbFreq,'raise',profile,bTexture);
+          dbFreq=dbAdj.freq>dbFreq?dbAdj.freq:dbFreq;
+          if(Math.random()<dbFreq){
+            var dbPct = bTexture.wetness>=2?0.70:(bTexture.category==='paired'?0.50:bTexture.hasMonotone?0.65:0.55);
+            dbPct*=dbAdj.sizingMult;
+            var dbSz=Math.round(pot*dbPct);
+            dbSz=_sprSizingAdjust(spr,Math.min(dbSz,stk),'double_barrel');
+            var exploitDB=applyExploit(eq,'raise',oppType,{bet:0,pot:pot});
+            return{a:'raise',v:dbSz,r:'GTO DB Turn('+Math.round(dbFreq*100)+'%) '+(dbPct*100).toFixed(0)+'%',
+              eq:exploitDB.eq,c:eq>=50?'h':'m',sizing:dbSz,scene:'DB Turn',spr:spr,sprAdvice:getSPRAdvice(spr),
+              hClass:hClass,bTexture:bTexture,exploit:dbAdj.note||exploitDB.exploit,
+              drta:{type:profile.type,conf:profile.confidence,weights:weights},_se:true,_seFreq:dbFreq};
+          }
+        }
+      }
+    }catch(_dbE){console.log('[V2.9.300] Turn DB决策异常: '+_dbE.message);}
+
+    // ★ V2.9.300: Turn防御 (OOP, 面对CBet, 非PFR)
+    try{
+      if(street==='turn' && !ip && scene==='raise' && !didPFR){
+        var tdBtKey=_bt2key(bTexture);
+        var tdHcKey=_hc2key(hClass);
+        var tdTbl=_TURN_DEFENSE[tdBtKey];
+        if(tdTbl&&tdTbl[tdHcKey]){
+          var td=tdTbl[tdHcKey];
+          var foldP=td[0], callP=td[1], raiseP=td[2];
+          if(OppProfiler&&OppProfiler.getStat){
+            var cbT=OppProfiler.getStat('cbetTurn');
+            if(cbT>.5){raiseP=Math.min(raiseP*1.3,0.8);foldP=foldP*0.7;}
+          }
+          var randTD=Math.random();
+          if(randTD<raiseP){
+            var raiseSz=Math.round(bet*2.8);
+            raiseSz=_sprSizingAdjust(spr,Math.min(raiseSz,stk),'turn_raise');
+            var exploitTDR=applyExploit(eq,'raise',oppType,{bet:bet,pot:pot});
+            return{a:'raise',v:raiseSz,r:'GTO Turn反加('+Math.round(raiseP*100)+'%)',
+              eq:exploitTDR.eq,c:eq>=50?'h':'m',sizing:raiseSz,scene:'Turn反加',spr:spr,sprAdvice:getSPRAdvice(spr),
+              hClass:hClass,bTexture:bTexture,exploit:exploitTDR.exploit,
+              drta:{type:profile.type,conf:profile.confidence,weights:weights},_se:true,_seFreq:raiseP};
+          }else if(randTD<raiseP+callP){
+            var exploitTDC=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+            return{a:'call',r:'GTO Turn跟注('+Math.round(callP*100)+'%)',eq:exploitTDC.eq,c:'m',
+              scene:'Turn跟注',spr:spr,sprAdvice:getSPRAdvice(spr),hClass:hClass,bTexture:bTexture,
+              exploit:exploitTDC.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights},_se:true,_seFreq:callP};
+          }else{
+            return _fold(eq,'GTO Turn弃牌('+Math.round(foldP*100)+'%)',spr);
+          }
+        }
+      }
+    }catch(_tdE){console.log('[V2.9.300] Turn防御决策异常: '+_tdE.message);}
 
     var _wasHeroPFR=didPFR||G._heroDidPFR;
     // ====== CBet场景: PFR, 面对check ======
@@ -5440,7 +5727,7 @@ var RangeVsRange = {
 
 
     isEnabled:function(){return G._seEnabled!==false&&G.tt<=5;},
-    getVersion:function(){return'2.9.164'},
+    getVersion:function(){return'2.9.300'},
     getRFI:function(pos){return _RFI[pos]||null;},
     get3B:function(vs,from){return _3B[vs]?_3B[vs][from]:null;},
     getF3B:function(pos){return _F3B[pos]||null;},
@@ -5459,7 +5746,16 @@ var RangeVsRange = {
     resetSession:function(){if(SessionTracker)SessionTracker.reset();},
     getRangeEstimate:function(oppType,street){return RangeEstimator?RangeEstimator.getWidth(oppType,street):'medium';},
     isMultiTable:function(){return MultiTableDetector?MultiTableDetector.isMultiTable():false;},
-    getRivTable:function(){return _RIV;}
+    getRivTable:function(){return _RIV;},
+    // V2.9.300: 设置GG扑克级别，用于基线选择
+    setGGLevel:function(lvl){try{G.ggLevel=lvl;}catch(e){}},
+    getGGLevel:function(){try{return G.ggLevel||'micro_nl2';}catch(e){return 'micro_nl2';}},
+    // V2.9.300: 获取Turn防御表
+    getTurnDefense:function(bt){return _TURN_DEFENSE[bt]||null;},
+    // V2.9.300: 获取Turn Double Barrel表
+    getDBTurn:function(bt){return _DB_TURN[bt]||null;},
+    // V2.9.300: 获取River价值表
+    getRivValue:function(bt){return _RIV_VALUE[bt]||null;}
   };
   })();
 
