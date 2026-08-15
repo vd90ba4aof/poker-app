@@ -947,7 +947,7 @@ class FloatingService : Service() {
             }
             // 2. 逐个点击数字键
             val digits = amount.toString()
-            Log.d(TAG, "executeExactBet step2: 输入数字 "$digits" (${digits.length}位)")
+            Log.d(TAG, "executeExactBet step2: 输入数字 ${digits} (${digits.length}位)")
             for ((idx, ch) in digits.withIndex()) {
                 val key = numpad[ch.toString()] ?: continue
                 val kx = (key[0] * sx).toInt()

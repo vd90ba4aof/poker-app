@@ -535,7 +535,7 @@ object DiagnosticLogger {
         synchronized(decisionLogs) {
             var currentHand: JSONObject? = null
             var lastCards = ""
-            val actions = JSONArray()
+            var actions = JSONArray()
             
             for (log in decisionLogs) {
                 // 新牌局判断
