@@ -1020,6 +1020,15 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
         }.toString()
     }
 
+    // V3.10: 弃牌/新一手重置所有锁定状态（供FloatingService调用）
+    fun resetLocks() {
+        holeCardsLocked = null
+        holeCardsRankLocked = null
+        streetLocked = null
+        dButtonLocked = ""
+        suitUncertain = false
+    }
+
     // V2.9.320: 固定硅基流动，不再支持多供应商切换
     fun updateConfig(provider: String, key: String) {
         apiProvider = "siliconflow"

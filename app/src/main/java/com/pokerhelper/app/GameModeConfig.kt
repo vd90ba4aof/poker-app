@@ -55,7 +55,11 @@ data class CoordinateConfig(
     val actionButtons: List<IntArray> = emptyList(),     // 底部操作按钮 [x1,y1,x2,y2]
     val betButtons: List<IntArray> = emptyList(),        // 下注按钮(4档) [x1,y1,x2,y2]
     val dealerSearchAreas: List<IntArray> = emptyList(), // D按钮搜索区域(6个座位附近)
-    val topNavBar: List<IntArray> = emptyList()          // 顶部导航栏按钮
+    val topNavBar: List<IntArray> = emptyList(),         // 顶部导航栏按钮
+    // V3.14: 精确下注输入坐标
+    val betInputBox: List<Int> = emptyList(),            // [x1,y1,x2,y2] 金额输入框
+    val numpadKeys: Map<String, List<Int>> = emptyMap(),  // 数字键 "0"~"9" -> [x,y]
+    val numpadConfirm: List<Int> = emptyList()            // [x1,y1,x2,y2] 确认按钮
 )
 
 // Rake配置

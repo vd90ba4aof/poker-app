@@ -688,12 +688,34 @@ class FloatingService : Service() {
             }
         }
     }
+    // V3.0: AntiDetection — 截屏间隔抖动，避免被检测为机器人
+    private object AntiDetection {
+        fun getSuggestedInterval(baseInterval: Long): Long {
+            try {
+                var jittered = baseInterval
+                // ±15%随机抖动
+                val factor = 1.0 + (Math.random() * 0.3 - 0.15)
+                jittered = (baseInterval * factor).toLong()
+                // 深夜降速50%（0:00-6:00）
+                val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                if (hour >= 0 && hour < 6) {
+                    jittered = (jittered * 1.5).toLong()
+                }
+                return jittered
+            } catch (e: Exception) {
+                return baseInterval
+            }
+        }
+    }
     private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; isVisionInProgress=false; autoCaptureInterval=4000L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture() }
     private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; handStartTime=0; isVisionInProgress=false; executeJs("if(typeof disableAutoExec==='function')disableAutoExec()") }
     private fun scheduleNextAutoCapture() {
         if(!autoCaptureEnabled)return; autoCaptureRunnable?.let{handler.removeCallbacks(it)}
         val r=Runnable{if(!autoCaptureEnabled)return@Runnable;if(isVisionInProgress){scheduleNextAutoCapture();return@Runnable};val pm=getSystemService(Context.POWER_SERVICE)as PowerManager;if(!pm.isScreenOn){scheduleNextAutoCapture();return@Runnable};autoCaptureTrigger()}
-        autoCaptureRunnable=r; handler.postDelayed(r,autoCaptureInterval)
+        autoCaptureRunnable=r
+        // V3.0: AntiDetection截屏间隔抖动（±15%随机+深夜降速50%）
+        val jittered = try { AntiDetection.getSuggestedInterval(autoCaptureInterval) } catch (e: Exception) { autoCaptureInterval }
+        handler.postDelayed(r,jittered)
     }
     private fun autoCaptureTrigger() {
         if(!ScreenOptService.isServiceRunning()){autoConsecutiveErrors++;checkAutoErrors();scheduleNextAutoCapture();return}
@@ -739,11 +761,36 @@ class FloatingService : Service() {
             if (action == "raise" || action == "raise_big") {
                 val sizing = decisionData.optInt("sizing", 0)
                 val pot = decisionData.optInt("pot", 0)
+                val phase = decisionData.optString("phase", "post")
+                val isNash = decisionData.optBoolean("nash", false)
+                // V3.25: 纳什push → 直接点全押按钮
+                if (isNash) {
+                    Log.d(TAG, "★ 纳什push: 点全押按钮")
+                    executeAutoTapFallback("allin")
+                    handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                    return
+                }
+                // V3.16: 翻前raise → 直接点GG加注按钮(默认2.5x min-raise)
+                if (phase == "pre") {
+                    Log.d(TAG, "★ GG翻前加注: 直接点加注按钮 (策略size=${sizing})")
+                    executeAutoTapFallback("raise")
+                    handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                    return
+                }
                 if (sizing > 0 && pot > 0 && GameModeConfig.currentPlatform == GamePlatform.GGPOKER) {
                     val betBtnAction = GameModeConfig.getBetButtonAction(sizing, pot)
                     Log.d(TAG, "★ GG bet sizing: action=$action sizing=$sizing pot=$pot → $betBtnAction")
-                    // 先点击下注预设按钮
-                    executeAutoTapFallback(betBtnAction)
+                    // V3.14: 优先尝试精确金额输入（配置了键盘坐标时）
+                    var exactDone = false
+                    try {
+                        exactDone = executeExactBet(sizing)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "精确输入异常，fallback预设按钮", e)
+                    }
+                    if (!exactDone) {
+                        // 先点击下注预设按钮
+                        executeAutoTapFallback(betBtnAction)
+                    }
                     // 延迟200ms后点击加注按钮确认
                     handler.postDelayed({
                         try {
@@ -796,13 +843,66 @@ class FloatingService : Service() {
             executeAutoTapFallback(action)
         }
     }
+    // V3.14: 精确金额输入 — 点击输入框+逐个点数字键盘 (GG数字键盘坐标需实测)
+    private fun executeExactBet(amount: Int): Boolean {
+        try {
+            val cfg = GameModeConfig.getCoordinateConfig()
+            val inputBox = cfg.betInputBox
+            val numpad = cfg.numpadKeys
+            val confirm = cfg.numpadConfirm
+            if (inputBox.isEmpty() || numpad.isEmpty() || confirm.isEmpty()) {
+                Log.d(TAG, "精确输入未配置坐标，fallback到4档按钮")
+                return false
+            }
+            val (sw, sh) = getScreenSize()
+            val sx = sw.toFloat() / cfg.referenceWidth
+            val sy = sh.toFloat() / cfg.referenceHeight
+            // 1. 点击金额输入框
+            val boxX = ((inputBox[0] + inputBox[2]) / 2 * sx).toInt()
+            val boxY = ((inputBox[1] + inputBox[3]) / 2 * sy).toInt()
+            bleManager?.sendTap(boxX, boxY, 50)
+            Thread.sleep(250) // 等键盘弹出
+            // 2. 逐个点击数字键
+            val digits = amount.toString()
+            for (ch in digits) {
+                val key = numpad[ch.toString()] ?: continue
+                val kx = (key[0] * sx).toInt()
+                val ky = (key[1] * sy).toInt()
+                bleManager?.sendTap(kx, ky, 40)
+                Thread.sleep(60) // 按键间隔
+            }
+            // 3. 点击确认
+            val cx = ((confirm[0] + confirm[2]) / 2 * sx).toInt()
+            val cy = ((confirm[1] + confirm[3]) / 2 * sy).toInt()
+            bleManager?.sendTap(cx, cy, 50)
+            Log.d(TAG, "★ 精确输入完成: $amount")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "精确输入失败", e)
+            return false
+        }
+    }
+
     // V2.9.200: 回退动态坐标——使用GameModeConfig根据当前平台自动适配
     private fun executeAutoTapFallback(action: String) {
-        val (sw, sh) = getScreenSize()
+        // V3.42: 优先用截图真实尺寸（Android 15显示缩放时截图≠屏幕尺寸）
+        val rawSw = ScreenCaptureService.screenshotWidth
+        val rawSh = ScreenCaptureService.screenshotHeight
+        val (sw, sh) = if (rawSw > 0 && rawSh > 0) Pair(rawSw, rawSh) else getScreenSize()
         val (x, y) = GameModeConfig.getAutoTapFallback(action, sw, sh)
         Log.d(TAG, "★ autoTapFallback: $action → ($x, $y) [screen=${sw}x${sh} platform=${GameModeConfig.currentPlatform}]")
         bleManager?.sendTap(x, y, 50)
         handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+        // V3.10: 弃牌后重置识别状态 — 防止同rank不同suit的手牌锁定残留
+        if (action == "fold") {
+            try {
+                VisionApiClient.resetLocks()
+                cachedPotSize = 0; cachedToCall = 0; cachedMinRaise = 0
+                Log.d(TAG, "★ 弃牌后重置识别状态和缓存")
+            } catch (e: Exception) {
+                Log.w(TAG, "弃牌重置失败", e)
+            }
+        }
     }
     // V2.9.210: D按钮座位号→Hero位置名称
     private fun seatIndexToPosition(dealerSeat: Int, totalPlayers: Int): String {
@@ -2001,12 +2101,23 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             return
         }
 
+        // V3.42: 提取截图真实尺寸（供executeAutoTapFallback使用）
+        try {
+            val opts = android.graphics.BitmapFactory.Options()
+            opts.inJustDecodeBounds = true
+            android.graphics.BitmapFactory.decodeByteArray(screenshot, 0, screenshot.size, opts)
+            ScreenCaptureService.screenshotWidth = opts.outWidth
+            ScreenCaptureService.screenshotHeight = opts.outHeight
+        } catch (_: Exception) {}
+
         // V2.9.165: 本地CV先行识别牌面——锁定手牌供VisionAPI使用
         if (localCVEnabled && cardRecognizer != null && VisionApiClient.apiKey.isNotEmpty()) {
             try {
                 val tLocalStart = System.currentTimeMillis()
                 val bmp = android.graphics.BitmapFactory.decodeByteArray(screenshot, 0, screenshot.size)
                 if (bmp != null) {
+                    // V3.41: 用截图真实尺寸更新坐标缩放——GG小窗/分屏时截图≠屏幕尺寸
+                    try { CardRecognizer.updateScreenSize(bmp.width, bmp.height) } catch (_: Exception) {}
                     val localResult = cardRecognizer!!.recognizeAll(bmp)
                     bmp.recycle()
                     val tLocalEnd = System.currentTimeMillis()
@@ -2100,6 +2211,20 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                             if (heroSeat != null && heroSeat.currentChips > 0) {
                                 cachedPlayerChips = heroSeat.currentChips.toInt()
                             }
+                            // V3.7: 构建玩家下注信息（筹码变化delta=下注额）
+                            val chipPlayersCache = chipFrame.players.mapNotNull { p ->
+                                if (p.id == 6) return@mapNotNull null  // 跳过Hero自己
+                                VisionApiClient.PlayerInfo(
+                                    position = seatIndexToPosition(p.id, chipFrame.tablePlayerCount),
+                                    bet = (p.delta?.let { Math.abs(it).toInt() } ?: 0),
+                                    chips = p.currentChips.toInt(),
+                                    active = p.status == "active" || p.status == "betting" || p.status == "allin",
+                                    nickname = p.seatLabel
+                                )
+                            }
+                            if (chipPlayersCache.isNotEmpty()) {
+                                Log.d(TAG, "★ ChipTracker玩家数据: ${chipPlayersCache.size}人 (${chipPlayersCache.filter { it.bet > 0 }.size}人有下注)")
+                            }
                             Log.i(TAG, "★ ChipTracker: pot=${chipFrame.potAmount} players=${chipFrame.tablePlayerCount} active=${chipFrame.activePlayerCount} dealer=${chipFrame.dealerSeatIndex} active_seat=${chipFrame.activeSeatIndex} sb=${chipFrame.sbSeatIndex} bb=${chipFrame.bbSeatIndex} hero_pos=$cachedMyPosition")
                         }
                     } catch (e: Exception) {
@@ -2172,6 +2297,38 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         }
                         handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }
                         onAutoCaptureVisionDone(true)
+                    }
+                    // V3.8: 后台静默VLM — 不阻塞本地决策，异步补充昵称/oppHud/摊牌
+                    if (VisionApiClient.apiKey.isNotEmpty()) {
+                        Thread {
+                            try {
+                                val bgResult = VisionApiClient.analyzeScreenshot(screenshot)
+                                if (bgResult != null && bgResult.isPokerTable) {
+                                    // 补充记忆: 真实HUD + 昵称
+                                    val level = when {
+                                        bgResult.blindBB <= 10 -> "micro_nl2"
+                                        bgResult.blindBB <= 25 -> "low_nl10"
+                                        else -> "mid_nl50"
+                                    }
+                                    val stats = mutableMapOf<String, Float>()
+                                    if (bgResult.oppHud.isNotEmpty()) {
+                                        val avgVpip = bgResult.oppHud.map { it.vpip }.filter { it > 0 }.average()
+                                        val avgPfr = bgResult.oppHud.map { it.pfr }.filter { it > 0 }.average()
+                                        if (avgVpip > 0) stats["vpip"] = (avgVpip / 100.0).toFloat()
+                                        if (avgPfr > 0) stats["pfr"] = (avgPfr / 100.0).toFloat()
+                                    }
+                                    if (stats.isNotEmpty()) HudLearner.recordHand(stats, level)
+                                    // 摊牌结果后台记录
+                                    if (bgResult.showdownCards.isNotEmpty()) {
+                                        val heroWon = bgResult.showdownCards.none { it.won }
+                                        HudLearner.recordResult(heroWon, bgResult.potSize, level)
+                                    }
+                                    Log.d(TAG, "★ 后台VLM补充: ${bgResult.oppHud.size}个HUD ${bgResult.showdownCards.size}个摊牌")
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "后台VLM补充失败", e)
+                            }
+                        }.start()
                     }
                     return  // 跳过VLM
                 }

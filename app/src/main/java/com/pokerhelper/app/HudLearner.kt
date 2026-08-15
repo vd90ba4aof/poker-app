@@ -93,6 +93,7 @@ object HudLearner {
         giteeToken = token
     }
 
+    @Synchronized
     fun recordHand(opponentStats: Map<String, Float>, level: String) {
         val p = prefs ?: return
         currentLevel = level

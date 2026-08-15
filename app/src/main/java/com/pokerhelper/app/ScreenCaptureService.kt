@@ -22,6 +22,11 @@ class ScreenCaptureService : android.app.Service() {
         var lastError: String = ""
             internal set
         var lastChipStatus: String = ""
+        // V3.42: 截图真实尺寸（Android 15显示缩放时截图≠屏幕尺寸）
+        var screenshotWidth: Int = 0
+            internal set
+        var screenshotHeight: Int = 0
+            internal set
     }
 
     override fun onBind(intent: android.content.Intent?) = null
