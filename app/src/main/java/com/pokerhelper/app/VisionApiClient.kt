@@ -68,10 +68,10 @@ object VisionApiClient {
         }
     }
     
-    var apiProvider = "openai"
+    var apiProvider = "siliconflow"
     var apiKey = ""
-    var apiUrl = "https://api.openai.com/v1/chat/completions"
-    var modelName = "gpt-4o-mini"
+    var apiUrl = "https://api.siliconflow.cn/v1/chat/completions"
+    var modelName = "Qwen/Qwen3-VL-8B-Instruct"
     var lastError = ""
     // V2.9.193: 保存API原始响应——用于诊断识别失败根因
     var lastRawResponse = ""
@@ -1026,8 +1026,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
         apiProvider = provider; apiKey = key
         when (provider) {
             "openai" -> { apiUrl = "https://api.openai.com/v1/chat/completions"; modelName = "gpt-4o-mini" }
-            "dashscope" -> { apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"; modelName = "qwen-vl-plus" }
-            "deepseek" -> { apiUrl = "https://api.deepseek.com/v1/chat/completions"; modelName = "deepseek-chat-vision" }
+            "dashscope" -> { apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"; modelName = "qwen3-vl-plus" }
             "siliconflow" -> { apiUrl = "https://api.siliconflow.cn/v1/chat/completions"; modelName = "Qwen/Qwen3-VL-8B-Instruct" }
             else -> { Log.w(TAG, "未知供应商: $provider，保持当前配置"); lastError = "未知供应商: $provider" }
         }
