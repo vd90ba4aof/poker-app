@@ -2278,7 +2278,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         tvStatus?.text = "⚡ 纯本地CV (${localElapsed}ms)"
                         updateAdviceNotification("⚡ 本地模式", "${localElapsed}ms")
                         val resultJson = VisionApiClient.toJson(sceneResult)
-                        val taggedJson = resultJson.dropLast(1) + ","_frameTag":"auto"}"
+                        val taggedJson = resultJson.dropLast(1) + ",\"_frameTag\":\"auto\"}"
                         handler.post {
                             if (webViewReady) {
                                 executeJs("if(typeof onVisionResult==='function'){onVisionResult($taggedJson)}")
