@@ -886,6 +886,21 @@ class FloatingService : Service() {
             val boxY = ((inputBox[1] + inputBox[3]) / 2 * sy).toInt()
             bleManager?.sendTap(boxX, boxY, 50)
             Thread.sleep(250) // 等键盘弹出
+            // 1.5 V2.9.370: 先清空已有输入 (消费 numpadBackspace)
+            try {
+                val backspace = cfg.numpadBackspace
+                if (backspace.isNotEmpty()) {
+                    val bsX = ((backspace[0] + backspace[2]) / 2 * sx).toInt()
+                    val bsY = ((backspace[1] + backspace[3]) / 2 * sy).toInt()
+                    repeat(10) { // 最多清10位，覆盖绝大多数下注金额
+                        bleManager?.sendTap(bsX, bsY, 40)
+                        Thread.sleep(40)
+                    }
+                    Log.d(TAG, "精确输入: 已清空旧值 (backspace x10)")
+                }
+            } catch (eBs: Exception) {
+                Log.w(TAG, "清空旧值异常，继续输入", eBs)
+            }
             // 2. 逐个点击数字键
             val digits = amount.toString()
             for (ch in digits) {

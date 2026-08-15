@@ -1159,7 +1159,7 @@ function exportLog(){
   var nativeErrors='';
   try{nativeErrors=typeof AndroidBridge!=='undefined'&&AndroidBridge.getErrorLogs?AndroidBridge.getErrorLogs():'';}catch(e){}
   var data={
-    version:'2.9.235',
+    version:'2.9.370',
     exportTime:new Date().toISOString(),
     handHistory:HandHistory.getAll(),
     drtaTracker:DRTA.tracker,
@@ -2373,8 +2373,6 @@ var PostValidation={
   applyHudData:function(hud){if(!hud||!hud.length)return;for(var i=0;i<hud.length;i++){var h=hud[i];if(!h.seat||(!h.vpip&&!h.pfr))continue;if(!G._hudData)G._hudData={};G._hudData[h.seat]={vpip:h.vpip||0,pfr:h.pfr||0,ats:h.ats||0,threeBet:h.threeBet||0,_ts:Date.now()};var t='unknown',v=h.vpip||0;if(v<=22)t='nit';else if(v<=30)t='tag';else if(v<=40)t='lag';else t='fish';if(typeof OppProfiler!=='undefined'){var p=seatToPosStr(h.seat);for(var nk in OppProfiler._profiles){if(OppProfiler._profiles[nk].pos===p&&v>0){OppProfiler._profiles[nk]._hudVpip=v;OppProfiler._profiles[nk]._hudPfr=h.pfr||0;if(OppProfiler._profiles[nk].hands<50)OppProfiler._profiles[nk].type=t;break;}}}console.log('[SmartHUD]s'+h.seat+' v='+v+'→'+t);}},
   runAll:function(d){var r=[];if(d.hole_cards&&d.community_cards){r=r.concat(this.dedupCards(d.hole_cards,d.community_cards));r=r.concat(this.validateSuits(d.hole_cards,d.community_cards));}if(d.pot_size!==undefined){var b=G._lockedBB||200;r=r.concat(this.validatePotChips(b>0?Math.round((parseInt(d.pot_size)||0)/b):0,0,b>0?Math.round((parseInt(d.to_call)||0)/b):0,b,d.community_cards));}if(d.opp_hud)this.applyHudData(d.opp_hud);return r;}
 };
-function seatToPosStr(s){return{1:'bottom',2:'left-bottom',3:'left-top',4:'top-center',5:'right-top',6:'right-bottom'}[s]||'seat_'+s;}
-function _isStreetChange(d){if(!d||!d.street)return false;var n=0;if(d.community_cards){for(var i=0;i<d.community_cards.length;i++){if(d.community_cards[i]&&d.community_cards[i].rank)n++;}}var c=G.comm?G.comm.filter(function(x){return x!==null;}).length:0;return n!==c&&n>=3;}
 
 // ===== V2.9.153: Layer2 MultiFrameConsensus =====
 var MultiFrameConsensus={
@@ -2703,87 +2701,6 @@ var HandStateMachine=(function(){
 })();
 
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
-// V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
-// 升级自 V2.9.215
-// 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
@@ -3170,7 +3087,7 @@ function decidePreflop(k){
         if(_nashEffBB<=15){
           var _nashR=NashPushFold.decide(k,p,scene,spr,_nashEffBB,bet,pot);
           // 青云独有: 锦标赛ICM纳什收紧
-          try{if(typeof G!=='undefined' && G.game_mode === 'tournament' && _nashR && (_nashR.a === 'raise' || _nashR.a === 'push')){
+          try{if(typeof G!=='undefined' && G.game_type === 'tournament' && _nashR && (_nashR.a === 'raise' || _nashR.a === 'push')){
             var _tf = (_nashR._seFreq !== undefined ? _nashR._seFreq : 1) * 0.9;
             console.log('[ICM] 锦标赛短码收紧: '+k+' push->fold');
             _nashR = {a:'fold', r:'[ICM]锦标赛短码收紧', eq:_nashR.eq||0, c:'l', scene:_nashR.scene||'', spr:_nashR.spr||0, _se:true};
@@ -3994,10 +3911,10 @@ function _applyPipeline(baseFreq,action,hcKey,oppType,street,context,sprAdj,is3b
     // 5) RangeEstimator
     f=RangeEstimator.adjustForRange(f,oppType,street||'flop',action);
     // 青云独有: V2.9.190 锦标赛ICM频率调整
-    try{if(typeof G!=='undefined' && G.game_mode === 'tournament'){
+    try{if(typeof G!=='undefined' && G.game_type === 'tournament'){
       var _hbb=(G.stk||100)/Math.max((G.bb||1)||1,1);
       var _pl=(G.players||[]).length||9;
-      var _ia=typeof _icmPressure==='function'?_icmPressure(_hbb,20,20,_pl,false):{foldMult:1,raiseMult:1,callMult:1};
+      var _ia=typeof _icmPressure==='function'?_icmPressure(_hbb,(typeof G!=='undefined'?G.avg_stack:0)||20,(typeof G!=='undefined'?G.total_players:0)||20,_pl,false):{foldMult:1,raiseMult:1,callMult:1};
       if(action==='fold')f*=_ia.foldMult;
       else if(action==='raise'||action==='3b'||action==='bet')f*=_ia.raiseMult;
       else if(action==='call')f*=_ia.callMult;
@@ -4176,205 +4093,6 @@ function _hc2keySafe(hcKey, tableName){
   if(hcKey===10)return 9;   // 中听牌→9
   return hcKey;
 }
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-// V3.19: hcKey映射 — 表中缺失的键映射到最接近的
-function _hc2keySafe(hcKey, tableName){
-  if(tableName==='_CR'&&(hcKey===0||hcKey===4))return null; // 强牌不CR(设计如此)
-  if(hcKey===12)return 13;  // 弱听牌→接近空气的13
-  if(hcKey===10)return 9;   // 中听牌→9
-  return hcKey;
-}
-
-
-
-
-
-
-
-
-
 
 
 
@@ -12266,7 +11984,7 @@ var NashPushFold={
     return true;
   },
   _getBBKey:function(effectiveBB){
-    var keys=[1,3,5,8,12,15];
+    var keys=[1,3,5,8,10,12,15];
     for(var i=0;i<keys.length;i++){if(effectiveBB<=keys[i])return keys[i];}
     return 15;
   },
