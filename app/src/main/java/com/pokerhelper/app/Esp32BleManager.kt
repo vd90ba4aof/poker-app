@@ -49,6 +49,11 @@ class Esp32BleManager(private val context: Context) {
     var onStatusChanged: ((Boolean, String) -> Unit)? = null
     var onCommandResult: ((String) -> Unit)? = null
 
+    // V2.9.240: RSSI信号强度
+    var lastRssi: Int = 0
+        private set
+    var onRssiUpdate: ((Int) -> Unit)? = null
+
     // V2.9.184: BLE命令队列——避免writeCharacteristic失败导致命令丢失
     private val commandQueue = mutableListOf<String>()
     private var isWriting = false
@@ -70,8 +75,22 @@ class Esp32BleManager(private val context: Context) {
                     onHeartbeat?.invoke(true, msg)
                     Log.d(TAG, "Heartbeat pong received, missed reset to 0")
                 }
+                // V2.9.240: ESP32返回的status中包含rssi字段时更新
+                if (msg.startsWith("ok:")) {
+                    val rssiMatch = Regex(""".*rssi[:=]\s*(-?\d+)""").find(msg)
+                    if (rssiMatch != null) {
+                        try {
+                            val espRssi = rssiMatch.groupValues[1].toInt()
+                            lastRssi = espRssi
+                            Log.d(TAG, "RSSI from ESP32 status: ${espRssi}dBm")
+                            onRssiUpdate?.invoke(espRssi)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "parse ESP32 RSSI error", e)
+                        }
+                    }
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "pong handling error", e)
+                Log.w(TAG, "pong/rssi handling error", e)
             }
             onCommandResult?.invoke(msg)
         }
@@ -90,10 +109,12 @@ class Esp32BleManager(private val context: Context) {
 
     // 扫描/连接ESP32设备
     fun startScan() {
+        Log.i(TAG, "startScan: beginning BLE scan for $DEVICE_NAME")
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         bluetoothAdapter = bluetoothManager?.adapter
 
         if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
+            Log.w(TAG, "startScan: Bluetooth not available or disabled")
             notifyStatus(false, "蓝牙未开启")
             return
         }
@@ -174,6 +195,8 @@ class Esp32BleManager(private val context: Context) {
     private fun connectToDevice(device: BluetoothDevice) {
         stopScan()
         val deviceName = try { device.name } catch (e: SecurityException) { "ESP32" }
+        val deviceAddr = try { device.address } catch (e: Exception) { "unknown" }
+        Log.i(TAG, "connectToDevice: name=$deviceName, address=$deviceAddr")
         notifyStatus(false, "连接${deviceName}...")
         
         try {
@@ -195,6 +218,7 @@ class Esp32BleManager(private val context: Context) {
     // 断开连接
     fun disconnect() {
         try {
+            Log.i(TAG, "disconnect: manually disconnecting BLE")
             stopHeartbeatMonitor()  // V1.0.35: 停止心跳监控
             autoReconnectEnabled = false  // V2.9.183: 主动断开时不自动重连
             reconnectRunnable?.let { handler.removeCallbacks(it) }
@@ -202,6 +226,7 @@ class Esp32BleManager(private val context: Context) {
             reconnectAttempts = 0
             handler.removeCallbacks(bleFlushTimeout)
             bleRxBuffer.clear()
+            commandQueue.clear()  // V2.9.240: 断开时清空命令队列
             bluetoothGatt?.disconnect()
             bluetoothGatt?.close()
             bluetoothGatt = null
@@ -209,7 +234,9 @@ class Esp32BleManager(private val context: Context) {
             rxCharacteristic = null
             isConnected = false
             lastConnectedDevice = null
+            lastRssi = 0  // V2.9.240: 重置RSSI
             notifyStatus(false, "已断开")
+            Log.i(TAG, "disconnect: BLE disconnected and resources cleaned")
         } catch (e: Exception) {
             Log.w(TAG, "disconnect error", e)
         }
@@ -238,8 +265,16 @@ class Esp32BleManager(private val context: Context) {
     // 发送ping
     fun sendPing() {
         if (!isConnected || txCharacteristic == null) {
+            Log.w(TAG, "sendPing: not connected, returning err")
             onCommandResult?.invoke("err:not_connected")
             return
+        }
+        // V2.9.240: 每次ping顺带读取RSSI
+        try {
+            bluetoothGatt?.readRemoteRssi()
+            Log.d(TAG, "sendPing: requested RSSI read")
+        } catch (e: Exception) {
+            Log.w(TAG, "sendPing: readRemoteRssi error", e)
         }
         sendCommand("ping")
     }
@@ -254,16 +289,18 @@ class Esp32BleManager(private val context: Context) {
                 override fun run() {
                     try {
                         if (isConnected) {
+                            Log.d(TAG, "Heartbeat tick: sending ping, missedHeartbeats=$missedHeartbeats")
                             sendCommand("ping")
                             missedHeartbeats++
                             if (missedHeartbeats >= 3) {
                                 Log.w(TAG, "BLE心跳超时(${missedHeartbeats}次)，触发重连")
                                 onHeartbeat?.invoke(false, "timeout:${missedHeartbeats}")
-                                disconnect()
-                                startScan()
+                                try { disconnect() } catch (e: Exception) { Log.w(TAG, "heartbeat disconnect error", e) }
+                                try { startScan() } catch (e: Exception) { Log.w(TAG, "heartbeat startScan error", e) }
                                 return
                             } else if (missedHeartbeats >= 1) {
                                 // V1.0.35: 通知心跳超时(黄色预警)
+                                Log.d(TAG, "Heartbeat missed: count=$missedHeartbeats")
                                 onHeartbeat?.invoke(false, "missed:${missedHeartbeats}")
                             }
                         }
@@ -294,8 +331,10 @@ class Esp32BleManager(private val context: Context) {
     
     // V2.9.184: 命令队列——避免并发写入导致命令丢失
     private fun sendCommand(cmd: String) {
+        Log.d(TAG, "sendCommand: cmd=$cmd, isWriting=$isWriting, queueSize=${commandQueue.size}")
         if (isWriting) {
             commandQueue.add(cmd)
+            Log.d(TAG, "sendCommand: queued, new queueSize=${commandQueue.size}")
             return
         }
         writeCommand(cmd)
@@ -335,12 +374,17 @@ class Esp32BleManager(private val context: Context) {
     // BLE扫描回调
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val device = result.device
-            val name = device.name ?: return
-            
-            if (name == DEVICE_NAME) {
-                Log.i(TAG, "Found ESP32: $name")
-                connectToDevice(device)
+            try {
+                val device = result.device
+                val name = device.name ?: return
+                val rssi = result.rssi
+                
+                if (name == DEVICE_NAME) {
+                    Log.i(TAG, "Found ESP32 on scan: name=$name, addr=${device.address}, rssi=${rssi}dBm")
+                    connectToDevice(device)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "onScanResult error", e)
             }
         }
         
@@ -355,7 +399,7 @@ class Esp32BleManager(private val context: Context) {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    Log.i(TAG, "Connected to GATT server")
+                    Log.i(TAG, "onConnectionStateChange: STATE_CONNECTED, status=$status")
                     // V2.9.183: 保存设备用于自动重连
                     lastConnectedDevice = gatt.device
                     reconnectAttempts = 0
@@ -365,8 +409,9 @@ class Esp32BleManager(private val context: Context) {
                     }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    Log.i(TAG, "Disconnected from GATT server")
+                    Log.i(TAG, "Disconnected from GATT server, stopping heartbeat monitor")
                     isConnected = false
+                    stopHeartbeatMonitor()  // V2.9.240: 断连立即停止心跳，避免泄漏
                     notifyStatus(false, "已断开")
                     // V2.9.183: 自动重连
                     scheduleReconnect()
@@ -375,9 +420,20 @@ class Esp32BleManager(private val context: Context) {
         }
         
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            Log.i(TAG, "MTU negotiated: $mtu (status=$status)")
-            // MTU协商完成后发现服务
-            handler.post { gatt.discoverServices() }
+            try {
+                Log.i(TAG, "onMtuChanged: mtu=$mtu, status=$status")
+                // MTU协商完成后发现服务
+                handler.post {
+                    try {
+                        gatt.discoverServices()
+                        Log.d(TAG, "onMtuChanged: discoverServices requested")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "onMtuChanged discoverServices error", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "onMtuChanged error", e)
+            }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
@@ -398,6 +454,13 @@ class Esp32BleManager(private val context: Context) {
                         
                         isConnected = true
                         notifyStatus(true, "已连接")
+                        // V2.9.240: 连接成功后读取RSSI
+                        try {
+                            gatt.readRemoteRssi()
+                            Log.d(TAG, "onServicesDiscovered: requested RSSI read")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "onServicesDiscovered: readRemoteRssi error", e)
+                        }
                     } else {
                         notifyStatus(false, "未找到NUS特征")
                     }
@@ -405,13 +468,31 @@ class Esp32BleManager(private val context: Context) {
                     notifyStatus(false, "未找到NUS服务")
                 }
             } else {
+                Log.e(TAG, "onServicesDiscovered failed: status=$status")
                 notifyStatus(false, "服务发现失败: $status")
+            }
+        }
+
+        override fun onReadRemoteRssi(gatt: BluetoothGatt, rssi: Int, status: Int) {
+            try {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    lastRssi = rssi
+                    Log.d(TAG, "onReadRemoteRssi: rssi=${rssi}dBm")
+                    onRssiUpdate?.invoke(rssi)
+                } else {
+                    Log.w(TAG, "onReadRemoteRssi failed: status=$status")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "onReadRemoteRssi error", e)
             }
         }
         
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid == TX_CHAR_UUID) {
-                val value = characteristic.getStringValue(0)
+                val value = try { characteristic.getStringValue(0) } catch (e: Exception) {
+                    Log.w(TAG, "onCharacteristicChanged getStringValue error", e)
+                    return
+                }
                 Log.d(TAG, "BLE rx chunk(${value.length}): $value")
                 
                 // V1.0.35: 检测ESP32主动心跳通知，不参与数据缓冲
@@ -436,8 +517,15 @@ class Esp32BleManager(private val context: Context) {
         }
         
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.w(TAG, "Write failed: $status")
+            try {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    val cmdStr = try { characteristic.value?.toString(Charsets.UTF_8)?.take(40) } catch (_: Exception) { "?" }
+                    Log.d(TAG, "onCharacteristicWrite: success, cmd=$cmdStr, queueSize=${commandQueue.size}")
+                } else {
+                    Log.w(TAG, "onCharacteristicWrite: failed, status=$status")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "onCharacteristicWrite log error", e)
             }
             processNextCommand()  // V2.9.184: 发送队列中的下一条命令
         }
@@ -445,21 +533,30 @@ class Esp32BleManager(private val context: Context) {
     
     // V2.9.183: 自动重连调度
     private fun scheduleReconnect() {
-        if (!autoReconnectEnabled) return
-        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            Log.w(TAG, "重连已达最大次数($MAX_RECONNECT_ATTEMPTS)，停止重连")
-            notifyStatus(false, "重连失败(已达上限)")
-            return
-        }
-        val device = lastConnectedDevice ?: return
-        reconnectAttempts++
-        val delay = RECONNECT_DELAY_BASE * reconnectAttempts  // 递增延迟
-        Log.i(TAG, "BLE自动重连: 第${reconnectAttempts}次, ${delay}ms后")
-        notifyStatus(false, "重连中(${reconnectAttempts}/$MAX_RECONNECT_ATTEMPTS)...")
+        try {
+            if (!autoReconnectEnabled) {
+                Log.d(TAG, "scheduleReconnect: autoReconnect disabled, skipping")
+                return
+            }
+            if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                Log.w(TAG, "重连已达最大次数($MAX_RECONNECT_ATTEMPTS)，停止重连")
+                notifyStatus(false, "重连失败(已达上限)")
+                return
+            }
+            val device = lastConnectedDevice
+            if (device == null) {
+                Log.w(TAG, "scheduleReconnect: no saved device, cannot reconnect")
+                return
+            }
+            reconnectAttempts++
+            val delay = RECONNECT_DELAY_BASE * reconnectAttempts  // 递增延迟
+            Log.i(TAG, "BLE自动重连: 第${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}次, ${delay}ms后, device=${device.address}")
+            notifyStatus(false, "重连中(${reconnectAttempts}/$MAX_RECONNECT_ATTEMPTS)...")
         
         reconnectRunnable?.let { handler.removeCallbacks(it) }
         reconnectRunnable = Runnable {
             try {
+                Log.d(TAG, "Reconnect runnable fired: attempt=$reconnectAttempts")
                 connectToDevice(device)
             } catch (e: Exception) {
                 Log.e(TAG, "重连异常", e)
@@ -467,6 +564,9 @@ class Esp32BleManager(private val context: Context) {
             }
         }
         handler.postDelayed(reconnectRunnable!!, delay)
+        } catch (e: Exception) {
+            Log.e(TAG, "scheduleReconnect error", e)
+        }
     }
     
     // 通知状态变化

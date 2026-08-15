@@ -83,6 +83,10 @@ object VisionApiClient {
     // V2.9.230: 断网兜底模式标志位——当API调用失败时是否启用本地识别兜底
     var isOfflineFallback: Boolean = false
 
+    // V2.9.240: 平台自动检测——连续3次一致时自动切换
+    private var _detectedPlatformCount = 0
+    private var _lastDetectedPlatform = ""
+
     var dButtonPosition: String = ""
     var dButtonLocked: String = ""
         private set
@@ -178,6 +182,11 @@ object VisionApiClient {
                         Log.d(TAG, "⏱ 本地识别耗时: ${tLocal1 - tLocal0}ms")
 
                         if (localResult != null && localRecognizer?.isValidResult(localResult) == true) {
+                            try {
+                                val holeStr = localResult.handCards.joinToString(",") { "${it.rank}${it.suit}" }
+                                val commStr = localResult.communityCards.joinToString(",") { "${it.rank}${it.suit}" }
+                                Log.i(TAG, "★ 本地识别成功且有效: 手牌=[$holeStr] | 公共牌=[$commStr] | 耗时=${tLocal1 - tLocal0}ms")
+                            } catch (_: Exception) {}
                             Log.i(TAG, "★ 本地识别成功且有效，跳过API (${tLocal1 - tLocal0}ms)")
                             // 应用与API路径相同的后期处理：D按钮保险、street纠错、校验纠错
                             var corrected = applyDButtonInsuranceToLocal(localResult)
@@ -292,11 +301,18 @@ object VisionApiClient {
             lastResult = correctedResult; lastResultTime = System.currentTimeMillis(); lastError = ""
             correctedResult = applyStreetCorrection(correctedResult)
             correctedResult = applyValidationCorrections(correctedResult); lastResult = correctedResult
+            // V2.9.240: 详细识别结果日志
+            try {
+                val holeStr = correctedResult.holeCards.joinToString(",") { "${it.rank}${it.suit}" }
+                val commStr = correctedResult.communityCards.joinToString(",") { "${it.rank}${it.suit}" }
+                Log.i(TAG, "识别结果($lastPromptMode): 手牌=[$holeStr] | 公共牌=[$commStr] | street=${correctedResult.street} | 底池=${correctedResult.potSize} | 跟注=${correctedResult.toCall} | 位置=${correctedResult.myPosition} | 平台=${correctedResult.detectedPlatform} | D=$dPosInsured")
+            } catch (_: Exception) {}
             Log.d(TAG, "识别成功($lastPromptMode): ${correctedResult.holeCards.joinToString()} | comm=${correctedResult.communityCards.map{it.rank}.joinToString()} | 底池${correctedResult.potSize} | ${correctedResult.totalPlayers}桌 | D=$dPosInsured")
             correctedResult
         } catch (e: Exception) {
             lastError = "API错误: ${e.message}"
-            Log.e(TAG, "analyzeScreenshot failed", e)
+            Log.e(TAG, "analyzeScreenshot failed: ${e.message}", e)
+            Log.e(TAG, "完整异常堆栈: ${android.util.Log.getStackTraceString(e)}")
             // V2.9.230: 断网兜底模式——API调用失败时，尝试返回部分结果
             // 如果有本地CV锁定的rank信息，返回一个带有rank但suit不确定的结果
             // 保证游戏过程不会因为断网完全中断
@@ -444,7 +460,8 @@ object VisionApiClient {
      */
     private fun detectPlatform(content: String): String {
         return try {
-            when {
+            Log.d(TAG, "detectPlatform: content length=${content.length}")
+            val result = when {
                 // GG扑克：匹配 GGPoker / GG Poker / GGPOKER 等变体
                 content.contains("GGPoker", ignoreCase = true) ||
                 content.contains("GG Poker", ignoreCase = true) ||
@@ -459,8 +476,10 @@ object VisionApiClient {
                 // 默认标准扑克
                 else -> "STANDARD"
             }
+            Log.d(TAG, "detectPlatform result: $result")
+            result
         } catch (e: Exception) {
-            Log.w(TAG, "detectPlatform 异常: ${e.message}，使用默认STANDARD")
+            Log.e(TAG, "detectPlatform 异常: ${e.message}，使用默认STANDARD", e)
             "STANDARD"
         }
     }
@@ -526,6 +545,8 @@ ${streetHint}${rankHint}识别:"""
     }
 
     private fun sendRequest(requestJson: String): String {
+        val reqTime = System.currentTimeMillis()
+        Log.d(TAG, "sendRequest: 请求开始, url=$apiUrl, model=$modelName, payload=${requestJson.take(80)}...")
         var lastException: Exception? = null
         // V2.9.184: 网络波动重试1次，间隔500ms
         repeat(2) { attempt ->
@@ -537,12 +558,17 @@ ${streetHint}${rankHint}识别:"""
                     .addHeader("Authorization", "Bearer $apiKey")
                     .build()
                 val response = httpClient.newCall(request).execute()
+                val respTime = System.currentTimeMillis()
+                val elapsed = respTime - reqTime
                 return if (response.isSuccessful) {
-                    response.body?.string() ?: throw Exception("Empty response body")
+                    val respBody = response.body?.string() ?: throw Exception("Empty response body")
+                    Log.i(TAG, "sendRequest: 响应成功, 耗时=${elapsed}ms, 响应大小=${respBody.length}字节, attempt=${attempt + 1}")
+                    respBody
                 } else {
                     val errBody = response.body?.string() ?: ""
+                    Log.e(TAG, "sendRequest: HTTP错误, code=${response.code}, 耗时=${elapsed}ms, body=${errBody.take(200)}")
                     if (attempt == 0 && response.code >= 500) {
-                        Log.w(TAG, "HTTP ${response.code}, retrying...")
+                        Log.w(TAG, "HTTP ${response.code}, retrying in 500ms...")
                         lastException = Exception("HTTP ${response.code}: $errBody")
                         Thread.sleep(500)
                         return@repeat
@@ -551,9 +577,12 @@ ${streetHint}${rankHint}识别:"""
                 }
             } catch (e: Exception) {
                 lastException = e
+                val errTime = System.currentTimeMillis()
                 if (attempt == 0) {
-                    Log.w(TAG, "API request failed, retrying: ${e.message}")
+                    Log.w(TAG, "sendRequest: 第${attempt + 1}次失败 (${errTime - reqTime}ms): ${e.message}")
                     Thread.sleep(500)
+                } else {
+                    Log.e(TAG, "sendRequest: 全部重试失败 (${errTime - reqTime}ms): ${e.message}", e)
                 }
             }
         }
@@ -602,9 +631,36 @@ ${streetHint}${rankHint}识别:"""
         val ocrDetectedPlatform = detectPlatform(content)
         val detectedPlatform = vlmDetectedPlatform ?: ocrDetectedPlatform
         Log.i(TAG, "平台检测: VLM=$vlmDetectedPlatform, OCR=$ocrDetectedPlatform, 最终=$detectedPlatform, 当前配置=${GameModeConfig.currentPlatform.name}")
-        // TODO: V2.9.220+ 连续3次检测一致时可考虑自动切换平台（需评估误判风险）
-        if (detectedPlatform != GameModeConfig.currentPlatform.name) {
-            Log.i(TAG, "平台检测与当前配置不一致: 检测=$detectedPlatform, 配置=${GameModeConfig.currentPlatform.name}（暂不自动切换）")
+        // V2.9.240: 连续3次检测一致时自动切换平台
+        try {
+            if (detectedPlatform.isNotEmpty() && detectedPlatform != "STANDARD") {
+                if (detectedPlatform == _lastDetectedPlatform) {
+                    _detectedPlatformCount++
+                    Log.d(TAG, "平台检测计数: platform=$detectedPlatform, count=$_detectedPlatformCount/3")
+                } else {
+                    _lastDetectedPlatform = detectedPlatform
+                    _detectedPlatformCount = 1
+                    Log.d(TAG, "平台检测变化: 新平台=$detectedPlatform, 重置计数为1")
+                }
+                // 连续3次一致 → 自动切换
+                if (_detectedPlatformCount >= 3 && detectedPlatform != GameModeConfig.currentPlatform.name) {
+                    try {
+                        val platformEnum = GamePlatform.valueOf(detectedPlatform)
+                        GameModeConfig.currentPlatform = platformEnum
+                        Log.i(TAG, "★ 平台自动切换成功: ${GameModeConfig.currentPlatform.name} → $detectedPlatform (连续${_detectedPlatformCount}次一致)")
+                        // 切换后重置计数，避免反复触发
+                        _detectedPlatformCount = 0
+                        _lastDetectedPlatform = ""
+                    } catch (e: Exception) {
+                        Log.w(TAG, "平台自动切换失败: 无法解析 '$detectedPlatform' 为 GamePlatform", e)
+                        _detectedPlatformCount = 0
+                    }
+                }
+            } else {
+                Log.d(TAG, "平台检测: 检测值为$detectedPlatform，跳过自动切换计数")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "平台自动检测逻辑异常", e)
         }
 return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), parseCards(data.optJSONArray("community_cards")), insuredPot, parseChipValue(data, "my_chips"), data.optInt("total_players", 6), data.optInt("active_players", 2), data.optString("my_position", ""), street, finalToCall, data.optInt("min_raise", 0), buttons, blindSB, blindBB, parseChipValue(data, "ante"), players, data.optString("d_button_pos", ""), content, showdownCards, oppHud, buttonPositions, suitUncertain, isStraddle, isBombPot, isInsurance, isPKO, gameMode, detectedPlatform)
     }

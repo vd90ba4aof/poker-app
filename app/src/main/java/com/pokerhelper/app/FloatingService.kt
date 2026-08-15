@@ -201,6 +201,8 @@ class FloatingService : Service() {
     private var bleErrorCount = 0  // V3.9: ESP32连续失败计数
     // V1.0.35: BLE心跳状态指示 (0=未连接/红, 1=已连接心跳正常/绿, 2=已连接心跳超时/黄)
     @Volatile private var _bleHeartbeatState = 0  // 0=disconnected, 1=connected-ok, 2=timeout
+    // V2.9.240: RSSI信号强度缓存
+    private var _lastRssi = 0
 
     // V2.9.38: 隐身模式通知广播接收器
     private val notificationReceiver = object : BroadcastReceiver() {
@@ -317,81 +319,134 @@ class FloatingService : Service() {
         showFloatingBall()
 
         // V2.9.112: 初始化BLE管理器
-        bleManager = Esp32BleManager(this)
+                bleManager = Esp32BleManager(this)
+        setupBleCallbacks()
+
+        // V2.9.240: 统一设置BLE回调（供onCreate和reinitializeComponents共用）
+    private fun setupBleCallbacks() {
         bleManager?.onStatusChanged = { connected, message ->
             handler.post {
-                tvBle?.text = if (connected) "🔗" else "📡"
-                tvBle?.setTextColor(if (connected) 0xFF4ade80.toInt() else 0xFFBDBDBD.toInt())
-                tvStatus?.text = "BLE: $message"
-                // V2.9.173: 连接成功后自动发送status查询USB/HID状态
-                if (connected) {
-                    _bleHeartbeatState = 1  // V1.0.35: 已连接
-                    updateBleIndicator()
-                    bleManager?.startHeartbeatMonitor()  // V1.0.35: 启动心跳监控
-                    tvBleStatus?.text = "查询ESP32状态..."
-                    tvBleStatus?.visibility = View.VISIBLE
-                    bleStatusPending = true  // V2.9.184
-                    handler.postDelayed({ bleManager?.sendStatus() }, 500)
-                    // V2.9.174: 5秒无响应超时
-                    handler.postDelayed({
-                        if (bleStatusPending) {
-                            tvBleStatus?.text = "ESP32: status无响应"
-                            bleStatusPending = false
+                try {
+                    Log.d(TAG, "BLE onStatusChanged: connected=$connected, msg=$message")
+                    tvBle?.text = if (connected) "🔗 ${_lastRssi}dBm" else "📡"
+                    tvBle?.setTextColor(if (connected) {
+                        // V2.9.240: RSSI信号强度分档颜色
+                        when {
+                            _lastRssi > -50 -> 0xFF4ade80.toInt()  // 绿色 >-50
+                            _lastRssi >= -70 -> 0xFFFFEB3B.toInt()  // 黄色 -50~-70
+                            else -> 0xFFFF5252.toInt()  // 红色 <-70
                         }
-                    }, 5500)
-                } else {
-                    _bleHeartbeatState = 0  // V1.0.35: 断开
-                    updateBleIndicator()
-                    bleManager?.stopHeartbeatMonitor()  // V1.0.35: 停止心跳
+                    } else 0xFFBDBDBD.toInt())
+                    tvStatus?.text = "BLE: $message"
+                    // V2.9.173: 连接成功后自动发送status查询USB/HID状态
+                    if (connected) {
+                        _bleHeartbeatState = 1  // V1.0.35: 已连接
+                        Log.i(TAG, "BLE 已连接，启动心跳监控")
+                        updateBleIndicator()
+                        bleManager?.startHeartbeatMonitor()  // V1.0.35: 启动心跳监控
+                        tvBleStatus?.text = "查询ESP32状态..."
+                        tvBleStatus?.visibility = View.VISIBLE
+                        bleStatusPending = true  // V2.9.184
+                        handler.postDelayed({ bleManager?.sendStatus() }, 500)
+                        // V2.9.174: 5秒无响应超时
+                        handler.postDelayed({
+                            try {
+                                if (bleStatusPending) {
+                                    tvBleStatus?.text = "ESP32: status无响应"
+                                    bleStatusPending = false
+                                }
+                            } catch (_: Exception) {}
+                        }, 5500)
+                    } else {
+                        _bleHeartbeatState = 0  // V1.0.35: 断开
+                        _lastRssi = 0
+                        Log.i(TAG, "BLE 已断开，停止心跳监控")
+                        updateBleIndicator()
+                        bleManager?.stopHeartbeatMonitor()  // V1.0.35: 停止心跳
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "BLE onStatusChanged error", e)
                 }
             }
         }
         // V1.0.35: BLE心跳回调
         bleManager?.onHeartbeat = { connected, heartbeatData ->
             handler.post {
-                if (connected) {
-                    _bleHeartbeatState = 1  // 收到心跳=正常(绿)
-                } else {
-                    _bleHeartbeatState = 2  // 心跳超时(黄)
+                try {
+                    val prevState = _bleHeartbeatState
+                    if (connected) {
+                        _bleHeartbeatState = 1  // 收到心跳=正常(绿)
+                    } else {
+                        _bleHeartbeatState = 2  // 心跳超时(黄)
+                    }
+                    if (prevState != _bleHeartbeatState) {
+                        Log.i(TAG, "BLE心跳状态变化: $prevState→$_bleHeartbeatState (data=$heartbeatData)")
+                    } else {
+                        Log.d(TAG, "BLE心跳: state=$_bleHeartbeatState, data=$heartbeatData")
+                    }
+                    updateBleIndicator()
+                } catch (e: Exception) {
+                    Log.e(TAG, "BLE onHeartbeat error", e)
                 }
-                updateBleIndicator()
+            }
+        }
+        // V2.9.240: RSSI更新回调
+        bleManager?.onRssiUpdate = { rssi ->
+            handler.post {
+                try {
+                    _lastRssi = rssi
+                    // 同步更新BLE图标颜色
+                    tvBle?.text = "🔗 ${rssi}dBm"
+                    tvBle?.setTextColor(when {
+                        rssi > -50 -> 0xFF4ade80.toInt()
+                        rssi >= -70 -> 0xFFFFEB3B.toInt()
+                        else -> 0xFFFF5252.toInt()
+                    })
+                    Log.d(TAG, "RSSI更新: ${rssi}dBm")
+                } catch (e: Exception) {
+                    Log.w(TAG, "onRssiUpdate error", e)
+                }
             }
         }
         bleManager?.onCommandResult = { result ->
             handler.post {
-                bleStatusPending = false  // V2.9.184: 收到响应，取消超时
-                // V3.9: ESP32断线检测 — 点击静默失败保护
-                if (result.startsWith("err:not_connected") || result.startsWith("err:no_tx")) {
-                    Log.e(TAG, "★ ESP32断线! 点击失败: $result — 尝试重连")
-                    bleErrorCount++
-                    _bleHeartbeatState = 0  // V1.0.35
-                    updateBleIndicator()
-                    updateAdviceNotification("⚠️ ESP32断线", "第${bleErrorCount}次失败，尝试重连...")
-                    updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:ESP32断线")
-                    if (bleErrorCount >= 3) {
-                        // 连续3次失败 → 暂停自动模式，避免瞎等Shot Clock
-                        Log.e(TAG, "★ ESP32连续${bleErrorCount}次失败，暂停自动执行")
-                        stopAutoCapture()
-                        updateAdviceNotification("❌ ESP32已断开", "自动模式已暂停，请检查硬件连接后重新启动")
-                        updateBallAdvice("COLOR:FOLD|SIGNAL:ERROR|REASON:ESP32断开")
-                    } else {
-                        // 尝试重连
-                        try { bleManager?.startScan() } catch (e: Exception) {
-                            Log.w(TAG, "重连失败", e)
+                try {
+                    Log.d(TAG, "BLE onCommandResult: result=${result.take(100)}")
+                    bleStatusPending = false  // V2.9.184: 收到响应，取消超时
+                    // V3.9: ESP32断线检测 — 点击静默失败保护
+                    if (result.startsWith("err:not_connected") || result.startsWith("err:no_tx")) {
+                        Log.e(TAG, "★ ESP32断线! 点击失败: $result — 尝试重连")
+                        bleErrorCount++
+                        _bleHeartbeatState = 0  // V1.0.35
+                        updateBleIndicator()
+                        updateAdviceNotification("⚠️ ESP32断线", "第${bleErrorCount}次失败，尝试重连...")
+                        updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:ESP32断线")
+                        if (bleErrorCount >= 3) {
+                            Log.e(TAG, "★ ESP32连续${bleErrorCount}次失败，暂停自动执行")
+                            stopAutoCapture()
+                            updateAdviceNotification("❌ ESP32已断开", "自动模式已暂停，请检查硬件连接后重新启动")
+                            updateBallAdvice("COLOR:FOLD|SIGNAL:ERROR|REASON:ESP32断开")
+                        } else {
+                            // 尝试重连
+                            try { bleManager?.startScan() } catch (e: Exception) {
+                                Log.w(TAG, "重连失败", e)
+                            }
                         }
+                        return@post
+                    } else if (result.startsWith("ok:") || result.startsWith("查询ESP32")) {
+                        bleErrorCount = 0  // 正常通信，重置错误计数
+                        // V2.9.176: 将逗号分隔的字段格式化为多行显示，便于查看
+                        val formattedResult = if (result.startsWith("ok:")) {
+                            val fields = result.removePrefix("ok:")
+                            "ESP32状态:\n" + fields.split(",").joinToString("\n") { "  $it" }
+                        } else "ESP32: $result"
+                        tvBleStatus?.text = formattedResult
+                        tvBleStatus?.visibility = View.VISIBLE
+                    } else {
+                        tvStatus?.text = "ESP32: $result"
                     }
-                    return@post
-                } else if (result.startsWith("ok:") || result.startsWith("查询ESP32")) {
-                    bleErrorCount = 0  // 正常通信，重置错误计数
-                    // V2.9.176: 将逗号分隔的字段格式化为多行显示，便于查看
-                    val formattedResult = if (result.startsWith("ok:")) {
-                        val fields = result.removePrefix("ok:")
-                        "ESP32状态:\n" + fields.split(",").joinToString("\n") { "  $it" }
-                    } else "ESP32: $result"
-                    tvBleStatus?.text = formattedResult
-                    tvBleStatus?.visibility = View.VISIBLE
-                } else {
-                    tvStatus?.text = "ESP32: $result"
+                } catch (e: Exception) {
+                    Log.e(TAG, "BLE onCommandResult error", e)
                 }
             }
         }
@@ -431,79 +486,9 @@ class FloatingService : Service() {
         
         // 重新初始化BLE
         bleManager = Esp32BleManager(this)
-        bleManager?.onStatusChanged = { connected, message ->
-            handler.post {
-                tvBle?.text = if (connected) "🔗" else "📡"
-                tvBle?.setTextColor(if (connected) 0xFF4ade80.toInt() else 0xFFBDBDBD.toInt())
-                tvStatus?.text = "BLE: $message"
-                if (connected) {
-                    _bleHeartbeatState = 1  // V1.0.35
-                    updateBleIndicator()
-                    bleManager?.startHeartbeatMonitor()  // V1.0.35
-                    tvBleStatus?.text = "查询ESP32状态..."
-                    tvBleStatus?.visibility = View.VISIBLE
-                    bleStatusPending = true
-                    handler.postDelayed({ bleManager?.sendStatus() }, 500)
-                    handler.postDelayed({
-                        if (bleStatusPending) {
-                            tvBleStatus?.text = "ESP32: status无响应"
-                            bleStatusPending = false
-                        }
-                    }, 5500)
-                } else {
-                    _bleHeartbeatState = 0  // V1.0.35
-                    updateBleIndicator()
-                    bleManager?.stopHeartbeatMonitor()  // V1.0.35
-                }
-            }
-        }
-        // V1.0.35: BLE心跳回调
-        bleManager?.onHeartbeat = { connected, heartbeatData ->
-            handler.post {
-                if (connected) {
-                    _bleHeartbeatState = 1  // 收到心跳=正常(绿)
-                } else {
-                    _bleHeartbeatState = 2  // 心跳超时(黄)
-                }
-                updateBleIndicator()
-            }
-        }
-        bleManager?.onCommandResult = { result ->
-            handler.post {
-                bleStatusPending = false  // V2.9.184: 收到响应，取消超时
-                // V3.9: ESP32断线检测 — 点击静默失败保护
-                if (result.startsWith("err:not_connected") || result.startsWith("err:no_tx")) {
-                    Log.e(TAG, "★ ESP32断线! 点击失败: $result — 尝试重连")
-                    bleErrorCount++
-                    _bleHeartbeatState = 0  // V1.0.35
-                    updateBleIndicator()
-                    updateAdviceNotification("⚠️ ESP32断线", "第${bleErrorCount}次失败，尝试重连...")
-                    updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:ESP32断线")
-                    if (bleErrorCount >= 3) {
-                        Log.e(TAG, "★ ESP32连续${bleErrorCount}次失败，暂停自动执行")
-                        stopAutoCapture()
-                        updateAdviceNotification("❌ ESP32已断开", "自动模式已暂停，请检查硬件连接后重新启动")
-                        updateBallAdvice("COLOR:FOLD|SIGNAL:ERROR|REASON:ESP32断开")
-                    } else {
-                        try { bleManager?.startScan() } catch (e: Exception) {
-                            Log.w(TAG, "重连失败", e)
-                        }
-                    }
-                    return@post
-                } else if (result.startsWith("ok:") || result.startsWith("查询ESP32")) {
-                    bleErrorCount = 0  // 正常通信，重置错误计数
-                    val formattedResult = if (result.startsWith("ok:")) {
-                        val fields = result.removePrefix("ok:")
-                        "ESP32状态:\n" + fields.split(",").joinToString("\n") { "  $it" }
-                    } else "ESP32: $result"
-                    tvBleStatus?.text = formattedResult
-                    tvBleStatus?.visibility = View.VISIBLE
-                } else {
-                    tvStatus?.text = "ESP32: $result"
-                }
-            }
-        }
-        Log.i(TAG, "reinit: all components restored")
+        setupBleCallbacks()
+
+            Log.i(TAG, "reinit: all components restored")
     }
 
     override fun onDestroy() {
@@ -873,9 +858,11 @@ class FloatingService : Service() {
             }
             
             val btns = latestButtonPositions
+            Log.d(TAG, "executeAutoTap: action=$action, availableButtons=${btns.size}")
             if (btns.isEmpty()) {
                 Log.w(TAG, "autoTap: 无按钮坐标，回退固定位置")
                 executeAutoTapFallback(action)
+                Log.d(TAG, "executeAutoTap 结果: fallback (no buttons)")
                 return
             }
             
@@ -897,13 +884,15 @@ class FloatingService : Service() {
             if (targetBtn != null) {
                 val x = (targetBtn.xPct * screenWidth).toInt().coerceIn(0, screenWidth - 1)
                 val y = (targetBtn.yPct * screenHeight).toInt().coerceIn(0, screenHeight - 1)
-                Log.d(TAG, "★ autoTap: $action → ($x, $y) btn=${targetBtn.text}")
+                Log.i(TAG, "★ executeAutoTap: $action → ($x, $y) btn="${targetBtn.text}" duration=50ms")
                 bleManager?.sendTap(x, y, 50)
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                Log.d(TAG, "executeAutoTap 结果: 成功 (坐标点击)")
             } else {
-                Log.w(TAG, "autoTap: 未匹配按钮 $action, 回退固定位置")
+                Log.w(TAG, "executeAutoTap: 未匹配按钮 $action, 回退固定位置")
                 executeAutoTapFallback(action)
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                Log.d(TAG, "executeAutoTap 结果: fallback (button not matched)")
             }
         } catch (e: Exception) {
             Log.e(TAG, "executeAutoTap error", e)
@@ -913,20 +902,23 @@ class FloatingService : Service() {
     // V3.14: 精确金额输入 — 点击输入框+逐个点数字键盘 (GG数字键盘坐标需实测)
     private fun executeExactBet(amount: Int): Boolean {
         try {
+            Log.d(TAG, "executeExactBet: amount=$amount")
             val cfg = GameModeConfig.getCoordinateConfig()
             val inputBox = cfg.betInputBox
             val numpad = cfg.numpadKeys
             val confirm = cfg.numpadConfirm
             if (inputBox.isEmpty() || numpad.isEmpty() || confirm.isEmpty()) {
-                Log.d(TAG, "精确输入未配置坐标，fallback到4档按钮")
+                Log.d(TAG, "executeExactBet: 未配置坐标(inputBox=${inputBox.isNotEmpty()}, numpad=${numpad.isNotEmpty()}, confirm=${confirm.isNotEmpty()})，fallback到4档按钮")
                 return false
             }
             val (sw, sh) = getScreenSize()
             val sx = sw.toFloat() / cfg.referenceWidth
             val sy = sh.toFloat() / cfg.referenceHeight
+            Log.d(TAG, "executeExactBet: screen=${sw}x${sh}, scaleX=$sx, scaleY=$sy, refW=${cfg.referenceWidth}")
             // 1. 点击金额输入框
             val boxX = ((inputBox[0] + inputBox[2]) / 2 * sx).toInt()
             val boxY = ((inputBox[1] + inputBox[3]) / 2 * sy).toInt()
+            Log.d(TAG, "executeExactBet step1: 点击输入框 ($boxX, $boxY)")
             bleManager?.sendTap(boxX, boxY, 50)
             Thread.sleep(250) // 等键盘弹出
             // 1.5 V2.9.370: 先清空已有输入 (消费 numpadBackspace)
@@ -946,18 +938,21 @@ class FloatingService : Service() {
             }
             // 2. 逐个点击数字键
             val digits = amount.toString()
-            for (ch in digits) {
+            Log.d(TAG, "executeExactBet step2: 输入数字 "$digits" (${digits.length}位)")
+            for ((idx, ch) in digits.withIndex()) {
                 val key = numpad[ch.toString()] ?: continue
                 val kx = (key[0] * sx).toInt()
                 val ky = (key[1] * sy).toInt()
+                Log.d(TAG, "executeExactBet step2[$idx]: 点击 '$ch' ($kx, $ky)")
                 bleManager?.sendTap(kx, ky, 40)
                 Thread.sleep(60) // 按键间隔
             }
             // 3. 点击确认
             val cx = ((confirm[0] + confirm[2]) / 2 * sx).toInt()
             val cy = ((confirm[1] + confirm[3]) / 2 * sy).toInt()
+            Log.d(TAG, "executeExactBet step3: 点击确认 ($cx, $cy)")
             bleManager?.sendTap(cx, cy, 50)
-            Log.d(TAG, "★ 精确输入完成: $amount")
+            Log.i(TAG, "★ executeExactBet 完成: $amount")
             return true
         } catch (e: Exception) {
             Log.e(TAG, "精确输入失败", e)
@@ -1512,7 +1507,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         val confidence = data.optString("confidence", "medium")
                         val reason = data.optString("reason", "")
                         val eq = data.optInt("eq", 0)
-                        Log.d(TAG, "★ autoDecision: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq")
+                        Log.d(TAG, "★ autoDecision收到决策: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq% json=${jsonData.take(200)}")
                         
                         if (!auto) {
                             // 需要人工确认（如中置信+全押）
@@ -1526,11 +1521,15 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                             updateAdviceNotification("🛑 低置信→弃牌", "$reason (eq=$eq%)")
                             updateBallAdvice("COLOR:FOLD|SIGNAL:LOW_CONF|EQ:$eq|REASON:低置信弃牌")
                             // 执行弃牌tap
+                            Log.i(TAG, "autoDecision执行: 低置信→弃牌, eq=$eq%")
                             executeAutoTap("fold", data)
+                            Log.d(TAG, "autoDecision执行完成: fold")
                         } else {
                             // 高/中置信自动执行
+                            Log.i(TAG, "autoDecision执行: $action (conf=$confidence, eq=$eq%)")
                             updateAdviceNotification("🤖 自动执行: $action", "$reason (eq=$eq%)")
                             executeAutoTap(action, data)
+                            Log.d(TAG, "autoDecision执行完成: $action")
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "autoDecision error", e)
@@ -1914,7 +1913,14 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                 else -> 0xFFFF5252.toInt()  // 红 - 未连接
             }
             shape.setStroke(stroke, color)
-        } catch (_: Exception) {}
+            // V2.9.240: 悬浮球显示RSSI信号强度（已连接时）
+            if (_bleHeartbeatState != 0 && _lastRssi != 0) {
+                val rssiText = "$_lastRssi dBm"
+                Log.d(TAG, "updateBleIndicator: state=$_bleHeartbeatState, rssi=$rssiText")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "updateBleIndicator error", e)
+        }
     }
 
         fun updateBallAdvice(advice: String) {
@@ -2531,7 +2537,9 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     holeCardsLocked = VisionApiClient.holeCardsLocked != null,
                     vlmTimeMs = tAnalyzeEnd - tAnalyzeStart,
                     vlmResult = result,
-                    totalTimeMs = System.currentTimeMillis() - _diagStartTime,
+                    val recogTotalMs = System.currentTimeMillis() - _diagStartTime
+                    Log.i(TAG, "⏱ 本次识别总耗时: ${recogTotalMs}ms (screenshot->result)")
+                    totalTimeMs = recogTotalMs,
                     hasError = result == null,
                     errorMessage = if (result == null) VisionApiClient.lastError else null,
                     strategySent = result != null && result.isPokerTable,
