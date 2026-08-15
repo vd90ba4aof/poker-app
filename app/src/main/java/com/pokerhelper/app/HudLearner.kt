@@ -124,6 +124,49 @@ object HudLearner {
         }
     }
 
+    // ============ V3.3: 牌局结果追踪 (EV闭环) ============
+    /**
+     * 记录一手牌的结果（赢/输）
+     * @param won 是否赢下底池
+     * @param potSize 底池大小(筹码单位)
+     * @param level 级别
+     */
+    @Synchronized
+    fun recordResult(won: Boolean, potSize: Int, level: String) {
+        val p = prefs ?: return
+        try {
+            val winsKey = KEY_PREFIX + level + "_wins"
+            val lossesKey = KEY_PREFIX + level + "_losses"
+            val profitKey = KEY_PREFIX + level + "_profit"
+            if (won) {
+                p.edit().putInt(winsKey, p.getInt(winsKey, 0) + 1).apply()
+                p.edit().putLong(profitKey, p.getLong(profitKey, 0) + potSize).apply()
+            } else {
+                p.edit().putInt(lossesKey, p.getInt(lossesKey, 0) + 1).apply()
+                p.edit().putLong(profitKey, p.getLong(profitKey, 0) - potSize).apply()
+            }
+            val wins = p.getInt(winsKey, 0)
+            val losses = p.getInt(lossesKey, 0)
+            val profit = p.getLong(profitKey, 0)
+            Log.i(TAG, "📊 牌局结果: ${if(won)"赢" else "输"} $potSize | 总${wins}W/${losses}L | 净盈亏$profit")
+        } catch (e: Exception) {
+            Log.e(TAG, "结果记录失败", e)
+        }
+    }
+
+    /**
+     * 获取当前级别的战绩统计
+     * @return Triple(胜场, 负场, 净盈亏)
+     */
+    fun getSessionStats(level: String): Triple<Int, Int, Long> {
+        val p = prefs ?: return Triple(0, 0, 0L)
+        return Triple(
+            p.getInt(KEY_PREFIX + level + "_wins", 0),
+            p.getInt(KEY_PREFIX + level + "_losses", 0),
+            p.getLong(KEY_PREFIX + level + "_profit", 0)
+        )
+    }
+
     fun getOpponentProfile(level: String): OpponentProfile {
         val p = prefs ?: return getBaselineProfile(level)
         val handCount = getHandCount(level)

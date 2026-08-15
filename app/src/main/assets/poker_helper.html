@@ -4094,6 +4094,7 @@ var HandStateMachine=(function(){
     // V2.9.161: SPR区频率调整
     var _sprZone=SPRZone.getZone(spr);
     var _sprAdj={cbet:1,fcb:1,bluff:1};
+    try{
     if(_sprZone==='ultra_short'){
       _sprAdj.cbet=1.3; _sprAdj.fcb=0.5; _sprAdj.bluff=0;
     }else if(_sprZone==='short'){
@@ -4101,6 +4102,9 @@ var HandStateMachine=(function(){
     }else if(_sprZone==='deep'){
       _sprAdj.cbet=0.9; _sprAdj.fcb=1.1; _sprAdj.bluff=1.2;
     }
+    }catch(_sprE){console.log('[V3.35] sprAdj fallback:',_sprE.message);}
+    // V3.35: 安全引用——防止下游函数访问undefined属性导致ReferenceError
+    var _sprAdjSafe={cbet:_sprAdj.cbet||1,fcb:_sprAdj.fcb||1,bluff:_sprAdj.bluff||0};
 
     var btKey=_bt2key(bTexture);
     var hcKey=_hc2key(hClass);
@@ -4229,7 +4233,7 @@ var HandStateMachine=(function(){
           }
         }
         // V2.9.161: 统一pipeline替代分散的3bet/Multiway/EA/Range/SPR调整
-        cbFreq=_applyPipeline(cbFreq,'bet',hcKey,oppType,street,'cbet',_sprAdj,_is3betPot,_isMultiway);
+        cbFreq=_applyPipeline(cbFreq,'bet',hcKey,oppType,street,'cbet',_sprAdjSafe,_is3betPot,_isMultiway);
 
 
 
@@ -4279,7 +4283,7 @@ var HandStateMachine=(function(){
           if(oppCB>.7)crFreq=Math.min(.3,crFreq*1.5);
         }
 
-crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPot,_isMultiway);        if(Math.random()<crFreq){
+crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdjSafe,_is3betPot,_isMultiway);        if(Math.random()<crFreq){
           var crSz=Math.round(bet*crSzMult);
           crSz=Math.min(crSz,stk);
           var exploitCR=applyExploit(eq,'raise',oppType,{bet:bet,pot:pot});
@@ -4296,7 +4300,7 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
 
     // ====== V2.9.161: OOP Donk场景 ======
     if(scene==='check'&&!ip&&!didPFR&&(street==='flop'||street==='turn')){
-      var donkR=_donkDecision(k,hcKey,btKey,ip,pot,oppType,_sprAdj,_is3betPot,_isMultiway,street);
+      var donkR=_donkDecision(k,hcKey,btKey,ip,pot,oppType,_sprAdjSafe,_is3betPot,_isMultiway,street);
       if(donkR){
         donkR.eq=eq;donkR.hClass=hClass;donkR.bTexture=bTexture;
         console.log('[SE160] Donk: '+donkR.a+' bt='+btKey);
@@ -4312,7 +4316,7 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
       // V2.9.162: 转牌face场景完全枚举EV前置层 - 失败fallback到_facingCBet
       if(street==='turn'){
         try{
-          var _tEvFR=_turnFullEnumerateEV(k,hcKey,didPFR,'face',cbetSz,pot,btKey,ip,_sprAdj,_is3betPot,_isMultiway,eq);
+          var _tEvFR=_turnFullEnumerateEV(k,hcKey,didPFR,'face',cbetSz,pot,btKey,ip,_sprAdjSafe,_is3betPot,_isMultiway,eq);
           if(_tEvFR){
             _tEvFR.eq=eq;
             var _tEvFExploit=applyExploit(eq,_tEvFR.a,oppType,{bet:cbetSz,pot:pot});
@@ -4380,7 +4384,7 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
     if(_wasHeroPFR&&scene==='check'&&street==='turn'){
       // V2.9.162: 转牌完全枚举EV前置层 (经验频率→数学最优) - 失败fallback到_turnBarrel查表
       try{
-        var _tEvR=_turnFullEnumerateEV(k,hcKey,didPFR,'check',0,pot,btKey,ip,_sprAdj,_is3betPot,_isMultiway,eq);
+        var _tEvR=_turnFullEnumerateEV(k,hcKey,didPFR,'check',0,pot,btKey,ip,_sprAdjSafe,_is3betPot,_isMultiway,eq);
         if(_tEvR){
           _tEvR.eq=eq;
           var _tEvExploit=applyExploit(eq,_tEvR.a,oppType,{bet:0,pot:pot});
@@ -4391,7 +4395,7 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
         }
       }catch(e){console.log('[SE162] TurnEV layer err: '+e.message);}
       var tType=_classifyTurnCard(hole,comm);
-      var tbR=_turnBarrel(k,hcKey,btKey,tType,bet,pot,_didFlopCBet,ip,oppType,_sprAdj,_is3betPot,_isMultiway);
+      var tbR=_turnBarrel(k,hcKey,btKey,tType,bet,pot,_didFlopCBet,ip,oppType,_sprAdjSafe,_is3betPot,_isMultiway);
       if(tbR){
         tbR.eq=eq;
         var tbExploit=applyExploit(eq,tbR.a,oppType,{bet:0,pot:pot});
@@ -4414,7 +4418,7 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
       var rivBet=bet||0;
       // V2.9.162: 完全枚举EV前置层 (经验频率→数学最优) - 失败fallback到_RIV查表
       try{
-        var _evR=_riverFullEnumerateEV(k,hcKey,didPFR,rivScene,rivBet,pot,btKey,ip,_sprAdj,_is3betPot,_isMultiway,eq);
+        var _evR=_riverFullEnumerateEV(k,hcKey,didPFR,rivScene,rivBet,pot,btKey,ip,_sprAdjSafe,_is3betPot,_isMultiway,eq);
         if(_evR){
           _evR.eq=eq;
           var _evExploit=applyExploit(eq,_evR.a,oppType,{bet:rivBet,pot:pot});
@@ -4424,7 +4428,7 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
           return _evR;
         }
       }catch(e){console.log('[SE162] RiverEV layer err: '+e.message);}
-      var rivR=_riverDecision(k,hcKey,didPFR,rivScene,rivBet,pot,btKey,ip,_sprAdj,_is3betPot,_isMultiway);
+      var rivR=_riverDecision(k,hcKey,didPFR,rivScene,rivBet,pot,btKey,ip,_sprAdjSafe,_is3betPot,_isMultiway);
       if(rivR){
         rivR.eq=eq;
         var rivExploit=applyExploit(eq,rivR.a,oppType,{bet:rivBet,pot:pot});
@@ -4824,7 +4828,7 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
     var _fcbEA=ExploitAdjuster(1,'facing_cbet',hcKey,oppType,street||'flop','facing_cbet');
     if(_fcbEA.label){adjR=adjR*_fcbEA.freq;adjC=adjC+(1-_fcbEA.freq)*adjC;adjF=1-adjR-adjC;if(adjF<0)adjF=0;}
     // V2.9.161: SPR区面CBet调整
-    adjF=adjF*_sprAdj.fcb;
+    adjF=adjF*_sprAdjSafe.fcb;
     // 频率随机决策
     var r=Math.random();
     var spr=calcSPR();
@@ -4865,7 +4869,7 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
     var table=_tbTable[btKey+'_'+turnType];
     if(!table||!table[hcKey])return null;
     var e=table[hcKey];
-    var barrelFreq=e[0];barrelFreq=_applyPipeline(barrelFreq,'bet',hcKey,_oppType||oppType,'turn','barrel',_sprAdj2||_sprAdj,_is3bP2!==undefined?_is3bP2:_is3betPot,_isMW2!==undefined?_isMW2:_isMultiway);
+    var barrelFreq=e[0];barrelFreq=_applyPipeline(barrelFreq,'bet',hcKey,_oppType||oppType,'turn','barrel',_sprAdj2||_sprAdjSafe,_is3bP2!==undefined?_is3bP2:_is3betPot,_isMW2!==undefined?_isMW2:_isMultiway);
     // V2.9.161: Flop未CBet时大幅降低barrel频率
     if(didFlopCBet===false)barrelFreq=barrelFreq*0.3;
     var spr=calcSPR();
@@ -5103,14 +5107,14 @@ crFreq=_applyPipeline(crFreq,'raise',hcKey,oppType,'flop','cr',_sprAdj,_is3betPo
     var e=table[hcKey];// V2.9.161: River SPR/3bet/Multiway调整
         var _rivAdj=1;
         if(e.a==='bluff'){
-          if(_sprAdj.bluff<0.5)_rivAdj=0; // 短码不诈唬
-          else _rivAdj=_sprAdj.bluff;
+          if(_sprAdjSafe.bluff<0.5)_rivAdj=0; // 短码不诈唬
+          else _rivAdj=_sprAdjSafe.bluff;
           if(_is3betPot)_rivAdj*=0.5; // 3bet底池诈唬减半
           if(_isMultiway)_rivAdj*=0.3; // 多人池几乎不诈唬
         }
         if(e.a==='bet'&&hcKey>=9&&hcKey<=11){
           // 听牌未成: SPR调整
-          _rivAdj*=_sprAdj.cbet;
+          _rivAdj*=_sprAdjSafe.cbet;
           if(_is3betPot)_rivAdj*=0.7;
         }
         if(_rivAdj<0.3&&e.a==='bluff'){e={a:'check',s:0};} // 调整后诈唬概率太低→check

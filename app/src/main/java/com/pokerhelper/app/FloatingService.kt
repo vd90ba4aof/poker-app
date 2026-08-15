@@ -198,6 +198,7 @@ class FloatingService : Service() {
     // V2.9.173: BLE诊断信息独立显示区，不被tap结果覆盖
     private var tvBleStatus: TextView? = null
     private var bleStatusPending = false  // V2.9.184: 用标志位替代字符串比较
+    private var bleErrorCount = 0  // V3.9: ESP32连续失败计数
 
     // V2.9.38: 隐身模式通知广播接收器
     private val notificationReceiver = object : BroadcastReceiver() {
@@ -339,16 +340,32 @@ class FloatingService : Service() {
         bleManager?.onCommandResult = { result ->
             handler.post {
                 bleStatusPending = false  // V2.9.184: 收到响应，取消超时
-                // V2.9.176: 放宽匹配——任何ok:开头或err:开头的都可能是status结果
-                // status回复格式: ok:ver=...,heap=...,usb=ok/no,hid=ok/no,...
-                if (result.startsWith("ok:") || result.startsWith("查询ESP32")) {
+                // V3.9: ESP32断线检测 — 点击静默失败保护
+                if (result.startsWith("err:not_connected") || result.startsWith("err:no_tx")) {
+                    Log.e(TAG, "★ ESP32断线! 点击失败: $result — 尝试重连")
+                    bleErrorCount++
+                    updateAdviceNotification("⚠️ ESP32断线", "第${bleErrorCount}次失败，尝试重连...")
+                    updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:ESP32断线")
+                    if (bleErrorCount >= 3) {
+                        // 连续3次失败 → 暂停自动模式，避免瞎等Shot Clock
+                        Log.e(TAG, "★ ESP32连续${bleErrorCount}次失败，暂停自动执行")
+                        stopAutoCapture()
+                        updateAdviceNotification("❌ ESP32已断开", "自动模式已暂停，请检查硬件连接后重新启动")
+                        updateBallAdvice("COLOR:FOLD|SIGNAL:ERROR|REASON:ESP32断开")
+                    } else {
+                        // 尝试重连
+                        try { bleManager?.startScan() } catch (e: Exception) {
+                            Log.w(TAG, "重连失败", e)
+                        }
+                    }
+                    return@post
+                } else if (result.startsWith("ok:") || result.startsWith("查询ESP32")) {
+                    bleErrorCount = 0  // 正常通信，重置错误计数
                     // V2.9.176: 将逗号分隔的字段格式化为多行显示，便于查看
                     val formattedResult = if (result.startsWith("ok:")) {
                         val fields = result.removePrefix("ok:")
                         "ESP32状态:\n" + fields.split(",").joinToString("\n") { "  $it" }
-                    } else {
-                        "ESP32: $result"
-                    }
+                    } else "ESP32: $result"
                     tvBleStatus?.text = formattedResult
                     tvBleStatus?.visibility = View.VISIBLE
                 } else {
@@ -414,7 +431,25 @@ class FloatingService : Service() {
         bleManager?.onCommandResult = { result ->
             handler.post {
                 bleStatusPending = false  // V2.9.184: 收到响应，取消超时
-                if (result.startsWith("ok:") || result.startsWith("查询ESP32")) {
+                // V3.9: ESP32断线检测 — 点击静默失败保护
+                if (result.startsWith("err:not_connected") || result.startsWith("err:no_tx")) {
+                    Log.e(TAG, "★ ESP32断线! 点击失败: $result — 尝试重连")
+                    bleErrorCount++
+                    updateAdviceNotification("⚠️ ESP32断线", "第${bleErrorCount}次失败，尝试重连...")
+                    updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:ESP32断线")
+                    if (bleErrorCount >= 3) {
+                        Log.e(TAG, "★ ESP32连续${bleErrorCount}次失败，暂停自动执行")
+                        stopAutoCapture()
+                        updateAdviceNotification("❌ ESP32已断开", "自动模式已暂停，请检查硬件连接后重新启动")
+                        updateBallAdvice("COLOR:FOLD|SIGNAL:ERROR|REASON:ESP32断开")
+                    } else {
+                        try { bleManager?.startScan() } catch (e: Exception) {
+                            Log.w(TAG, "重连失败", e)
+                        }
+                    }
+                    return@post
+                } else if (result.startsWith("ok:") || result.startsWith("查询ESP32")) {
+                    bleErrorCount = 0  // 正常通信，重置错误计数
                     val formattedResult = if (result.startsWith("ok:")) {
                         val fields = result.removePrefix("ok:")
                         "ESP32状态:\n" + fields.split(",").joinToString("\n") { "  $it" }
@@ -464,6 +499,9 @@ class FloatingService : Service() {
     }
 
     private fun initSpeechRecognizer() {
+        // V3.17: 先释放旧的识别器，防止reinit时重复create泄漏
+        try { speechRecognizer?.destroy() } catch (e: Exception) {}
+        speechRecognizer = null
         if (SpeechRecognizer.isRecognitionAvailable(this)) {
             speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
             speechRecognizer?.setRecognitionListener(object : RecognitionListener {
@@ -2304,10 +2342,47 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     handler.postDelayed(timeoutRunnable, 8000)
                     handler.post {
                         val taggedJson=if(frameTag.isNotEmpty()) resultJson.dropLast(1)+frameTag+"}" else resultJson
+                        // V3.3: 摊牌结果检测 — 记录赢/输到HudLearner (EV闭环)
+                        try {
+                            if (result.showdownCards.isNotEmpty()) {
+                                val level = when {
+                                    result.blindBB <= 10 -> "micro_nl2"
+                                    result.blindBB <= 25 -> "low_nl10"
+                                    else -> "mid_nl50"
+                                }
+                                val heroWon = result.showdownCards.none { it.won }
+                                HudLearner.recordResult(heroWon, result.potSize, level)
+                                Log.d(TAG, "★ 摊牌记录: hero${if(heroWon) "赢" else "输"} 底池${result.potSize} (亮牌${result.showdownCards.size}个对手)")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "摊牌结果记录失败", e)
+                        }
+                        // V3.1: HudLearner桥接 — 把自积累记忆注入JS的applyHudData
+                        try {
+                            val level = when {
+                                result.blindBB <= 10 -> "micro_nl2"
+                                result.blindBB <= 25 -> "low_nl10"
+                                else -> "mid_nl50"
+                            }
+                            val profile = HudLearner.getOpponentProfile(level)
+                            if (profile.totalHandsObserved >= 200 && profile.type == "self") {
+                                val hudJson = "[" + (1..6).joinToString(",") { s ->
+                                    "{seat:$s,vpip:${profile.vpip},pfr:${profile.pfr},threeBet:${profile.threeBet}}"
+                                } + "]"
+                                executeJs("if(typeof PostValidation!=='undefined')PostValidation.applyHudData($hudJson);")
+                                Log.d(TAG, "★ HudLearner桥接: ${profile.totalHandsObserved}手记忆注入策略引擎 (VPIP=${String.format("%.1f", profile.vpip*100)}%)")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "HudLearner桥接失败", e)
+                        }
                         // V2.9.113: 先检测WebView是否就绪，再调onVisionResult
                         executeJs("(function(){try{if(typeof onVisionResult==='function'){onVisionResult($taggedJson);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.confirmVisionReceived){AndroidBridge.confirmVisionReceived()}}else{console.log('[V2.9.125] onVisionResult不存在,尝试重载HTML');if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:策略引擎未加载');}setTimeout(function(){location.reload();},1000);}}catch(e){console.log('[V2.9.125] onVisionResult异常:'+e.message);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:JS异常:'+e.message.substring(0,30));}}})()")
                         tvAction?.alpha = 1.0f
                         Log.d(TAG, "★ onVisionResult已调用")
+                        // V3.43: 关键修复 — API结果已发给JS，无论JS是否回调都重置isVisionInProgress
+                        // (之前依赖JS的autoCaptureVisionComplete回调,但HTML只在verify帧调它→普通帧永远卡死)
+                        isVisionInProgress = false
+                        autoConsecutiveErrors = 0
                         // V2.9.70: 正常识别→停止闪烁
                         isBlinkingError = false
                         updateAutoCaptureInterval(result.street, result.totalPlayers)  // V2.9.215: 自适应截屏间隔(按人数+street)
@@ -2350,6 +2425,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     } // V2.9.111: end of NO_TABLE else (正常牌桌才执行策略)
                 } else {
                     handler.post {
+                        // V3.43: API失败也重置isVisionInProgress（防卡死）
+                        isVisionInProgress = false
                         tvAction?.alpha = 1.0f
                         tvStatus?.text = "❌ API: ${VisionApiClient.lastError.take(30)}"
                         executeJs("document.body.classList.remove('api-processing')")
@@ -2365,6 +2442,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                 }
             } catch (e: Exception) {
                 handler.post {
+                    // V3.43: 异常也重置isVisionInProgress（防卡死）
+                    isVisionInProgress = false
                     tvAction?.alpha = 1.0f
                     tvStatus?.text = "❌ API错误"
                     executeJs("document.body.classList.remove('api-processing')")
