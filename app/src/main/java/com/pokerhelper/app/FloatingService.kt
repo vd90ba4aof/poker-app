@@ -199,6 +199,8 @@ class FloatingService : Service() {
     private var tvBleStatus: TextView? = null
     private var bleStatusPending = false  // V2.9.184: 用标志位替代字符串比较
     private var bleErrorCount = 0  // V3.9: ESP32连续失败计数
+    // V1.0.35: BLE心跳状态指示 (0=未连接/红, 1=已连接心跳正常/绿, 2=已连接心跳超时/黄)
+    @Volatile private var _bleHeartbeatState = 0  // 0=disconnected, 1=connected-ok, 2=timeout
 
     // V2.9.38: 隐身模式通知广播接收器
     private val notificationReceiver = object : BroadcastReceiver() {
@@ -323,6 +325,9 @@ class FloatingService : Service() {
                 tvStatus?.text = "BLE: $message"
                 // V2.9.173: 连接成功后自动发送status查询USB/HID状态
                 if (connected) {
+                    _bleHeartbeatState = 1  // V1.0.35: 已连接
+                    updateBleIndicator()
+                    bleManager?.startHeartbeatMonitor()  // V1.0.35: 启动心跳监控
                     tvBleStatus?.text = "查询ESP32状态..."
                     tvBleStatus?.visibility = View.VISIBLE
                     bleStatusPending = true  // V2.9.184
@@ -334,7 +339,22 @@ class FloatingService : Service() {
                             bleStatusPending = false
                         }
                     }, 5500)
+                } else {
+                    _bleHeartbeatState = 0  // V1.0.35: 断开
+                    updateBleIndicator()
+                    bleManager?.stopHeartbeatMonitor()  // V1.0.35: 停止心跳
                 }
+            }
+        }
+        // V1.0.35: BLE心跳回调
+        bleManager?.onHeartbeat = { connected, heartbeatData ->
+            handler.post {
+                if (connected) {
+                    _bleHeartbeatState = 1  // 收到心跳=正常(绿)
+                } else {
+                    _bleHeartbeatState = 2  // 心跳超时(黄)
+                }
+                updateBleIndicator()
             }
         }
         bleManager?.onCommandResult = { result ->
@@ -344,6 +364,8 @@ class FloatingService : Service() {
                 if (result.startsWith("err:not_connected") || result.startsWith("err:no_tx")) {
                     Log.e(TAG, "★ ESP32断线! 点击失败: $result — 尝试重连")
                     bleErrorCount++
+                    _bleHeartbeatState = 0  // V1.0.35
+                    updateBleIndicator()
                     updateAdviceNotification("⚠️ ESP32断线", "第${bleErrorCount}次失败，尝试重连...")
                     updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:ESP32断线")
                     if (bleErrorCount >= 3) {
@@ -415,6 +437,9 @@ class FloatingService : Service() {
                 tvBle?.setTextColor(if (connected) 0xFF4ade80.toInt() else 0xFFBDBDBD.toInt())
                 tvStatus?.text = "BLE: $message"
                 if (connected) {
+                    _bleHeartbeatState = 1  // V1.0.35
+                    updateBleIndicator()
+                    bleManager?.startHeartbeatMonitor()  // V1.0.35
                     tvBleStatus?.text = "查询ESP32状态..."
                     tvBleStatus?.visibility = View.VISIBLE
                     bleStatusPending = true
@@ -425,7 +450,22 @@ class FloatingService : Service() {
                             bleStatusPending = false
                         }
                     }, 5500)
+                } else {
+                    _bleHeartbeatState = 0  // V1.0.35
+                    updateBleIndicator()
+                    bleManager?.stopHeartbeatMonitor()  // V1.0.35
                 }
+            }
+        }
+        // V1.0.35: BLE心跳回调
+        bleManager?.onHeartbeat = { connected, heartbeatData ->
+            handler.post {
+                if (connected) {
+                    _bleHeartbeatState = 1  // 收到心跳=正常(绿)
+                } else {
+                    _bleHeartbeatState = 2  // 心跳超时(黄)
+                }
+                updateBleIndicator()
             }
         }
         bleManager?.onCommandResult = { result ->
@@ -435,6 +475,8 @@ class FloatingService : Service() {
                 if (result.startsWith("err:not_connected") || result.startsWith("err:no_tx")) {
                     Log.e(TAG, "★ ESP32断线! 点击失败: $result — 尝试重连")
                     bleErrorCount++
+                    _bleHeartbeatState = 0  // V1.0.35
+                    updateBleIndicator()
                     updateAdviceNotification("⚠️ ESP32断线", "第${bleErrorCount}次失败，尝试重连...")
                     updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:ESP32断线")
                     if (bleErrorCount >= 3) {
@@ -478,6 +520,7 @@ class FloatingService : Service() {
         cardRecognizer = null
 
         // V2.9.112: 断开BLE连接
+        try { bleManager?.stopHeartbeatMonitor() } catch (_: Exception) {}  // V1.0.35
         bleManager?.disconnect()
         bleManager = null
         removeFloatingBall()
@@ -707,8 +750,8 @@ class FloatingService : Service() {
             }
         }
     }
-    private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; isVisionInProgress=false; autoCaptureInterval=4000L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture() }
-    private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; handStartTime=0; isVisionInProgress=false; executeJs("if(typeof disableAutoExec==='function')disableAutoExec()") }
+    private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; isVisionInProgress=false; autoCaptureInterval=4000L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture(); try { bleManager?.startHeartbeatMonitor() } catch (_: Exception) {} }  // V1.0.35: 同步启动心跳
+    private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; handStartTime=0; isVisionInProgress=false; executeJs("if(typeof disableAutoExec==='function')disableAutoExec()"); try { bleManager?.stopHeartbeatMonitor() } catch (_: Exception) {} }  // V1.0.35: 同步停止心跳
     private fun scheduleNextAutoCapture() {
         if(!autoCaptureEnabled)return; autoCaptureRunnable?.let{handler.removeCallbacks(it)}
         val r=Runnable{if(!autoCaptureEnabled)return@Runnable;if(isVisionInProgress){scheduleNextAutoCapture();return@Runnable};val pm=getSystemService(Context.POWER_SERVICE)as PowerManager;if(!pm.isScreenOn){scheduleNextAutoCapture();return@Runnable};autoCaptureTrigger()}
@@ -1858,6 +1901,22 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             Log.e(TAG, "renderCrashBall失败: " + e.message)
         }
     }
+    // V1.0.35: 根据BLE心跳状态更新悬浮球边框颜色指示
+    private fun updateBleIndicator() {
+        try {
+            val ball = floatingBall ?: return
+            val shape = ball.background as? GradientDrawable ?: return
+            val density = resources.displayMetrics.density
+            val stroke = (3 * density).toInt()
+            val color = when (_bleHeartbeatState) {
+                1 -> 0xFF4ade80.toInt()  // 绿 - 已连接+心跳正常
+                2 -> 0xFFFFEB3B.toInt()  // 黄 - 已连接+心跳超时
+                else -> 0xFFFF5252.toInt()  // 红 - 未连接
+            }
+            shape.setStroke(stroke, color)
+        } catch (_: Exception) {}
+    }
+
         fun updateBallAdvice(advice: String) {
         Log.d(TAG, "updateBallAdvice: advice=$advice, ball=${if(floatingBall!=null)"存在" else "null"}")
         // V2.9.155: 崩溃态最高优先级——忽略任何普通 advice, 强制显示「崩」
@@ -1951,6 +2010,15 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     startBallSignal(0)
                 }
             }
+            // V1.0.35: 覆盖边框颜色为BLE心跳状态色（绿=正常/黄=超时/红=断开）
+            try {
+                val bleColor = when (_bleHeartbeatState) {
+                    1 -> 0xFF4ade80.toInt()  // 绿
+                    2 -> 0xFFFFEB3B.toInt()  // 黄
+                    else -> 0xFFFF5252.toInt()  // 红
+                }
+                shape.setStroke(stroke, bleColor)
+            } catch (_: Exception) {}
             // V2.9.63: 信号闪烁
             when {
                 advice.contains("SIGNAL:COUNTER") -> startBallSignal(3)   // 快闪: 反剥削

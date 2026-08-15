@@ -1,7 +1,15 @@
 /**
  * ============================================================================
- * 青云扑克 ESP32-S3 - BLE + USB HID 固件 (v1.0.34)
+ * 青云扑克 ESP32-S3 - BLE + USB HID 固件 (v1.0.35)
  * ============================================================================
+ *
+ * v1.0.35：实战级BLE连接监控
+ *   - BLE主动心跳：每5秒推送hb通知到手机（含heap/hid/usb状态）
+ *   - 断连计数+防护：记录BLE断连次数和最近断连时间
+ *   - ping增强：返回心跳计数、断连计数、运行时间
+ *   - 新命令diag：全面诊断（ver/heap/usb/hid/ble/hb/dc/uptime/fails）
+ *   - status增强：末尾追加dc/rssi字段（向后兼容）
+ *   - loop delay从3s降到100ms，心跳通过时间判断精确控制
  *
  * v1.0.34：点击随机抖动，降低行为检测风险
  *   - tap()坐标±5px随机偏移，时长±20ms随机变化
@@ -87,7 +95,7 @@
 // ============================================================================
 // 常量配置
 // ============================================================================
-#define FW_VERSION "v1.0.34"
+#define FW_VERSION "v1.0.35"
 
 // BLE设备名
 #define BLE_DEVICE_NAME "QingYun-ESP32"
@@ -381,6 +389,15 @@ static void runHidSelfTest() {
 static BLECharacteristic* g_pTxChar = nullptr;
 static bool g_bleConnected = false;
 
+// v1.0.35: BLE主动心跳 + 断连监控
+static unsigned long g_lastHeartbeat  = 0;
+static uint32_t      g_heartbeatCount = 0;
+#define HEARTBEAT_INTERVAL 5000  // 5秒
+
+static uint32_t      g_disconnectCount  = 0;
+static unsigned long g_lastDisconnect   = 0;
+static unsigned long g_lastConnectTime  = 0;
+
 // BLE命令队列（回调中接收，loop中处理，避免在回调中做耗时操作）
 static volatile bool g_hasNewCmd = false;
 static String g_pendingCmd = "";
@@ -389,12 +406,15 @@ static String g_pendingCmd = "";
 class MyServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) override {
         g_bleConnected = true;
+        g_lastConnectTime = millis();
         qlog("[BLE] Client connected!");
     }
 
     void onDisconnect(BLEServer* pServer) override {
         g_bleConnected = false;
-        qlog("[BLE] Client disconnected - restarting advertising");
+        g_disconnectCount++;
+        g_lastDisconnect = millis();
+        qlogf("[BLE] Client disconnected (dc=%lu) - restarting advertising", g_disconnectCount);
         // 重新开始广播
         pServer->startAdvertising();
     }
@@ -464,9 +484,11 @@ static void processCommand(const String& cmd) {
         // V1.0.28: (bool)USB 在arduino-esp32中 = _started && tinyusb_device_mounted（真正被主机枚举）
         bool usbMounted = (bool)USB;
         bool hidReady = touchpad.ready();
+        // v1.0.35: RSSI（ESP32 BLE库不直接提供RSSI，-1表示已连接但无法获取具体值）
+        int rssi = g_bleConnected ? -1 : 0;
         char buf[512];
         snprintf(buf, sizeof(buf),
-            "ok:ver=%s,heap=%u,psram=%u,usb=%s,hid=%s,ever=%s,fails=%d,reason=%s,ble=connected,uptime=%lus,mnt=%d,st=%s,st_down=%s,st_up=%s",
+            "ok:ver=%s,heap=%u,psram=%u,usb=%s,hid=%s,ever=%s,fails=%d,reason=%s,ble=connected,uptime=%lus,mnt=%d,st=%s,st_down=%s,st_up=%s,dc=%lu,rssi=%d",
             FW_VERSION,
             ESP.getFreeHeap(),
             (unsigned)ESP.getFreePsram(),
@@ -479,7 +501,9 @@ static void processCommand(const String& cmd) {
             usbMounted ? 1 : 0,
             g_selftestDone ? g_selftestResult.c_str() : "waiting",
             g_selftestDown ? "ok" : "no",
-            g_selftestUp ? "ok" : "no");
+            g_selftestUp ? "ok" : "no",
+            g_disconnectCount,
+            rssi);
         bleReply(buf);
 
     } else if (cmd == "log") {
@@ -509,7 +533,24 @@ static void processCommand(const String& cmd) {
         }
 
     } else if (cmd == "ping") {
-        bleReply("pong");
+        char pongBuf[128];
+        snprintf(pongBuf, sizeof(pongBuf), "pong:hb=%lu,dc=%lu,uptime=%lus",
+                 g_heartbeatCount, g_disconnectCount, (unsigned long)(millis() / 1000));
+        bleReply(pongBuf);
+
+    } else if (cmd == "diag") {
+        // v1.0.35: 全面诊断
+        char diagBuf[256];
+        snprintf(diagBuf, sizeof(diagBuf),
+            "ok:ver=%s,heap=%u,usb=%s,hid=%s,ble=%s,hb=%lu,dc=%lu,uptime=%lus,fails=%d",
+            FW_VERSION, ESP.getFreeHeap(),
+            (bool)USB ? "ok" : "no",
+            touchpad.ready() ? "ok" : "no",
+            g_bleConnected ? "conn" : "disc",
+            g_heartbeatCount, g_disconnectCount,
+            (unsigned long)(millis() / 1000),
+            touchpad.hidFailCount());
+        bleReply(diagBuf);
 
     } else if (cmd == "selftest") {
         runHidSelfTest();
@@ -523,7 +564,7 @@ static void processCommand(const String& cmd) {
         bleReply(stBuf);
 
     } else {
-        bleReply("err:unknown_cmd. cmds: tap:x,y,ms | status | log | selftest | ping");
+        bleReply("err:unknown_cmd. cmds: tap:x,y,ms | status | log | selftest | ping | diag");
     }
 }
 
@@ -666,7 +707,7 @@ void setup() {
     qlog("==========================================");
     qlog("  Setup COMPLETE. Entering loop...");
     qlogf("  BLE: '%s' | NUS Service active", BLE_DEVICE_NAME);
-    qlog("  >>> Commands: tap:x,y,ms | status | log | ping <<<");
+    qlog("  >>> Commands: tap:x,y,ms | status | log | ping | diag <<<");
     qlogf("  USB: %s | HID: %s",
           ((bool)USB) ? "MOUNTED" : "NOT MOUNTED",
           touchpad.ready() ? "READY" : "NOT READY");
@@ -704,8 +745,8 @@ void loop() {
         }
     }
 
-    // 心跳日志（每10秒一次，3s × ~3 = ~9s）
-    if (hbCounter % 3 == 0) {
+    // 心跳日志（每1秒一次，100ms × 10 = 1s）
+    if (hbCounter % 10 == 0) {
         qlogf("[%s] HB #%d | Heap: %u | USB: %s | HID: %s | BLE: %s",
               FW_VERSION, hbCounter,
               ESP.getFreeHeap(),
@@ -714,5 +755,18 @@ void loop() {
               g_bleConnected ? "CONN" : "DISC");
     }
 
-    delay(3000);
+    // v1.0.35: BLE主动心跳 - 每5秒推送通知到手机
+    if (g_bleConnected && (millis() - g_lastHeartbeat >= HEARTBEAT_INTERVAL)) {
+        g_lastHeartbeat = millis();
+        g_heartbeatCount++;
+        char hb[128];
+        snprintf(hb, sizeof(hb), "hb:%lu,heap=%u,hid=%s,usb=%s",
+                 g_heartbeatCount,
+                 ESP.getFreeHeap(),
+                 touchpad.ready() ? "ok" : "no",
+                 (bool)USB ? "ok" : "no");
+        bleReply(hb);
+    }
+
+    delay(100);  // v1.0.35: 从3000ms降到100ms，心跳通过时间判断精确控制间隔
 }

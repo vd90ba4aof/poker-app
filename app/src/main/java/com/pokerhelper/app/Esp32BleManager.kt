@@ -63,9 +63,25 @@ class Esp32BleManager(private val context: Context) {
             val msg = bleRxBuffer.toString()
             bleRxBuffer.clear()
             Log.d(TAG, "BLE flush complete msg(${msg.length}): $msg")
+            // V1.0.35: pong回复时重置心跳计数
+            try {
+                if (msg.startsWith("pong")) {
+                    missedHeartbeats = 0
+                    onHeartbeat?.invoke(true, msg)
+                    Log.d(TAG, "Heartbeat pong received, missed reset to 0")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "pong handling error", e)
+            }
             onCommandResult?.invoke(msg)
         }
     }
+
+    // V1.0.35: BLE心跳监控
+    var onHeartbeat: ((connected: Boolean, heartbeatData: String) -> Unit)? = null
+    private var heartbeatHandler: Handler? = null
+    private var heartbeatRunnable: Runnable? = null
+    private var missedHeartbeats = 0
 
     // V2.9.171: 运行时权限检查
     private fun hasBlePermission(perm: String): Boolean {
@@ -179,6 +195,7 @@ class Esp32BleManager(private val context: Context) {
     // 断开连接
     fun disconnect() {
         try {
+            stopHeartbeatMonitor()  // V1.0.35: 停止心跳监控
             autoReconnectEnabled = false  // V2.9.183: 主动断开时不自动重连
             reconnectRunnable?.let { handler.removeCallbacks(it) }
             reconnectRunnable = null
@@ -225,6 +242,54 @@ class Esp32BleManager(private val context: Context) {
             return
         }
         sendCommand("ping")
+    }
+
+    // V1.0.35: 启动心跳监控，每intervalMs发一次ping，连续3次无回复触发重连
+    fun startHeartbeatMonitor(intervalMs: Long = 10000) {
+        try {
+            stopHeartbeatMonitor()
+            heartbeatHandler = Handler(Looper.getMainLooper())
+            missedHeartbeats = 0
+            heartbeatRunnable = object : Runnable {
+                override fun run() {
+                    try {
+                        if (isConnected) {
+                            sendCommand("ping")
+                            missedHeartbeats++
+                            if (missedHeartbeats >= 3) {
+                                Log.w(TAG, "BLE心跳超时(${missedHeartbeats}次)，触发重连")
+                                onHeartbeat?.invoke(false, "timeout:${missedHeartbeats}")
+                                disconnect()
+                                startScan()
+                                return
+                            } else if (missedHeartbeats >= 1) {
+                                // V1.0.35: 通知心跳超时(黄色预警)
+                                onHeartbeat?.invoke(false, "missed:${missedHeartbeats}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "heartbeat runnable error", e)
+                    }
+                    heartbeatHandler?.postDelayed(this, intervalMs)
+                }
+            }
+            heartbeatHandler?.postDelayed(heartbeatRunnable!!, intervalMs)
+            Log.i(TAG, "Heartbeat monitor started (interval=${intervalMs}ms)")
+        } catch (e: Exception) {
+            Log.e(TAG, "startHeartbeatMonitor error", e)
+        }
+    }
+
+    // V1.0.35: 停止心跳监控
+    fun stopHeartbeatMonitor() {
+        try {
+            heartbeatHandler?.removeCallbacksAndMessages(null)
+            heartbeatHandler = null
+            heartbeatRunnable = null
+            missedHeartbeats = 0
+        } catch (e: Exception) {
+            Log.w(TAG, "stopHeartbeatMonitor error", e)
+        }
     }
     
     // V2.9.184: 命令队列——避免并发写入导致命令丢失
@@ -348,6 +413,18 @@ class Esp32BleManager(private val context: Context) {
             if (characteristic.uuid == TX_CHAR_UUID) {
                 val value = characteristic.getStringValue(0)
                 Log.d(TAG, "BLE rx chunk(${value.length}): $value")
+                
+                // V1.0.35: 检测ESP32主动心跳通知，不参与数据缓冲
+                try {
+                    if (value.startsWith("hb:")) {
+                        missedHeartbeats = 0
+                        onHeartbeat?.invoke(true, value)
+                        Log.d(TAG, "Heartbeat notification: $value")
+                        return
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "heartbeat detection error", e)
+                }
                 
                 // V2.9.179 fix: 不再按\n flush，因为ESP32的status多包响应里自带\n
                 // 第一包到\n就flush的话，后续包全丢了
