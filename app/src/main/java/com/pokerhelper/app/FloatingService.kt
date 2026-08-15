@@ -94,6 +94,9 @@ class FloatingService : Service() {
     private var cardRecognizer: CardRecognizer? = null
     private var localCVEnabled = true  // 本地CV开关
 
+    // V2.9.500: 本地场景识别器（双通道架构-本地主通道）
+    private var sceneRecognizer: LocalSceneRecognizer? = null
+
     // V2.9.153: AutoCapture
     private var autoCaptureEnabled = false
     private var autoCaptureRunnable: Runnable? = null
@@ -308,6 +311,7 @@ class FloatingService : Service() {
             cardRecognizer = CardRecognizer(this)
             cardRecognizer?.init()
             CardRecognizer.updateScreenSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)  // V2.9.184
+            sceneRecognizer = LocalSceneRecognizer(this, cardRecognizer!!)
             Log.i(TAG, "本地CV识别器初始化完成")
         } catch (e: Exception) {
             Log.e(TAG, "本地CV识别器初始化失败", e)
@@ -319,10 +323,12 @@ class FloatingService : Service() {
         showFloatingBall()
 
         // V2.9.112: 初始化BLE管理器
-                bleManager = Esp32BleManager(this)
+        bleManager = Esp32BleManager(this)
         setupBleCallbacks()
+    }
 
-        // V2.9.240: 统一设置BLE回调（供onCreate和reinitializeComponents共用）
+    // V2.9.184: 服务重启后恢复关键组件——onStartCommand(START_STICKY)重启时onCreate不会被调用
+    // V2.9.240: 统一设置BLE回调（供onCreate和reinitializeComponents共用）
     private fun setupBleCallbacks() {
         bleManager?.onStatusChanged = { connected, message ->
             handler.post {
@@ -452,7 +458,6 @@ class FloatingService : Service() {
         }
     }
 
-    // V2.9.184: 服务重启后恢复关键组件——onStartCommand(START_STICKY)重启时onCreate不会被调用
     private fun reinitializeComponents() {
         // 重新注册通知广播接收器
         try {
@@ -475,6 +480,7 @@ class FloatingService : Service() {
             cardRecognizer?.init()
             CardRecognizer.updateScreenSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)  // V2.9.184
             localCVEnabled = true
+            sceneRecognizer = LocalSceneRecognizer(this, cardRecognizer!!)
             Log.i(TAG, "reinit: CardRecognizer OK")
         } catch (e: Exception) {
             localCVEnabled = false
@@ -488,7 +494,7 @@ class FloatingService : Service() {
         bleManager = Esp32BleManager(this)
         setupBleCallbacks()
 
-            Log.i(TAG, "reinit: all components restored")
+        Log.i(TAG, "reinit: all components restored")
     }
 
     override fun onDestroy() {
@@ -503,6 +509,9 @@ class FloatingService : Service() {
         // V2.9.165: 释放本地CV识别器资源
         try { cardRecognizer?.release() } catch (_: Exception) {}
         cardRecognizer = null
+        // V2.9.500: 释放本地场景识别器资源
+        try { sceneRecognizer?.release() } catch (_: Exception) {}
+        sceneRecognizer = null
 
         // V2.9.112: 断开BLE连接
         try { bleManager?.stopHeartbeatMonitor() } catch (_: Exception) {}  // V1.0.35
@@ -2224,228 +2233,71 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             ScreenCaptureService.screenshotHeight = opts.outHeight
         } catch (_: Exception) {}
 
-        // V2.9.165: 本地CV先行识别牌面——锁定手牌供VisionAPI使用
-        if (localCVEnabled && cardRecognizer != null && VisionApiClient.apiKey.isNotEmpty()) {
+        // V2.9.500: 双通道并行架构 — 本地CV主通道 + API异步补充
+        // 本地通道：LocalSceneRecognizer 一次性识别全部数据（牌+底池+筹码+按钮+盲注+D按钮+活跃玩家+特殊状态）
+        // API通道：后台异步补充HUD/摊牌/玩家名字等辅助数据
+        if (localCVEnabled && sceneRecognizer != null && VisionApiClient.apiKey.isNotEmpty()) {
             try {
                 val tLocalStart = System.currentTimeMillis()
                 val bmp = android.graphics.BitmapFactory.decodeByteArray(screenshot, 0, screenshot.size)
                 if (bmp != null) {
-                    // V3.41: 用截图真实尺寸更新坐标缩放——GG小窗/分屏时截图≠屏幕尺寸
                     try { CardRecognizer.updateScreenSize(bmp.width, bmp.height) } catch (_: Exception) {}
-                    val localResult = cardRecognizer!!.recognizeAll(bmp)
+                    val sceneResult = sceneRecognizer!!.recognizeScene(bmp)
                     bmp.recycle()
                     val tLocalEnd = System.currentTimeMillis()
-                    Log.d(TAG, "⏱ 本地CV: ${tLocalEnd - tLocalStart}ms, hand=${localResult.handCards.size}, board=${localResult.communityCards.size}")
-                    
-                    // V2.9.167: 保存本地CV诊断信息
-                    _diagLocalCVTimeMs = tLocalEnd - tLocalStart
-                    _diagLocalHandCards = localResult.handCards.map { VisionApiClient.CardInfo(it.rank, it.suit) }
-                    _diagLocalCommunityCards = localResult.communityCards.map { VisionApiClient.CardInfo(it.rank, it.suit) }
-                    _diagLocalStreet = when (localResult.communityCards.size) {
-                        0 -> "preflop"; 3 -> "flop"; 4 -> "turn"; 5 -> "river"; else -> null
+                    val localElapsed = tLocalEnd - tLocalStart
+
+                    // 保存诊断信息
+                    _diagLocalCVTimeMs = localElapsed
+                    if (sceneResult != null) {
+                        _diagLocalHandCards = sceneResult.holeCards.map { VisionApiClient.CardInfo(it.rank, it.suit) }
+                        _diagLocalCommunityCards = sceneResult.communityCards.map { VisionApiClient.CardInfo(it.rank, it.suit) }
+                        _diagLocalStreet = sceneResult.street
                     }
 
-                    // V2.9.197: 混合方案 — 根据置信度决定锁定策略
-                    val minConf = localResult.minConfidence
-                    val handRanks = localResult.handCards.map { it.rank }
-                    val streetFromLocal = localResult.inferStreet()
-                    
-                    if (localResult.handCards.size == 2 && minConf >= 0.85f) {
-                        // 高置信度: 锁定rank（rank-only），suit由API补充
-                        VisionApiClient.holeCardsRankLocked = handRanks
-                        VisionApiClient.holeCardsLocked = null  // 不锁定完整牌，让API提供suit
-                        VisionApiClient.streetLocked = streetFromLocal
-                        VisionApiClient.lockReason = "混合锁定 rank=${handRanks} conf=${"%.2f".format(minConf)} (${tLocalEnd - tLocalStart}ms)"
-                        Log.i(TAG, "★ 混合锁定(高置信度${"%.2f".format(minConf)}): ranks=$handRanks | street=$streetFromLocal")
-                        tvStatus?.text = "🎯 混合:${handRanks.joinToString(" ")}(conf=${"%.0f".format(minConf*100)}%) | API补suit..."
-                        updateAdviceNotification("本地CV高置信", "rank已锁定,API补suit...")
-                    } else if (localResult.handCards.size == 2) {
-                        // 中等置信度: 不锁定rank，让API完整识别，但仍锁定street
-                        VisionApiClient.holeCardsRankLocked = null
-                        VisionApiClient.holeCardsLocked = null
-                        VisionApiClient.streetLocked = streetFromLocal
-                        VisionApiClient.lockReason = "CV低置信(${"%.2f".format(minConf)}), API全识别"
-                        Log.i(TAG, "混合模式(中置信度${"%.2f".format(minConf)}): ranks=$handRanks 不锁定, API完整识别 | street=$streetFromLocal")
-                        tvStatus?.text = "🎯 CV:${handRanks.joinToString(" ")}(低conf) | API全识别..."
-                        updateAdviceNotification("本地CV中置信", "API完整识别中...")
-                    } else {
-                        // 手牌识别不完整
-                        Log.w(TAG, "本地CV手牌不完整(${localResult.handCards.size}/2), 纯API模式")
-                        VisionApiClient.holeCardsRankLocked = null
-                        VisionApiClient.holeCardsLocked = null; VisionApiClient.streetLocked = null
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "本地CV异常, 回退VisionAPI", e)
-                VisionApiClient.holeCardsRankLocked = null; VisionApiClient.holeCardsLocked = null; VisionApiClient.streetLocked = null
-            }
-        }
+                    if (sceneResult != null && sceneRecognizer!!.isValidResult(sceneResult)) {
+                        // ✅ 本地识别成功 → 直接驱动策略引擎
+                        Log.i(TAG, "★ 本地场景识别成功: ${localElapsed}ms | hand=${sceneResult.holeCards.map{"${it.rank}${it.suit}"}} board=${sceneResult.communityCards.map{"${it.rank}${it.suit}"}} street=${sceneResult.street} pot=${sceneResult.potSize} toCall=${sceneResult.toCall} D=${sceneResult.dButtonPosition}")
 
-        // V2.9.208: 本地CV快速通道——完全脱离VLM，花色+底池OCR+按钮推断
-        if (autoCaptureEnabled && localCVEnabled && cardRecognizer != null) {
-            var fastBmp: android.graphics.Bitmap? = null
-            val fastLocalResult = try {
-                fastBmp = android.graphics.BitmapFactory.decodeByteArray(screenshot, 0, screenshot.size)
-                if (fastBmp != null) cardRecognizer!!.recognizeAll(fastBmp) else null
-            } catch (e: Exception) { null }
-
-            if (fastLocalResult != null && fastLocalResult.handCards.size == 2
-                && fastLocalResult.minConfidence >= FAST_PATH_MIN_CONFIDENCE
-            ) {
-                // V2.9.208 Phase 2: 本地OCR读取底池（优先），失败用缓存
-                val localPot = if (fastBmp != null) {
-                    try {
-                        val potRegion = GameModeConfig.getPotRegionPixels(screenWidth, screenHeight)
-                        val px1 = potRegion.first.first
-                        val py1 = potRegion.first.second
-                        val px2 = potRegion.second.first
-                        val py2 = potRegion.second.second
-                        cardRecognizer!!.readPotSize(fastBmp, px1, py1, px2, py2)
-                    } catch (e: Exception) { -1 }
-                } else -1
-                if (localPot > 0) cachedPotSize = localPot  // OCR成功→更新缓存
-
-                // V3.7: chipPlayersCache提前声明，供VisionResult使用
-                var chipPlayersCache: List<VisionApiClient.PlayerInfo> = emptyList()
-                // V2.9.210: ChipTracker 定点OCR —— 筹码/D按钮/行动者/SB/BB
-                if (fastBmp != null) {
-                    try {
-                        val chipFrame = ChipTracker.analyzeWithFixedCoords(fastBmp)
-                        if (chipFrame != null) {
-                            // 用定点OCR底池覆盖（更准确）
-                            if (chipFrame.potAmount > 0) cachedPotSize = chipFrame.potAmount.toInt()
-                            cachedTotalPlayers = chipFrame.tablePlayerCount
-                            cachedActivePlayers = chipFrame.activePlayerCount
-                            // D按钮→推算SB/BB→更新myPosition
-                            if (chipFrame.dealerSeatIndex > 0) {
-                                cachedMyPosition = seatIndexToPosition(chipFrame.dealerSeatIndex, chipFrame.tablePlayerCount)
-                                cachedBlindSB = chipFrame.sbSeatIndex
-                                cachedBlindBB = chipFrame.bbSeatIndex
-                            }
-                            // 更新玩家筹码缓存（Hero=座位6）
-                            val heroSeat = chipFrame.players.find { it.id == 6 }
-                            if (heroSeat != null && heroSeat.currentChips > 0) {
-                                cachedPlayerChips = heroSeat.currentChips.toInt()
-                            }
-                            // V3.7: 构建玩家下注信息（筹码变化delta=下注额）
-                            chipPlayersCache = chipFrame.players.mapNotNull { p ->
-                                if (p.id == 6) return@mapNotNull null  // 跳过Hero自己
-                                VisionApiClient.PlayerInfo(
-                                    position = seatIndexToPosition(p.id, chipFrame.tablePlayerCount),
-                                    bet = (p.delta?.let { Math.abs(it).toInt() } ?: 0),
-                                    chips = p.currentChips.toInt(),
-                                    active = p.status == "active" || p.status == "betting" || p.status == "allin",
-                                    nickname = p.seatLabel
-                                )
-                            }
-                            if (chipPlayersCache.isNotEmpty()) {
-                                Log.d(TAG, "★ ChipTracker玩家数据: ${chipPlayersCache.size}人 (${chipPlayersCache.filter { it.bet > 0 }.size}人有下注)")
-                            }
-                            Log.i(TAG, "★ ChipTracker: pot=${chipFrame.potAmount} players=${chipFrame.tablePlayerCount} active=${chipFrame.activePlayerCount} dealer=${chipFrame.dealerSeatIndex} active_seat=${chipFrame.activeSeatIndex} sb=${chipFrame.sbSeatIndex} bb=${chipFrame.bbSeatIndex} hero_pos=$cachedMyPosition")
+                        // 更新场景缓存（供fallback和下一帧使用）
+                        cachedPotSize = sceneResult.potSize
+                        cachedToCall = sceneResult.toCall
+                        cachedMinRaise = sceneResult.minRaise.toInt()
+                        cachedBlindSB = sceneResult.blindSB
+                        cachedBlindBB = sceneResult.blindBB
+                        cachedTotalPlayers = sceneResult.totalPlayers
+                        cachedActivePlayers = sceneResult.activePlayers
+                        cachedMyPosition = sceneResult.myPosition
+                        cachedPlayerChips = sceneResult.playerChips
+                        if (sceneResult.buttonPositions.isNotEmpty()) {
+                            latestButtonPositions = sceneResult.buttonPositions
+                            Log.d(TAG, "★ 按钮坐标已存储: ${sceneResult.buttonPositions.map { "${it.text}(${it.xPct},${it.yPct})" }}")
                         }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "ChipTracker定点分析异常: ${e.message}")
-                    }
-                }
-                fastBmp?.recycle(); fastBmp = null
 
-                if (cachedPotSize <= 0) {
-                    // 既没有OCR结果也没有缓存，无法快速通道
-                } else {
-                    // V2.9.208 Phase 1: 使用真实花色（不再传"?"）
-                    val handCards = fastLocalResult.handCards.map {
-                        VisionApiClient.CardInfo(it.rank, if (it.suit != "?") it.suit else "x")
-                    }
-                    val communityCards = fastLocalResult.communityCards.map {
-                        VisionApiClient.CardInfo(it.rank, if (it.suit != "?") it.suit else "x")
-                    }
-                    val anySuitUnknown = handCards.any { it.suit == "x" } || communityCards.any { it.suit == "x" }
-                    val street = when (communityCards.size) {
-                        0 -> "preflop"; 3 -> "flop"; 4 -> "turn"; 5 -> "river"; else -> "preflop"
-                    }
-
-                    // V3.44: 本地OCR读按钮金额 — 补全toCall (与lxpk对齐，纯本地模式不再完全依赖VLM)
-                    val fastBmpForButtons = android.graphics.BitmapFactory.decodeByteArray(screenshot, 0, screenshot.size)
-                    if (fastBmpForButtons != null) {
-                        try {
-                            val actionRegions = GameModeConfig.getActionButtons(screenWidth, screenHeight)
-                            if (actionRegions.isNotEmpty()) {
-                                val localToCall = cardRecognizer!!.readToCallFromButtons(fastBmpForButtons, actionRegions)
-                                if (localToCall >= 0) {
-                                    cachedToCall = localToCall  // 0=check, >0=金额
-                                    Log.d(TAG, "★ 本地按钮OCR: toCall=$cachedToCall")
-                                }
+                        // 发送到策略引擎WebView
+                        tvStatus?.text = "⚡ 纯本地CV (${localElapsed}ms)"
+                        updateAdviceNotification("⚡ 本地模式", "${localElapsed}ms")
+                        val resultJson = VisionApiClient.toJson(sceneResult)
+                        val taggedJson = resultJson.dropLast(1) + ","_frameTag":"auto"}"
+                        handler.post {
+                            if (webViewReady) {
+                                executeJs("if(typeof onVisionResult==='function'){onVisionResult($taggedJson)}")
                             }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "按钮OCR失败", e)
+                            handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }
+                            onAutoCaptureVisionDone(true)
                         }
-                        fastBmpForButtons.recycle()
-                    }
 
-                    // V2.9.208 Phase 3: 按钮状态推断 + 缓存按钮坐标
-                    val fastButtons = if (latestButtonPositions.isNotEmpty()) {
-                        latestButtonPositions.map { it.text }
-                    } else {
-                        cardRecognizer!!.inferButtons(cachedToCall, GameModeConfig.currentPlatform == GamePlatform.GGPOKER)
-                    }
-                    val fastButtonPositions = if (latestButtonPositions.isNotEmpty()) {
-                        latestButtonPositions
-                    } else {
-                        // 使用GG固定坐标构建按钮位置
-                        inferButtonPositions(cachedToCall)
-                    }
-
-                    val fastResult = VisionApiClient.VisionResult(
-                        isPokerTable = true,
-                        holeCards = handCards,
-                        communityCards = communityCards,
-                        potSize = cachedPotSize,
-                        playerChips = cachedPlayerChips,
-                        totalPlayers = cachedTotalPlayers,
-                        activePlayers = cachedActivePlayers,
-                        myPosition = cachedMyPosition,
-                        street = street,
-                        toCall = cachedToCall,
-                        minRaise = cachedMinRaise,
-                        buttons = fastButtons,
-                        blindSB = cachedBlindSB,
-                        blindBB = cachedBlindBB,
-                        ante = 0,
-                        players = chipPlayersCache,
-                        dButtonPosition = cachedMyPosition,
-                        rawResponse = "fast_path_local_cv_v2",
-                        showdownCards = emptyList(),
-                        oppHud = emptyList(),
-                        buttonPositions = fastButtonPositions,
-                        suitUncertain = anySuitUnknown,
-                        isInsurance = false
-                    )
-                    Log.i(TAG, "★ 本地CV快速通道v2: hand=${handCards.map{"${it.rank}${it.suit}"}} board=${communityCards.map{"${it.rank}${it.suit}"}} street=$street pot=$cachedPotSize toCall=$cachedToCall suitOK=${!anySuitUnknown} (跳过VLM)")
-                    tvStatus?.text = "⚡ 纯本地CV (${fastLocalResult.elapsedMs}ms)"
-                    updateAdviceNotification("⚡ 纯本地模式", "零API延迟")
-                    val resultJson = VisionApiClient.toJson(fastResult)
-                    val taggedJson = resultJson.dropLast(1) + ",\"_frameTag\":\"auto\"}"
-                    handler.post {
-                        if (webViewReady) {
-                            executeJs("if(typeof onVisionResult==='function'){onVisionResult($taggedJson)}")
-                        }
-                        handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }
-                        onAutoCaptureVisionDone(true)
-                    }
-                    // V3.8: 后台静默VLM — 不阻塞本地决策，异步补充昵称/oppHud/摊牌
-                    if (VisionApiClient.apiKey.isNotEmpty()) {
+                        // 后台API异步补充 — HUD统计/摊牌记录/玩家名字（不阻塞当前决策）
                         Thread {
                             try {
                                 val bgResult = VisionApiClient.analyzeScreenshot(screenshot)
                                 if (bgResult != null && bgResult.isPokerTable) {
-                                    // 补充记忆: 真实HUD + 昵称
                                     val level = when {
                                         bgResult.blindBB <= 10 -> "micro_nl2"
                                         bgResult.blindBB <= 25 -> "low_nl10"
                                         else -> "mid_nl50"
                                     }
                                     val stats = mutableMapOf<String, Float>()
-                                    // ★ V3.2: 优先用VLM读出的真实HUD数据(oppHud)
                                     if (bgResult.oppHud.isNotEmpty()) {
                                         val avgVpip = bgResult.oppHud.map { it.vpip }.filter { it > 0 }.average()
                                         val avgPfr = bgResult.oppHud.map { it.pfr }.filter { it > 0 }.average()
@@ -2455,9 +2307,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                                         if (avgPfr > 0) stats["pfr"] = (avgPfr / 100.0).toFloat()
                                         if (avg3b > 0) stats["threeBet"] = (avg3b / 100.0).toFloat()
                                         if (avgAts > 0) stats["ats"] = (avgAts / 100.0).toFloat()
-                                        Log.d(TAG, "★ HUD真实数据: 平均VPIP=${String.format("%.0f", avgVpip)}% PFR=${String.format("%.0f", avgPfr)}% 3bet=${String.format("%.0f", avg3b)}% (${bgResult.oppHud.size}个对手)")
+                                        Log.d(TAG, "★ 后台API HUD: 平均VPIP=${String.format("%.0f", avgVpip)}% PFR=${String.format("%.0f", avgPfr)}% 3bet=${String.format("%.0f", avg3b)}% (${bgResult.oppHud.size}个对手)")
                                     }
-                                    // 兜底推断：VLM无HUD时，从toCall/activePlayers推断
                                     if (stats.isEmpty()) {
                                         if (bgResult.toCall > 0) stats["pfr"] = 0.22f
                                         if (bgResult.totalPlayers > 2 && bgResult.activePlayers > 1) {
@@ -2465,23 +2316,26 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                                         }
                                     }
                                     if (stats.isNotEmpty()) HudLearner.recordHand(stats, level)
-                                    // 摊牌结果后台记录
                                     if (bgResult.showdownCards.isNotEmpty()) {
                                         val heroWon = bgResult.showdownCards.none { it.won }
                                         HudLearner.recordResult(heroWon, bgResult.potSize, level)
                                     }
-                                    Log.d(TAG, "★ 后台VLM补充: ${bgResult.oppHud.size}个HUD ${bgResult.showdownCards.size}个摊牌")
+                                    Log.d(TAG, "★ 后台API补充完成: ${bgResult.oppHud.size}个HUD ${bgResult.showdownCards.size}个摊牌")
                                 }
                             } catch (e: Exception) {
-                                Log.w(TAG, "后台VLM补充失败", e)
+                                Log.w(TAG, "后台API补充失败", e)
                             }
                         }.start()
+
+                        return  // 跳过API主通道
+                    } else {
+                        Log.w(TAG, "本地场景识别结果无效(hand=${sceneResult?.holeCards?.size} pot=${sceneResult?.potSize}), 降级到API")
                     }
-                    return  // 跳过VLM
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "本地场景识别异常, 降级到API", e)
             }
         }
-
         // 有API Key → 调用视觉模型识别牌面（本地CV已锁牌时只补充场景信息）
         tvStatus?.text = "🎯 API识别中..."
         tvAction?.alpha = 0.5f
