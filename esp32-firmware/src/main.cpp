@@ -106,7 +106,7 @@
 // ============================================================================
 // 常量配置
 // ============================================================================
-#define FW_VERSION "v1.0.36"
+#define FW_VERSION "v1.0.37"
 
 // BLE设备名
 #define BLE_DEVICE_NAME "QingYun-ESP32"
@@ -459,7 +459,7 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
             String cmd = String(val.c_str());
             cmd.trim();
             // v1.0.36: 每次收到命令时记录完整命令内容（含长度和原始值摘要）
-            qlogf("[BLE] CMD received: len=%d raw="%s"", cmd.length(), cmd.c_str());
+            qlogf("[BLE] CMD received: len=%d raw='%s'", cmd.length(), cmd.c_str());
             g_pendingCmd = cmd;
             g_hasNewCmd = true;
         }
