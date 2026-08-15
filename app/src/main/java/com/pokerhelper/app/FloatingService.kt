@@ -718,12 +718,28 @@ class FloatingService : Service() {
         handler.postDelayed(r,jittered)
     }
     private fun autoCaptureTrigger() {
-        if(!ScreenOptService.isServiceRunning()){autoConsecutiveErrors++;checkAutoErrors();scheduleNextAutoCapture();return}
+        if(!ScreenOptService.isServiceRunning()){
+            autoConsecutiveErrors++
+            // V3.44: 自动截屏失败也记录日志+悬浮球提示（之前静默重试，用户看不到原因）
+            if (autoConsecutiveErrors % 5 == 0) {
+                addErrorLog("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())} 自动截屏失败×${autoConsecutiveErrors}: 无障碍服务未运行")
+                updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:无障碍未开")
+                updateAdviceNotification("⚠️ 无障碍未运行", "连续${autoConsecutiveErrors}次截屏失败，请检查无障碍权限")
+            }
+            checkAutoErrors();scheduleNextAutoCapture();return
+        }
         isVisionInProgress=true
         hideOverlay()  // V2.9.190: 截屏前隐藏悬浮层
         ScreenOptService.onScreenshotReady={s->handler.post{
             showOverlay()  // V2.9.190: 截屏后恢复悬浮层
-            if(s)processScreenshotAndAnalyze(isAutoCapture=true)else{isVisionInProgress=false;autoConsecutiveErrors++;checkAutoErrors();scheduleNextAutoCapture()}
+            if(s)processScreenshotAndAnalyze(isAutoCapture=true)else{
+                isVisionInProgress=false;autoConsecutiveErrors++
+                // V3.44: 截屏回调失败也记录
+                if (autoConsecutiveErrors % 5 == 0) {
+                    addErrorLog("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())} 自动截屏回调失败×${autoConsecutiveErrors}: ${ScreenCaptureService.lastError}")
+                }
+                checkAutoErrors();scheduleNextAutoCapture()
+            }
         }}
         handler.postDelayed({ScreenOptService.captureScreen()}, 100)  // V2.9.192: 延迟100ms等View渲染
     }
@@ -771,9 +787,17 @@ class FloatingService : Service() {
                     return
                 }
                 // V3.16: 翻前raise → 直接点GG加注按钮(默认2.5x min-raise)
+                //        翻后raise → 四档按钮(33/50/75/100%)
                 if (phase == "pre") {
-                    Log.d(TAG, "★ GG翻前加注: 直接点加注按钮 (策略size=${sizing})")
-                    executeAutoTapFallback("raise")
+                    // V3.44: 用isStandardPreflopRaise判断加注量是否可用标准按钮
+                    val blindBB = decisionData.optInt("blindBB", 0)
+                    if (GameModeConfig.isStandardPreflopRaise(sizing, blindBB)) {
+                        Log.d(TAG, "★ GG翻前加注: 标准按钮近似 (size=${sizing} BB=${blindBB})")
+                        executeAutoTapFallback("raise")
+                    } else {
+                        Log.d(TAG, "★ GG翻前加注过大(${sizing}/${blindBB}BB)，走全押")
+                        executeAutoTapFallback("allin")
+                    }
                     handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                     return
                 }
@@ -1034,7 +1058,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
         }
 
         tvStatus = TextView(this).apply {
-            text = "青云 v2.9.179"
+            text = "青云 v${BuildConfig.VERSION_NAME}"  // V3.44: 动态版本号，不再硬编码
             setTextColor(0xFFe8edf5.toInt())
             textSize = 12f
             setPadding(4, 2, 4, 2)
@@ -2251,6 +2275,24 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         0 -> "preflop"; 3 -> "flop"; 4 -> "turn"; 5 -> "river"; else -> "preflop"
                     }
 
+                    // V3.44: 本地OCR读按钮金额 — 补全toCall (与lxpk对齐，纯本地模式不再完全依赖VLM)
+                    val fastBmpForButtons = android.graphics.BitmapFactory.decodeByteArray(screenshot, 0, screenshot.size)
+                    if (fastBmpForButtons != null) {
+                        try {
+                            val actionRegions = GameModeConfig.getActionButtons(screenWidth, screenHeight)
+                            if (actionRegions.isNotEmpty()) {
+                                val localToCall = cardRecognizer!!.readToCallFromButtons(fastBmpForButtons, actionRegions)
+                                if (localToCall >= 0) {
+                                    cachedToCall = localToCall  // 0=check, >0=金额
+                                    Log.d(TAG, "★ 本地按钮OCR: toCall=$cachedToCall")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "按钮OCR失败", e)
+                        }
+                        fastBmpForButtons.recycle()
+                    }
+
                     // V2.9.208 Phase 3: 按钮状态推断 + 缓存按钮坐标
                     val fastButtons = if (latestButtonPositions.isNotEmpty()) {
                         latestButtonPositions.map { it.text }
@@ -2600,6 +2642,10 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     handler.post {
                         // V3.43: API失败也重置isVisionInProgress（防卡死）
                         isVisionInProgress = false
+                        // V3.44: API失败→自动重试防卡死（与lxpk对齐）
+                        autoConsecutiveErrors++
+                        checkAutoErrors()
+                        scheduleNextAutoCapture()
                         tvAction?.alpha = 1.0f
                         tvStatus?.text = "❌ API: ${VisionApiClient.lastError.take(30)}"
                         executeJs("document.body.classList.remove('api-processing')")

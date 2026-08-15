@@ -56,10 +56,11 @@ data class CoordinateConfig(
     val betButtons: List<IntArray> = emptyList(),        // 下注按钮(4档) [x1,y1,x2,y2]
     val dealerSearchAreas: List<IntArray> = emptyList(), // D按钮搜索区域(6个座位附近)
     val topNavBar: List<IntArray> = emptyList(),         // 顶部导航栏按钮
-    // V3.14: 精确下注输入坐标
-    val betInputBox: List<Int> = emptyList(),            // [x1,y1,x2,y2] 金额输入框
-    val numpadKeys: Map<String, List<Int>> = emptyMap(),  // 数字键 "0"~"9" -> [x,y]
-    val numpadConfirm: List<Int> = emptyList()            // [x1,y1,x2,y2] 确认按钮
+    // V3.44: 精确金额输入配置 (空=不支持精确输入, fallback到4档按钮) — IntArray类型与lxpk对齐
+    val betInputBox: IntArray = intArrayOf(),             // 下注金额输入框 [x1,y1,x2,y2]
+    val numpadKeys: Map<String, IntArray> = emptyMap(),   // 数字键盘按键 "0"-"9"→[x,y]
+    val numpadConfirm: IntArray = intArrayOf(),           // 确认/下注按钮 [x1,y1,x2,y2]
+    val numpadBackspace: IntArray = intArrayOf()          // 退格键 [x1,y1,x2,y2]
 )
 
 // Rake配置
@@ -422,6 +423,18 @@ object GameModeConfig {
 
     // ============ V2.9.210: 扩展坐标访问方法 ============
 
+    /**
+     * V3.44: GG翻前加注倍数映射 — 判断GG翻前加注量是否可以用标准按钮近似
+     * GG竖屏翻前只有: 加注按钮(默认min-raise 2.5x) + 全押
+     * 策略要求的BB倍数 <= 4BB 时用标准加注按钮，否则需要全押
+     */
+    fun isStandardPreflopRaise(sizing: Int, bigBlind: Int): Boolean {
+        if (bigBlind <= 0) return true
+        val bb = sizing.toDouble() / bigBlind
+        // 策略要求的BB倍数 <= 4BB 时用标准加注按钮
+        return bb <= 4.0
+    }
+
     /** 获取6个座位的玩家名字区域坐标 */
     fun getPlayerNameRegions(): List<IntArray> = getCoordinateConfig().playerNames
 
@@ -431,23 +444,15 @@ object GameModeConfig {
     /** 获取底池金额区域坐标 */
     fun getPotAmountRegion(): IntArray = getCoordinateConfig().potAmount
 
-    /** 获取底部操作按钮坐标 */
-    fun getActionButtons(): List<IntArray> = getCoordinateConfig().actionButtons
-
-    /**
-     * V3.7: 获取按屏幕尺寸缩放后的操作按钮坐标
-     */
-    fun getActionButtons(screenW: Int, screenH: Int): List<IntArray> {
-        val config = getCoordinateConfig()
-        val sx = screenW.toFloat() / config.referenceWidth
-        val sy = screenH.toFloat() / config.referenceHeight
-        return config.actionButtons.map { region ->
-            intArrayOf(
-                (region[0] * sx).toInt(),
-                (region[1] * sy).toInt(),
-                (region[2] * sx).toInt(),
-                (region[3] * sy).toInt()
-            )
+    /** V3.44: 获取底部操作按钮坐标（合并两个重载，默认参数与lxpk对齐） */
+    fun getActionButtons(screenW: Int = 0, screenH: Int = 0): List<IntArray> {
+        val raw = getCoordinateConfig().actionButtons
+        if (screenW <= 0 || screenH <= 0) return raw
+        val cfg = getCoordinateConfig()
+        val sx = screenW.toFloat() / cfg.referenceWidth
+        val sy = screenH.toFloat() / cfg.referenceHeight
+        return raw.map { r ->
+            intArrayOf((r[0] * sx).toInt(), (r[1] * sy).toInt(), (r[2] * sx).toInt(), (r[3] * sy).toInt())
         }
     }
 
