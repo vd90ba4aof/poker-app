@@ -514,10 +514,8 @@ ${streetHint}${rankHint}识别:"""
             put("model", model ?: modelName)
             put("max_tokens", 800)  // V2.9.196: 1500→800减少输出等待
             put("temperature", 0.0)  // V2.9.156: 确定性输出
-            // V2.9.164: DeepSeek vision模型不支持JSON Mode，跳过
-            if (!modelName.contains("deepseek", ignoreCase = true)) {
-                put("response_format", JSONObject().put("type", "json_object"))
-            }
+            // V2.9.320: 固定使用JSON Mode（硅基流动Qwen3-VL支持）
+            put("response_format", JSONObject().put("type", "json_object"))
             put("messages", JSONArray().apply { put(JSONObject().apply {
                 put("role", "user"); put("content", JSONArray().apply {
                     put(JSONObject().apply { put("type", "text"); put("text", prompt) })
@@ -1022,14 +1020,12 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
         }.toString()
     }
 
+    // V2.9.320: 固定硅基流动，不再支持多供应商切换
     fun updateConfig(provider: String, key: String) {
-        apiProvider = provider; apiKey = key
-        when (provider) {
-            "openai" -> { apiUrl = "https://api.openai.com/v1/chat/completions"; modelName = "gpt-4o-mini" }
-            "dashscope" -> { apiUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"; modelName = "qwen3-vl-plus" }
-            "siliconflow" -> { apiUrl = "https://api.siliconflow.cn/v1/chat/completions"; modelName = "Qwen/Qwen3-VL-8B-Instruct" }
-            else -> { Log.w(TAG, "未知供应商: $provider，保持当前配置"); lastError = "未知供应商: $provider" }
-        }
+        apiProvider = "siliconflow"
+        apiKey = key
+        apiUrl = "https://api.siliconflow.cn/v1/chat/completions"
+        modelName = "Qwen/Qwen3-VL-8B-Instruct"
     }
 
     // V2.9.xxx: 多桌截图并行分析

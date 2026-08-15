@@ -10,8 +10,6 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Spinner
@@ -136,36 +134,23 @@ class MainActivity : AppCompatActivity() {
 
             updateUI()
 
-            val providers = arrayOf("siliconflow", "dashscope", "openai")
-            val providerNames = arrayOf("硅基流动(Qwen3-VL 免费)", "通义千问VL(百炼)", "OpenAI (GPT-4o-mini)")
-            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, providerNames)
-            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-            spinnerProvider.adapter = adapter
-
-            val savedProvider = prefs?.getString(KEY_PROVIDER, "siliconflow") ?: "siliconflow"
+            // V2.9.320: 固定硅基流动，不再显示供应商选择
+            spinnerProvider.visibility = android.view.View.GONE
             val savedKey = prefs?.getString(KEY_APIKEY, "sk-xonndqonqkxttcxnfjinrcnchnxlntvdaqyxhxenlelekndf") ?: "sk-xonndqonqkxttcxnfjinrcnchnxlntvdaqyxhxenlelekndf"
-            val providerIndex = providers.indexOf(savedProvider).coerceAtLeast(0)
-            spinnerProvider.setSelection(providerIndex)
             if (savedKey.isNotEmpty()) {
                 etApiKey.setText(savedKey)
-                VisionApiClient.updateConfig(savedProvider, savedKey)
+                VisionApiClient.updateConfig("siliconflow", savedKey)
                 updateApiStatus()
             }
 
-            spinnerProvider.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {}
-                override fun onNothingSelected(parent: AdapterView<*>?) {}
-            }
-
             btnSaveApi.setOnClickListener {
-                val provider = providers[spinnerProvider.selectedItemPosition]
                 val key = etApiKey.text.toString().trim()
                 if (key.isEmpty()) {
                     Toast.makeText(this, "请输入API Key", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
-                VisionApiClient.updateConfig(provider, key)
-                prefs?.edit()?.putString(KEY_PROVIDER, provider)?.putString(KEY_APIKEY, key)?.apply()
+                VisionApiClient.updateConfig("siliconflow", key)
+                prefs?.edit()?.putString(KEY_PROVIDER, "siliconflow")?.putString(KEY_APIKEY, key)?.apply()
                 updateApiStatus()
                 Toast.makeText(this, "✅ API配置已保存: ${VisionApiClient.modelName}", Toast.LENGTH_SHORT).show()
             }
