@@ -134,6 +134,62 @@ class CardRecognizer(private val context: Context) {
     }
     } // end companion object
 
+    /**
+     * V3.7: 从按钮区域OCR读取toCall金额
+     * @param bitmap 截图
+     * @param actionRegions 按钮坐标列表 [x1,y1,x2,y2][]
+     * @return toCall金额（0=check, >0=具体金额），失败返回-1
+     */
+    fun readToCallFromButtons(bitmap: android.graphics.Bitmap, actionRegions: List<IntArray>): Int {
+        try {
+            for (region in actionRegions) {
+                if (region.size < 4) continue
+                val x1 = region[0].coerceIn(0, bitmap.width - 1)
+                val y1 = region[1].coerceIn(0, bitmap.height - 1)
+                val x2 = region[2].coerceIn(x1 + 1, bitmap.width)
+                val y2 = region[3].coerceIn(y1 + 1, bitmap.height)
+                val w = x2 - x1; val h = y2 - y1
+                if (w < 10 || h < 10) continue
+
+                val regionBmp = try {
+                    android.graphics.Bitmap.createBitmap(bitmap, x1, y1, w, h)
+                } catch (_: Exception) { continue }
+
+                val latch = java.util.concurrent.CountDownLatch(1)
+                var ocrText = ""
+                try {
+                    val image = com.google.mlkit.vision.common.InputImage.fromBitmap(regionBmp, 0)
+                    val recognizer = com.google.mlkit.vision.text.TextRecognition.getClient(
+                        com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS
+                    )
+                    recognizer.process(image)
+                        .addOnSuccessListener { visionText ->
+                            ocrText = visionText.text
+                            latch.countDown()
+                        }
+                        .addOnFailureListener { _ ->
+                            latch.countDown()
+                        }
+                    latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+                    recognizer.close()
+                } catch (_: Exception) {}
+                regionBmp.recycle()
+
+                // 解析金额：提取所有数字，取最大的作为toCall
+                if (ocrText.isNotEmpty()) {
+                    val numbers = Regex("\\d+").findAll(ocrText.replace(",", ""))
+                        .map { it.value.toIntOrNull() ?: 0 }.filter { it > 0 }.toList()
+                    if (numbers.isNotEmpty()) {
+                        return numbers.maxOrNull() ?: 0
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("CardRecognizer", "readToCallFromButtons异常", e)
+        }
+        return -1
+    }
+
     // V2.9.197: Rank-only模板 — 从截图rank indicator区域提取
     private data class RankTemplate(val grayPixels: DoubleArray, val width: Int, val height: Int)
 

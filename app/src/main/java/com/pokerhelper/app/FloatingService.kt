@@ -1492,7 +1492,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     val data = org.json.JSONObject(jsonData)
                     val level = data.optString("level", "micro_nl2")
                     val statsMap = mutableMapOf<String, Float>()
-                    val keys = arrayOf("vpip", "pfr", "threeBet", "foldTo3Bet",
+                    val keys = arrayOf("vpip", "pfr", "threeBet", "ats", "foldTo3Bet",
                         "cbetFlop", "cbetTurn", "foldToCBetFlop", "foldToCBetTurn",
                         "callRiver", "checkRaiseFlop", "handsObserved")
                     for (k in keys) {
@@ -1515,6 +1515,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     json.put("vpip", profile.vpip.toDouble())
                     json.put("pfr", profile.pfr.toDouble())
                     json.put("threeBet", profile.threeBet.toDouble())
+                    json.put("ats", profile.ats.toDouble())
                     json.put("foldTo3Bet", profile.foldTo3Bet.toDouble())
                     json.put("cbetFlop", profile.cbetFlop.toDouble())
                     json.put("cbetTurn", profile.cbetTurn.toDouble())
@@ -2191,6 +2192,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                 } else -1
                 if (localPot > 0) cachedPotSize = localPot  // OCR成功→更新缓存
 
+                // V3.7: chipPlayersCache提前声明，供VisionResult使用
+                var chipPlayersCache: List<VisionApiClient.PlayerInfo> = emptyList()
                 // V2.9.210: ChipTracker 定点OCR —— 筹码/D按钮/行动者/SB/BB
                 if (fastBmp != null) {
                     try {
@@ -2212,7 +2215,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                                 cachedPlayerChips = heroSeat.currentChips.toInt()
                             }
                             // V3.7: 构建玩家下注信息（筹码变化delta=下注额）
-                            val chipPlayersCache = chipFrame.players.mapNotNull { p ->
+                            chipPlayersCache = chipFrame.players.mapNotNull { p ->
                                 if (p.id == 6) return@mapNotNull null  // 跳过Hero自己
                                 VisionApiClient.PlayerInfo(
                                     position = seatIndexToPosition(p.id, chipFrame.tablePlayerCount),
@@ -2277,7 +2280,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         blindSB = cachedBlindSB,
                         blindBB = cachedBlindBB,
                         ante = 0,
-                        players = emptyList(),
+                        players = chipPlayersCache,
                         dButtonPosition = cachedMyPosition,
                         rawResponse = "fast_path_local_cv_v2",
                         showdownCards = emptyList(),
@@ -2311,11 +2314,24 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                                         else -> "mid_nl50"
                                     }
                                     val stats = mutableMapOf<String, Float>()
+                                    // ★ V3.2: 优先用VLM读出的真实HUD数据(oppHud)
                                     if (bgResult.oppHud.isNotEmpty()) {
                                         val avgVpip = bgResult.oppHud.map { it.vpip }.filter { it > 0 }.average()
                                         val avgPfr = bgResult.oppHud.map { it.pfr }.filter { it > 0 }.average()
+                                        val avg3b = bgResult.oppHud.map { it.threeBet }.filter { it > 0 }.average()
+                                        val avgAts = bgResult.oppHud.map { it.ats }.filter { it > 0 }.average()
                                         if (avgVpip > 0) stats["vpip"] = (avgVpip / 100.0).toFloat()
                                         if (avgPfr > 0) stats["pfr"] = (avgPfr / 100.0).toFloat()
+                                        if (avg3b > 0) stats["threeBet"] = (avg3b / 100.0).toFloat()
+                                        if (avgAts > 0) stats["ats"] = (avgAts / 100.0).toFloat()
+                                        Log.d(TAG, "★ HUD真实数据: 平均VPIP=${String.format("%.0f", avgVpip)}% PFR=${String.format("%.0f", avgPfr)}% 3bet=${String.format("%.0f", avg3b)}% (${bgResult.oppHud.size}个对手)")
+                                    }
+                                    // 兜底推断：VLM无HUD时，从toCall/activePlayers推断
+                                    if (stats.isEmpty()) {
+                                        if (bgResult.toCall > 0) stats["pfr"] = 0.22f
+                                        if (bgResult.totalPlayers > 2 && bgResult.activePlayers > 1) {
+                                            stats["vpip"] = (bgResult.activePlayers - 1).toFloat() / (bgResult.totalPlayers - 1)
+                                        }
                                     }
                                     if (stats.isNotEmpty()) HudLearner.recordHand(stats, level)
                                     // 摊牌结果后台记录
@@ -2524,7 +2540,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                             val profile = HudLearner.getOpponentProfile(level)
                             if (profile.totalHandsObserved >= 200 && profile.type == "self") {
                                 val hudJson = "[" + (1..6).joinToString(",") { s ->
-                                    "{seat:$s,vpip:${profile.vpip},pfr:${profile.pfr},threeBet:${profile.threeBet}}"
+                                    "{seat:$s,vpip:${profile.vpip},pfr:${profile.pfr},threeBet:${profile.threeBet},ats:${profile.ats}}"
                                 } + "]"
                                 executeJs("if(typeof PostValidation!=='undefined')PostValidation.applyHudData($hudJson);")
                                 Log.d(TAG, "★ HudLearner桥接: ${profile.totalHandsObserved}手记忆注入策略引擎 (VPIP=${String.format("%.1f", profile.vpip*100)}%)")

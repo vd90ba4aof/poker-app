@@ -434,6 +434,23 @@ object GameModeConfig {
     /** 获取底部操作按钮坐标 */
     fun getActionButtons(): List<IntArray> = getCoordinateConfig().actionButtons
 
+    /**
+     * V3.7: 获取按屏幕尺寸缩放后的操作按钮坐标
+     */
+    fun getActionButtons(screenW: Int, screenH: Int): List<IntArray> {
+        val config = getCoordinateConfig()
+        val sx = screenW.toFloat() / config.referenceWidth
+        val sy = screenH.toFloat() / config.referenceHeight
+        return config.actionButtons.map { region ->
+            intArrayOf(
+                (region[0] * sx).toInt(),
+                (region[1] * sy).toInt(),
+                (region[2] * sx).toInt(),
+                (region[3] * sy).toInt()
+            )
+        }
+    }
+
     /** 获取下注按钮坐标（4档） */
     fun getBetButtons(): List<IntArray> = getCoordinateConfig().betButtons
 

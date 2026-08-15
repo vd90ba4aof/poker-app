@@ -56,7 +56,7 @@ object HudLearner {
     data class HandRecord(
         val timestamp: Long,
         val level: String,
-        val vpip: Float, val pfr: Float, val threeBet: Float,
+        val vpip: Float, val pfr: Float, val threeBet: Float, val ats: Float,
         val foldTo3Bet: Float, val cbetFlop: Float, val cbetTurn: Float,
         val foldToCBetFlop: Float, val foldToCBetTurn: Float,
         val callRiver: Float, val checkRaiseFlop: Float,
@@ -64,7 +64,7 @@ object HudLearner {
     )
 
     data class OpponentProfile(
-        val vpip: Float, val pfr: Float, val threeBet: Float, val foldTo3Bet: Float,
+        val vpip: Float, val pfr: Float, val threeBet: Float, val ats: Float, val foldTo3Bet: Float,
         val cbetFlop: Float, val cbetTurn: Float, val foldToCBetFlop: Float,
         val foldToCBetTurn: Float, val callRiver: Float, val checkRaiseFlop: Float,
         val confidence: Float, val totalHandsObserved: Int, val type: String
@@ -104,6 +104,7 @@ object HudLearner {
                 vpip = opponentStats["vpip"] ?: -1f,
                 pfr = opponentStats["pfr"] ?: -1f,
                 threeBet = opponentStats["threeBet"] ?: -1f,
+                ats = opponentStats["ats"] ?: -1f,
                 foldTo3Bet = opponentStats["foldTo3Bet"] ?: -1f,
                 cbetFlop = opponentStats["cbetFlop"] ?: -1f,
                 cbetTurn = opponentStats["cbetTurn"] ?: -1f,
@@ -308,6 +309,7 @@ object HudLearner {
                 obj.put("vpip", r.vpip.toDouble())
                 obj.put("pfr", r.pfr.toDouble())
                 obj.put("3b", r.threeBet.toDouble())
+                obj.put("ats", r.ats.toDouble())
                 obj.put("f3b", r.foldTo3Bet.toDouble())
                 obj.put("cb", r.cbetFlop.toDouble())
                 obj.put("cbt", r.cbetTurn.toDouble())
@@ -350,6 +352,7 @@ object HudLearner {
         obj.put("vpip", record.vpip.toDouble())
         obj.put("pfr", record.pfr.toDouble())
         obj.put("3b", record.threeBet.toDouble())
+        obj.put("ats", record.ats.toDouble())
         obj.put("f3b", record.foldTo3Bet.toDouble())
         obj.put("cb", record.cbetFlop.toDouble())
         obj.put("cbt", record.cbetTurn.toDouble())
@@ -391,6 +394,7 @@ object HudLearner {
         vpip = obj.optDouble("vpip", -1.0).toFloat(),
         pfr = obj.optDouble("pfr", -1.0).toFloat(),
         threeBet = obj.optDouble("3b", -1.0).toFloat(),
+        ats = obj.optDouble("ats", -1.0).toFloat(),
         foldTo3Bet = obj.optDouble("f3b", -1.0).toFloat(),
         cbetFlop = obj.optDouble("cb", -1.0).toFloat(),
         cbetTurn = obj.optDouble("cbt", -1.0).toFloat(),
@@ -405,7 +409,7 @@ object HudLearner {
         if (records.isEmpty()) return getBaselineProfile(currentLevel)
         val n = records.size
         var totalWeight = 0f
-        var wVpip = 0f; var wPfr = 0f; var w3b = 0f; var wF3b = 0f
+        var wVpip = 0f; var wPfr = 0f; var w3b = 0f; var wAts = 0f; var wF3b = 0f
         var wCb = 0f; var wCbt = 0f; var wFcb = 0f; var wFcbt = 0f
         var wCrv = 0f; var wCrf = 0f
 
@@ -415,6 +419,7 @@ object HudLearner {
             if (r.vpip >= 0) { wVpip += r.vpip * weight; totalWeight += weight }
             if (r.pfr >= 0) wPfr += r.pfr * weight
             if (r.threeBet >= 0) w3b += r.threeBet * weight
+            if (r.ats >= 0) wAts += r.ats * weight
             if (r.foldTo3Bet >= 0) wF3b += r.foldTo3Bet * weight
             if (r.cbetFlop >= 0) wCb += r.cbetFlop * weight
             if (r.cbetTurn >= 0) wCbt += r.cbetTurn * weight
@@ -435,6 +440,7 @@ object HudLearner {
 
         return OpponentProfile(
             vpip = wVpip / norm, pfr = wPfr / norm, threeBet = w3b / norm,
+            ats = wAts / norm,
             foldTo3Bet = wF3b / norm, cbetFlop = wCb / norm, cbetTurn = wCbt / norm,
             foldToCBetFlop = wFcb / norm, foldToCBetTurn = wFcbt / norm,
             callRiver = wCrv / norm, checkRaiseFlop = wCrf / norm,
@@ -443,8 +449,8 @@ object HudLearner {
     }
 
     private fun getBaselineProfile(level: String): OpponentProfile = when (level) {
-        "micro_nl2" -> OpponentProfile(0.36f, 0.18f, 0.06f, 0.35f, 0.40f, 0.32f, 0.55f, 0.50f, 0.65f, 0.06f, 0.10f, 0, "baseline")
-        "low_nl10" -> OpponentProfile(0.30f, 0.22f, 0.08f, 0.45f, 0.48f, 0.38f, 0.50f, 0.48f, 0.55f, 0.08f, 0.10f, 0, "baseline")
-        else -> OpponentProfile(0.26f, 0.22f, 0.09f, 0.52f, 0.52f, 0.40f, 0.48f, 0.46f, 0.48f, 0.10f, 0.10f, 0, "baseline")
+        "micro_nl2" -> OpponentProfile(0.36f, 0.18f, 0.06f, 0.08f, 0.35f, 0.40f, 0.32f, 0.55f, 0.50f, 0.65f, 0.06f, 0.10f, 0, "baseline")
+        "low_nl10" -> OpponentProfile(0.30f, 0.22f, 0.08f, 0.10f, 0.45f, 0.48f, 0.38f, 0.50f, 0.48f, 0.55f, 0.08f, 0.10f, 0, "baseline")
+        else -> OpponentProfile(0.26f, 0.22f, 0.09f, 0.12f, 0.52f, 0.52f, 0.40f, 0.48f, 0.46f, 0.48f, 0.10f, 0.10f, 0, "baseline")
     }
 }
