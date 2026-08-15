@@ -893,7 +893,7 @@ class FloatingService : Service() {
             if (targetBtn != null) {
                 val x = (targetBtn.xPct * screenWidth).toInt().coerceIn(0, screenWidth - 1)
                 val y = (targetBtn.yPct * screenHeight).toInt().coerceIn(0, screenHeight - 1)
-                Log.i(TAG, "★ executeAutoTap: $action → ($x, $y) btn="${targetBtn.text}" duration=50ms")
+                Log.i(TAG, "★ executeAutoTap: $action → ($x, $y) btn=${targetBtn.text} duration=50ms")
                 bleManager?.sendTap(x, y, 50)
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                 Log.d(TAG, "executeAutoTap 结果: 成功 (坐标点击)")
@@ -2391,9 +2391,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     holeCardsLocked = VisionApiClient.holeCardsLocked != null,
                     vlmTimeMs = tAnalyzeEnd - tAnalyzeStart,
                     vlmResult = result,
-                    val recogTotalMs = System.currentTimeMillis() - _diagStartTime
-                    Log.i(TAG, "⏱ 本次识别总耗时: ${recogTotalMs}ms (screenshot->result)")
-                    totalTimeMs = recogTotalMs,
+                    totalTimeMs = System.currentTimeMillis() - _diagStartTime,
                     hasError = result == null,
                     errorMessage = if (result == null) VisionApiClient.lastError else null,
                     strategySent = result != null && result.isPokerTable,

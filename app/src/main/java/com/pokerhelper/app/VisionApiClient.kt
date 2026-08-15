@@ -183,7 +183,7 @@ object VisionApiClient {
 
                         if (localResult != null && localRecognizer?.isValidResult(localResult) == true) {
                             try {
-                                val holeStr = localResult.handCards.joinToString(",") { "${it.rank}${it.suit}" }
+                                val holeStr = localResult.holeCards.joinToString(",") { "${it.rank}${it.suit}" }
                                 val commStr = localResult.communityCards.joinToString(",") { "${it.rank}${it.suit}" }
                                 Log.i(TAG, "★ 本地识别成功且有效: 手牌=[$holeStr] | 公共牌=[$commStr] | 耗时=${tLocal1 - tLocal0}ms")
                             } catch (_: Exception) {}
@@ -646,7 +646,7 @@ ${streetHint}${rankHint}识别:"""
                 if (_detectedPlatformCount >= 3 && detectedPlatform != GameModeConfig.currentPlatform.name) {
                     try {
                         val platformEnum = GamePlatform.valueOf(detectedPlatform)
-                        GameModeConfig.currentPlatform = platformEnum
+                        GameModeConfig.setPlatform(platformEnum)
                         Log.i(TAG, "★ 平台自动切换成功: ${GameModeConfig.currentPlatform.name} → $detectedPlatform (连续${_detectedPlatformCount}次一致)")
                         // 切换后重置计数，避免反复触发
                         _detectedPlatformCount = 0
