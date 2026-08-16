@@ -420,8 +420,22 @@ object DiagnosticLogger {
     @Volatile
     private var bleManagerConnected = false
     
+    // V2.9.503: Pipeline耗时追踪字段
+    private var pipelineJsDecisionTimeMs = 0L
+    private var pipelineEsp32TapTimeMs = 0L
+    private var pipelineTotalTimeMs = 0L
+    private var pipelineLastAction = ""
+    
     fun setBleConnected(connected: Boolean) {
         bleManagerConnected = connected
+    }
+    
+    // V2.9.503: Pipeline耗时更新
+    fun updatePipelineTiming(jsMs: Long, esp32Ms: Long, totalMs: Long, action: String) {
+        pipelineJsDecisionTimeMs = jsMs
+        pipelineEsp32TapTimeMs = esp32Ms
+        pipelineTotalTimeMs = totalMs
+        pipelineLastAction = action
     }
     
     fun logRecognition(
@@ -605,6 +619,14 @@ object DiagnosticLogger {
         
         // 统计信息
         json.put("stats", generateStats())
+        
+        // V2.9.503: Pipeline耗时
+        json.put("pipelineTiming", JSONObject().apply {
+            put("jsDecisionTimeMs", pipelineJsDecisionTimeMs)
+            put("esp32TapTimeMs", pipelineEsp32TapTimeMs)
+            put("totalTimeMs", pipelineTotalTimeMs)
+            put("lastAction", pipelineLastAction)
+        })
         
         return json.toString(2)
     }

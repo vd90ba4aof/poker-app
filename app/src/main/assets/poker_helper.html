@@ -1158,14 +1158,24 @@ function exportLog(){
   // V2.9.70: 获取Kotlin端错误日志（API/截屏失败等）
   var nativeErrors='';
   try{nativeErrors=typeof AndroidBridge!=='undefined'&&AndroidBridge.getErrorLogs?AndroidBridge.getErrorLogs():'';}catch(e){}
+  // V2.9.503: 获取Kotlin端完整诊断数据（识别/决策/ESP32点击/耗时统计）
+  var kotlinDiag='';
+  try{kotlinDiag=typeof AndroidBridge!=='undefined'&&AndroidBridge.getDiagData?AndroidBridge.getDiagData():'';}catch(e){}
+  // V2.9.503: 获取pipeline耗时
+  var pipelineTiming='';
+  try{pipelineTiming=typeof AndroidBridge!=='undefined'&&AndroidBridge.getPipelineTiming?AndroidBridge.getPipelineTiming():'';}catch(e){}
   var data={
-    version:'2.9.502',
+    version:typeof APP_VERSION!=='undefined'?APP_VERSION:'unknown',
     exportTime:new Date().toISOString(),
     handHistory:HandHistory.getAll(),
     drtaTracker:DRTA.tracker,
     drtaType:DRTA.currentType,
     logs:LogBuffer.getAll(),
-    nativeErrors:nativeErrors
+    nativeErrors:nativeErrors,
+    // V2.9.503: Kotlin诊断数据（识别记录、决策记录、ESP32点击、统计）
+    kotlinDiag:kotlinDiag?JSON.parse(kotlinDiag):null,
+    // V2.9.503: Pipeline耗时（截图→CV→决策→ESP32点击）
+    pipelineTiming:pipelineTiming?JSON.parse(pipelineTiming):null
   };
   fetch(API_BASE+'/api/export/history',{
     method:'POST',

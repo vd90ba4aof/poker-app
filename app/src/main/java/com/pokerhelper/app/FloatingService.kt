@@ -162,6 +162,12 @@ class FloatingService : Service() {
     private var _diagLocalHandCards = emptyList<VisionApiClient.CardInfo>()
     private var _diagLocalCommunityCards = emptyList<VisionApiClient.CardInfo>()
     private var _diagLocalStreet: String? = null
+    // V2.9.503: Pipeline耗时追踪
+    private var _pipelineScreenshotTime = 0L
+    private var _pipelineJsDecisionTimeMs = 0L
+    private var _pipelineEsp32TapTimeMs = 0L
+    private var _pipelineTotalTimeMs = 0L
+    private var _pipelineLastAction = ""
     // V2.9.114: WebViewAssetLoader——Google官方推荐的本地HTML加载方案
     private lateinit var assetLoader: WebViewAssetLoader
     // V2.9.70: 错误日志——API/截屏失败时记录，豪哥可导出反馈
@@ -896,10 +902,17 @@ class FloatingService : Service() {
                 val y = (targetBtn.yPct * screenHeight).toInt().coerceIn(0, screenHeight - 1)
                 Log.i(TAG, "★ executeAutoTap: $action → ($x, $y) btn=${targetBtn.text} duration=50ms")
                 // V2.9.503: 记录ESP32点击执行到DiagnosticLogger
+                val tapStart = System.currentTimeMillis()
                 try {
                     DiagnosticLogger.logEsp32Tap(action, x, y, targetBtn.text.toString(), "sendTap")
                 } catch (_: Exception) {}
                 bleManager?.sendTap(x, y, 50)
+                // V2.9.503: pipeline耗时记录
+                _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
+                _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
+                _pipelineLastAction = action
+                try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, action) } catch (_: Exception) {}
+                Log.i(TAG, "★ Pipeline: 截图→ESP32点击=${_pipelineEsp32TapTimeMs}ms (本地CV=${_diagLocalCVTimeMs}ms + JS决策=${_pipelineJsDecisionTimeMs}ms)")
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                 Log.d(TAG, "executeAutoTap 结果: 成功 (坐标点击)")
             } else {
@@ -970,7 +983,11 @@ class FloatingService : Service() {
             Log.d(TAG, "executeExactBet step3: 点击确认 ($cx, $cy)")
             try { DiagnosticLogger.logEsp32Tap("exactBet_confirm", cx, cy, "confirm", "executeExactBet") } catch (_: Exception) {}
             bleManager?.sendTap(cx, cy, 50)
-            Log.i(TAG, "★ executeExactBet 完成: $amount")
+            // V2.9.503: pipeline耗时记录（精确下注路径）
+            _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
+            _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
+            _pipelineLastAction = "exactBet_$amount"
+            Log.i(TAG, "★ executeExactBet 完成: $amount, Pipeline总耗时=${_pipelineTotalTimeMs}ms")
             return true
         } catch (e: Exception) {
             Log.e(TAG, "精确输入失败", e)
@@ -988,6 +1005,10 @@ class FloatingService : Service() {
         Log.d(TAG, "★ autoTapFallback: $action → ($x, $y) [screen=${sw}x${sh} platform=${GameModeConfig.currentPlatform}]")
         try { DiagnosticLogger.logEsp32Tap("fallback_$action", x, y, action, "autoTapFallback") } catch (_: Exception) {}
         bleManager?.sendTap(x, y, 50)
+        // V2.9.503: pipeline耗时记录（fallback路径）
+        _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
+        _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
+        _pipelineLastAction = "fallback_$action"
         handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
         // V3.10: 弃牌后重置识别状态 — 防止同rank不同suit的手牌锁定残留
         if (action == "fold") {
@@ -1529,6 +1550,13 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         val eq = data.optInt("eq", 0)
                         Log.d(TAG, "★ autoDecision收到决策: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq% json=${jsonData.take(200)}")
                         
+                        // V2.9.503: pipeline耗时——JS决策完成时刻
+                        if (_diagStartTime > 0) {
+                            _pipelineJsDecisionTimeMs = System.currentTimeMillis() - _diagStartTime - _diagLocalCVTimeMs
+                            _pipelineLastAction = action
+                            Log.d(TAG, "★ Pipeline: JS决策耗时=${_pipelineJsDecisionTimeMs}ms (总=${System.currentTimeMillis()-_diagStartTime}ms)")
+                        }
+                        
                         if (!auto) {
                             // 需要人工确认（如中置信+全押）
                             updateAdviceNotification("⚠️ 需确认: $action", "$reason (eq=$eq%)")
@@ -1655,6 +1683,23 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             @JavascriptInterface
             fun getErrorLogs(): String {
                 return errorLogs.joinToString("\n")
+            }
+            // V2.9.503: JS端导出日志时获取Kotlin诊断数据（识别/决策/ESP32点击/pipeline耗时）
+            @JavascriptInterface
+            fun getDiagData(): String {
+                return DiagnosticLogger.exportAsJson()
+            }
+            // V2.9.503: pipeline耗时追踪查询
+            @JavascriptInterface
+            fun getPipelineTiming(): String {
+                return org.json.JSONObject().apply {
+                    put("screenshotTime", _pipelineScreenshotTime)
+                    put("localCVTimeMs", _diagLocalCVTimeMs)
+                    put("jsDecisionTimeMs", _pipelineJsDecisionTimeMs)
+                    put("esp32TapTimeMs", _pipelineEsp32TapTimeMs)
+                    put("totalTimeMs", _pipelineTotalTimeMs)
+                    put("lastAction", _pipelineLastAction)
+                }.toString()
             }
         }, "AndroidBridge")
 
@@ -2201,6 +2246,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
      */
     private fun processScreenshotAndAnalyze(isAutoCapture:Boolean=false,isMultiFrame1:Boolean=false,isMultiFrame2:Boolean=false) {
         _diagStartTime = System.currentTimeMillis()
+        _pipelineScreenshotTime = _diagStartTime
         val screenshot = ScreenCaptureService.latestScreenshot
         val ssInfo = if (screenshot != null) "${screenshot.size/1024}KB" else "null"
         Log.d(TAG, "★ processScreenshotAndAnalyze: screenshot=$ssInfo, apiKey=${VisionApiClient.apiKey.takeLast(4)}, webViewReady=$webViewReady")
@@ -2471,6 +2517,10 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                                     val (ix, iy) = GameModeConfig.getInsuranceDeclinePosition(screenWidth, screenHeight)
                                     try { DiagnosticLogger.logEsp32Tap("insurance_decline", ix, iy, "insuranceBtn", "autoCapture") } catch (_: Exception) {}
                                     bleManager?.sendTap(ix, iy, 50)
+                                    // V2.9.503: pipeline耗时记录（insurance路径）
+                                    _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
+                                    _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
+                                    _pipelineLastAction = "insurance_decline"
                                     updateAdviceNotification("Insurance", "已自动拒绝")
                                     updateBallAdvice("COLOR:CHECK|SIGNAL:INSURANCE|REASON:自动拒绝")
                                     Log.d(TAG, "★ Insurance declined at ($ix, $iy)")
