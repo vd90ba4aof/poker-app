@@ -1,6 +1,7 @@
 package com.pokerhelper.app
 
 import android.os.Environment
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -17,6 +18,8 @@ import java.util.*
  * - 复盘导出：按手牌维度组织完整决策链
  */
 object DiagnosticLogger {
+    
+    private const val TAG = "DiagnosticLogger"
     
     // ===== 错误分类 V2.9.215 =====
     enum class ErrorCategory(val label: String) {

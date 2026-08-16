@@ -933,6 +933,7 @@ class FloatingService : Service() {
             val boxX = ((inputBox[0] + inputBox[2]) / 2 * sx).toInt()
             val boxY = ((inputBox[1] + inputBox[3]) / 2 * sy).toInt()
             Log.d(TAG, "executeExactBet step1: 点击输入框 ($boxX, $boxY)")
+            try { DiagnosticLogger.logEsp32Tap("exactBet_inputBox", boxX, boxY, "inputBox", "executeExactBet") } catch (_: Exception) {}
             bleManager?.sendTap(boxX, boxY, 50)
             Thread.sleep(250) // 等键盘弹出
             // 1.5 V2.9.370: 先清空已有输入 (消费 numpadBackspace)
@@ -941,6 +942,7 @@ class FloatingService : Service() {
                 if (backspace.isNotEmpty()) {
                     val bsX = ((backspace[0] + backspace[2]) / 2 * sx).toInt()
                     val bsY = ((backspace[1] + backspace[3]) / 2 * sy).toInt()
+                    try { DiagnosticLogger.logEsp32Tap("exactBet_backspace", bsX, bsY, "backspace", "executeExactBet") } catch (_: Exception) {}
                     repeat(10) { // 最多清10位，覆盖绝大多数下注金额
                         bleManager?.sendTap(bsX, bsY, 40)
                         Thread.sleep(40)
@@ -958,6 +960,7 @@ class FloatingService : Service() {
                 val kx = (key[0] * sx).toInt()
                 val ky = (key[1] * sy).toInt()
                 Log.d(TAG, "executeExactBet step2[$idx]: 点击 '$ch' ($kx, $ky)")
+                try { DiagnosticLogger.logEsp32Tap("exactBet_digit_$ch", kx, ky, ch.toString(), "executeExactBet") } catch (_: Exception) {}
                 bleManager?.sendTap(kx, ky, 40)
                 Thread.sleep(60) // 按键间隔
             }
@@ -965,6 +968,7 @@ class FloatingService : Service() {
             val cx = ((confirm[0] + confirm[2]) / 2 * sx).toInt()
             val cy = ((confirm[1] + confirm[3]) / 2 * sy).toInt()
             Log.d(TAG, "executeExactBet step3: 点击确认 ($cx, $cy)")
+            try { DiagnosticLogger.logEsp32Tap("exactBet_confirm", cx, cy, "confirm", "executeExactBet") } catch (_: Exception) {}
             bleManager?.sendTap(cx, cy, 50)
             Log.i(TAG, "★ executeExactBet 完成: $amount")
             return true
@@ -982,6 +986,7 @@ class FloatingService : Service() {
         val (sw, sh) = if (rawSw > 0 && rawSh > 0) Pair(rawSw, rawSh) else getScreenSize()
         val (x, y) = GameModeConfig.getAutoTapFallback(action, sw, sh)
         Log.d(TAG, "★ autoTapFallback: $action → ($x, $y) [screen=${sw}x${sh} platform=${GameModeConfig.currentPlatform}]")
+        try { DiagnosticLogger.logEsp32Tap("fallback_$action", x, y, action, "autoTapFallback") } catch (_: Exception) {}
         bleManager?.sendTap(x, y, 50)
         handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
         // V3.10: 弃牌后重置识别状态 — 防止同rank不同suit的手牌锁定残留
@@ -1207,6 +1212,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             setOnClickListener {
                 if (bleManager?.isConnected == true) {
                     // 已连接，点击发送tap测试
+                    try { DiagnosticLogger.logEsp32Tap("manual_test", 540, 1172, "testTap", "bleIconClick") } catch (_: Exception) {}
                     bleManager?.sendTap(540, 1172, 50)
                     tvStatus?.text = "发送tap测试..."
                 } else {
@@ -2463,6 +2469,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                             handler.post {
                                 try {
                                     val (ix, iy) = GameModeConfig.getInsuranceDeclinePosition(screenWidth, screenHeight)
+                                    try { DiagnosticLogger.logEsp32Tap("insurance_decline", ix, iy, "insuranceBtn", "autoCapture") } catch (_: Exception) {}
                                     bleManager?.sendTap(ix, iy, 50)
                                     updateAdviceNotification("Insurance", "已自动拒绝")
                                     updateBallAdvice("COLOR:CHECK|SIGNAL:INSURANCE|REASON:自动拒绝")
