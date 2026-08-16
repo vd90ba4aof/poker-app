@@ -354,6 +354,73 @@ object DiagnosticLogger {
     /**
      * 记录一次识别的完整信息
      */
+
+    // V2.9.503: ESP32 BLE点击执行记录
+    data class Esp32TapLog(
+        val timestamp: Long,
+        val timeStr: String,
+        val action: String,
+        val x: Int,
+        val y: Int,
+        val buttonLabel: String,
+        val method: String,
+        val bleConnected: Boolean
+    )
+    
+    private val esp32TapLogs = mutableListOf<Esp32TapLog>()
+    private const val MAX_ESP32_TAPS = 100
+    
+    fun logEsp32Tap(action: String, x: Int, y: Int, buttonLabel: String, method: String) {
+        val now = System.currentTimeMillis()
+        val timeStr = timeFormat.format(Date(now))
+        
+        val tapLog = Esp32TapLog(
+            timestamp = now,
+            timeStr = timeStr,
+            action = action,
+            x = x,
+            y = y,
+            buttonLabel = buttonLabel,
+            method = method,
+            bleConnected = bleManagerConnected
+        )
+        
+        synchronized(esp32TapLogs) {
+            esp32TapLogs.add(tapLog)
+            if (esp32TapLogs.size > MAX_ESP32_TAPS) {
+                esp32TapLogs.removeAt(0)
+            }
+        }
+        
+        // 同时写入文件日志
+        try {
+            synchronized(logFileLock) {
+                val file = getLogFile()
+                val json = JSONObject().apply {
+                    put("type", "ESP32_TAP")
+                    put("time", timeStr)
+                    put("timestamp", now)
+                    put("action", action)
+                    put("x", x)
+                    put("y", y)
+                    put("button", buttonLabel)
+                    put("method", method)
+                    put("bleConnected", bleManagerConnected)
+                }
+                file.appendText(json.toString() + "\n", Charsets.UTF_8)
+            }
+        } catch (_: Exception) {}
+        
+        Log.i(TAG, "📟 ESP32点击: $action → ($x,$y) btn=$buttonLabel method=$method ble=$bleManagerConnected")
+    }
+    
+    @Volatile
+    private var bleManagerConnected = false
+    
+    fun setBleConnected(connected: Boolean) {
+        bleManagerConnected = connected
+    }
+    
     fun logRecognition(
         localCVEnabled: Boolean,
         localCVTimeMs: Long,
@@ -483,7 +550,7 @@ object DiagnosticLogger {
     fun exportAsJson(): String {
         val json = JSONObject()
         json.put("exportTime", dateFormat.format(Date()))
-        json.put("version", "2.9.215")
+        json.put("version", com.pokerhelper.app.BuildConfig.VERSION_NAME)
         json.put("totalLogs", recognitionLogs.size)
         json.put("totalDecisions", decisionLogs.size)
         json.put("totalErrors", errorEntries.size)
@@ -515,6 +582,24 @@ object DiagnosticLogger {
         }
         json.put("errors", errorsArray)
         
+        // ESP32点击日志 V2.9.503
+        val tapsArray = JSONArray()
+        synchronized(esp32TapLogs) {
+            for (tap in esp32TapLogs) {
+                tapsArray.put(JSONObject().apply {
+                    put("time", tap.timeStr)
+                    put("timestamp", tap.timestamp)
+                    put("action", tap.action)
+                    put("x", tap.x)
+                    put("y", tap.y)
+                    put("button", tap.buttonLabel)
+                    put("method", tap.method)
+                    put("bleConnected", tap.bleConnected)
+                })
+            }
+        }
+        json.put("esp32Taps", tapsArray)
+        
         // 统计信息
         json.put("stats", generateStats())
         
@@ -528,7 +613,7 @@ object DiagnosticLogger {
     fun exportReview(): String {
         val json = JSONObject()
         json.put("exportTime", dateFormat.format(Date()))
-        json.put("version", "2.9.215")
+        json.put("version", com.pokerhelper.app.BuildConfig.VERSION_NAME)
         
         // 按手牌分组决策
         val hands = JSONArray()

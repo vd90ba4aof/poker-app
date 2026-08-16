@@ -2691,7 +2691,7 @@ var HandStateMachine=(function(){
 // 升级自 V2.9.215
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
-'use strict';
+'use strict';var APP_VERSION='2.9.503';
 
 // ====== 第一部分: GTO翻前频率表 (5-Max专用) ======
 var _RFI={
@@ -5331,7 +5331,7 @@ var TableQualityMeter={
       negBBStreak:0,       // BB/100 连续为负手数
       lastEvalHand:0       // 上次评估时的手数（避免重复评估）
     };
-    console.log('[TableQualityMeter] 初始化完成（V2.9.131，4阈值+3级）');
+    console.log('[TableQualityMeter] 初始化完成（' + APP_VERSION + '，4阈值+3级）');
   },
   reset:function(){
     this._q={
@@ -5507,7 +5507,7 @@ var FloatBallBlink={
       lastBlinkAt:0,       // 上次闪烁时间
       tiltBlocked:false    // TILT 状态屏蔽
     };
-    console.log('[FloatBallBlink] 初始化完成（V2.9.131，视觉层正交于7色策略色）');
+    console.log('[' + APP_VERSION + '] [FloatBallBlink] 初始化完成（视觉层正交于7色策略色）');
   },
   // TILT 屏蔽检查（V2.9.129 联动）
   _isTiltBlocked:function(){
@@ -5615,7 +5615,7 @@ var TableChangeDialog={
   init:function(){
     if(this._d)return;
     this._d={visible:false,lastEval:null,lastAction:null,lastShowAt:0};
-    console.log('[TableChangeDialog] 初始化完成（V2.9.131，复用 reviewModal 模式）');
+    console.log('[' + APP_VERSION + '] [TableChangeDialog] 初始化完成（复用 reviewModal 模式）');
   },
   show:function(evalResult){
     if(!this._d)this.init();
@@ -5688,7 +5688,7 @@ var TableChangeAdvisor={
   init:function(){
     if(this._a)return;
     this._a={lastEvalHands:0};
-    console.log('[TableChangeAdvisor] 初始化完成（V2.9.131，联动钩子）');
+    console.log('[' + APP_VERSION + '] [TableChangeAdvisor] 初始化完成（联动钩子）');
   },
   // 主入口：HandHistory.add 末调用 TableQualityMeter.recordHand 后再调用本函数
   tick:function(){
@@ -8366,7 +8366,7 @@ function _decideInner(){
         // 阈值同步放宽到-4，与EV护栏一致
         var _evGuardedFold=result._evs&&result._evs.fold&&result._evs.fold.ev<-4;
         if(_evGuardedFold){
-          console.log('[V2.9.126] EV护栏主动fold→不反fold');
+          console.log('[' + APP_VERSION + '] EV护栏主动fold→不反fold');
         }else{
           var _poolType=PoolTypeDetector.detect();
           var _holeArr=G.hole.filter(function(c){return c;});
@@ -8567,7 +8567,7 @@ function preF(k){
   }
   if(scene==='reraise'){eq-=12;sceneLabel='面对再raise';
     // V2.9.141: 3bet池投机额外收紧——价格太贵，投机牌没空间
-    if(_specBonus>0){var _3betSpecPen=Math.round(_specBonus*0.5);eq-=_3betSpecPen;console.log('[V2.9.141] 3bet池投机收紧 eq-'+_3betSpecPen+'(specBonus='+_specBonus+')');}
+    if(_specBonus>0){var _3betSpecPen=Math.round(_specBonus*0.5);eq-=_3betSpecPen;console.log('[' + APP_VERSION + '] 3bet池投机收紧 eq-'+_3betSpecPen+'(specBonus='+_specBonus+')');}
   }
   else if(scene==='raise'){eq-=4;sceneLabel='面对加注';}
   else if(scene==='call'){eq-=2;sceneLabel='多人跟注';}
@@ -9028,12 +9028,12 @@ function postF(k){
     if(_hasAce&&_isBackdoor){
       var _axBonus=Math.min(5,Math.round(3*(pot/(bet*2||1)))); // 赔率越好加越多，最多+5
       eq+=_axBonus;
-      console.log('[V2.9.140] Ax后门隐含赔率 eq+'+_axBonus+'→'+eq.toFixed(1)+'('+hClass.desc+')');
+      console.log('[' + APP_VERSION + '] Ax后门隐含赔率 eq+'+_axBonus+'→'+eq.toFixed(1)+'('+hClass.desc+')');
     }
     // 后门同花/顺子(非Ax): 赔率好时也加一点
     if(!_hasAce&&_isBackdoor&&bet/(pot+bet)<0.33){
       eq+=2;
-      console.log('[V2.9.140] 后门听牌赔率好 eq+2→'+eq.toFixed(1));
+      console.log('[' + APP_VERSION + '] 后门听牌赔率好 eq+2→'+eq.toFixed(1));
     }
   }
   // V2.9.141 turn弱听退出已合并至V2.9.147 DRAW折扣取max逻辑
@@ -11393,7 +11393,7 @@ function revertLocal(){
     }
     // V2.9.164: 热更新后自动重载
     if(d.hotloadReload){
-      console.log('[V2.9.164] 热更新完成，3秒后自动重载...');
+      console.log('[' + APP_VERSION + '] 热更新完成，3秒后自动重载...');
       setTimeout(function(){location.reload();},3000);
     }
   }).catch(function(){});
@@ -12132,7 +12132,7 @@ function autoExecuteDecision(r, isAutoMode) {
 // ===== 初始化 =====
 (function() {
   OpponentTracker.init();
-  console.log('[V2.9.180] AutoConfidence + OpponentTracker + BoardTexture 已加载');
+  console.log('[' + APP_VERSION + '] AutoConfidence + OpponentTracker + BoardTexture 已加载');
 })();</script>
 </body>
 </html>

@@ -331,6 +331,7 @@ class FloatingService : Service() {
     // V2.9.240: 统一设置BLE回调（供onCreate和reinitializeComponents共用）
     private fun setupBleCallbacks() {
         bleManager?.onStatusChanged = { connected, message ->
+            try { DiagnosticLogger.setBleConnected(connected) } catch (_: Exception) {}
             handler.post {
                 try {
                     Log.d(TAG, "BLE onStatusChanged: connected=$connected, msg=$message")
@@ -894,6 +895,10 @@ class FloatingService : Service() {
                 val x = (targetBtn.xPct * screenWidth).toInt().coerceIn(0, screenWidth - 1)
                 val y = (targetBtn.yPct * screenHeight).toInt().coerceIn(0, screenHeight - 1)
                 Log.i(TAG, "★ executeAutoTap: $action → ($x, $y) btn=${targetBtn.text} duration=50ms")
+                // V2.9.503: 记录ESP32点击执行到DiagnosticLogger
+                try {
+                    DiagnosticLogger.logEsp32Tap(action, x, y, targetBtn.text.toString(), "sendTap")
+                } catch (_: Exception) {}
                 bleManager?.sendTap(x, y, 50)
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                 Log.d(TAG, "executeAutoTap 结果: 成功 (坐标点击)")
