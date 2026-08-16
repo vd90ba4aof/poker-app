@@ -1287,7 +1287,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.235',
+  CURRENT_VERSION:'2.9.503',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -4039,7 +4039,7 @@ return{
   decidePreflop:decidePreflop,
   decidePostflop:decidePostflop,
   isEnabled:function(){return G._seEnabled!==false&&G.tt<=6;},
-  getVersion:function(){return'2.9.300';},
+  getVersion:function(){return APP_VERSION;},
   getRFI:function(pos){return _RFI[pos]||null;},
   get3B:function(vs,from){return _3B[vs]?_3B[vs][from]:null;},
   getF3B:function(pos){return _F3B[pos]||null;},

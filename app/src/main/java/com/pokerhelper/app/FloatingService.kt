@@ -987,6 +987,7 @@ class FloatingService : Service() {
             _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
             _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
             _pipelineLastAction = "exactBet_$amount"
+            try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, _pipelineLastAction) } catch (_: Exception) {}
             Log.i(TAG, "★ executeExactBet 完成: $amount, Pipeline总耗时=${_pipelineTotalTimeMs}ms")
             return true
         } catch (e: Exception) {
@@ -1009,6 +1010,7 @@ class FloatingService : Service() {
         _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
         _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
         _pipelineLastAction = "fallback_$action"
+        try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, _pipelineLastAction) } catch (_: Exception) {}
         handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
         // V3.10: 弃牌后重置识别状态 — 防止同rank不同suit的手牌锁定残留
         if (action == "fold") {
@@ -2521,6 +2523,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                                     _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
                                     _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
                                     _pipelineLastAction = "insurance_decline"
+                                    try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, _pipelineLastAction) } catch (_: Exception) {}
                                     updateAdviceNotification("Insurance", "已自动拒绝")
                                     updateBallAdvice("COLOR:CHECK|SIGNAL:INSURANCE|REASON:自动拒绝")
                                     Log.d(TAG, "★ Insurance declined at ($ix, $iy)")
