@@ -1571,6 +1571,7 @@ var OppProfiler={
     // V2.9.168: 标准化oppSeats格式——确保每项都有pos和nickname
     // 新格式(Kotlin toJson): {seat:number, nickname:string, chips:string, action:string, active:boolean}
     // 旧格式: {pos:string, nickname:string, chips:number, bet:number}
+    var _seatToPos=function(s){return{1:'bottom',2:'left-bottom',3:'left-top',4:'top-center',5:'right-top',6:'right-bottom'}[s]||'seat_'+s;};
     var _normalizedSeats=[];
     var _prevSeats=this._prevSeats||{};
     var _currSeats={};
@@ -4162,6 +4163,11 @@ var RangeVsRange=(function(){
   // 补全公共牌到5张
   function completeBoard(board, myHole, oppHole){
     var used=new Set();
+    function mark(cards){
+      for(var i=0;i<cards.length;i++){
+        if(cards[i]&&cards[i].rank)used.add(cards[i].rank+(cards[i].suit||''));
+      }
+    }
     mark(board);mark(myHole);mark(oppHole);
     
     var deck=[];
@@ -10807,6 +10813,21 @@ function onVisionResult(data){
     G.act=G.tt; // 兼容：旧版API无active_players时降级
   }
   // V2.9.16: JS端二次校验——防止矛盾数据进策略引擎
+  (function validateAndCorrect(){
+    var corrections=[];
+    // 规则1: active不能超过total
+    if(G.act>G.tt){corrections.push('act('+G.act+')>tt('+G.tt+')→act=tt');G.act=G.tt;}
+    // 规则2: active至少2人
+    if(G.act<2){corrections.push('act('+G.act+')<2→act=tt('+G.tt+')');G.act=G.tt;}
+    // 规则3: preflop阶段active应等于total（没人弃牌）
+    if(G.phase==='pre'&&G.act<G.tt){corrections.push('preflop act('+G.act+')<tt('+G.tt+')→act=tt');G.act=G.tt;}
+    // 规则4: to_call不应为负
+    if(G.bet<0){corrections.push('bet('+G.bet+')<0→0');G.bet=0;}
+    // 规则5: 手牌必须有2张
+    var holeCount=G.hole.filter(function(c){return c!==null;}).length;
+    if(holeCount!==2){corrections.push('手牌'+holeCount+'张≠2');}
+    if(corrections.length>0){console.log('[校验纠错] '+corrections.join('; '));}
+  })();
   // V2.9.78: D按钮位置识别（vl-plus）→ 精准位置推断
   // d_button_position来自vl-plus并行识别，比flash直接识别my_position准确得多
   if(data.d_button_position && data.d_button_position!=='not_found' && data.d_button_position!==''){
@@ -10959,6 +10980,98 @@ function onVisionResult(data){
   
   // V2.9.76: ★ Vision数据保险层 ★
   // 原则：手牌/公共牌以外的数据，识别不准就不更新，保持旧值，不让策略引擎乱
+  (function visionInsurance(){
+    var insLog=[];
+    // === 1. 盲注锁定：同一桌盲注不变 ===
+    // V2.9.144: 首次启动时从localStorage恢复锁存BB
+    if(!G._lockedBB){
+      try{var _savedBB=localStorage.getItem('poker_lockedBB');if(_savedBB)G._lockedBB=parseInt(_savedBB)||0;}catch(e){}
+    }
+    if(!G._lockedBB && bbValue>0){
+      G._lockedBB=bbValue;
+      try{localStorage.setItem('poker_lockedBB',String(bbValue));}catch(e){}
+      insLog.push('盲注锁定BB='+bbValue);
+    }else if(G._lockedBB && bbValue>0 && bbValue!==G._lockedBB){
+      // 盲注突变→用锁定值
+      insLog.push('盲注突变'+bbValue+'→锁定'+G._lockedBB);
+      bbValue=G._lockedBB;
+    }
+
+    // === 2. 从按钮文字提取可靠数据（按钮文字比Vision OCR更可靠） ===
+    var btnToCall=0, btnPot=0;
+    if(data.buttons && data.buttons.length>0){
+      for(var bi=0;bi<data.buttons.length;bi++){
+        var bText=data.buttons[bi]||'';
+        // 提取"跟注XXX"中的金额
+        var callMatch=bText.match(/跟注\s*([\d,]+K?)/);
+        if(callMatch){
+          var cv=callMatch[1].replace(/,/g,'');
+          if(cv.indexOf('K')!==-1){btnToCall=parseFloat(cv)*1000;}
+          else{btnToCall=parseInt(cv)||0;}
+        }
+        // 提取"全押"或"全下XXX"
+        if(bText.indexOf('全押')>=0||bText.indexOf('全下')>=0){
+          btnToCall=parseInt(data.my_chips)||G.stk*bbValue||0;
+        }
+      }
+    }
+
+    // === 3. to_call保险：按钮文字优先于Vision OCR ===
+    var visionToCall=parseInt(data.to_call)||0;
+    if(btnToCall>0 && visionToCall>0){
+      // 两者都有，差异>50%→信任按钮
+      if(Math.abs(btnToCall-visionToCall)/Math.max(btnToCall,visionToCall)>0.5){
+        insLog.push('to_call: Vision='+visionToCall+' 按钮='+btnToCall+' → 用按钮');
+        visionToCall=btnToCall;
+      }
+    }else if(btnToCall>0 && visionToCall===0){
+      // Vision没识别出to_call，按钮有→用按钮
+      insLog.push('to_call: Vision=0 按钮='+btnToCall+' → 用按钮');
+      visionToCall=btnToCall;
+    }else if(btnToCall>0 && (visionToCall===0 || visionToCall!==btnToCall)){
+      // 按钮有值，Vision不一致→用按钮（按钮是硬编码文字，更可靠）
+      if(btnToCall!==visionToCall){
+        insLog.push('to_call: Vision='+visionToCall+'→按钮='+btnToCall);
+        visionToCall=btnToCall;
+      }
+    }
+    G.bet=visionToCall>0?Math.max(0,Math.round(visionToCall/bbValue)):0;
+
+    // === 4. 底池保险：连续性+合理性校验 ===
+    var visionPot=parseInt(data.pot_size)||0;
+    var newPotBB=visionPot>0?Math.max(1,Math.round(visionPot/bbValue)):0;
+    if(newPotBB>0){
+      // 底池不能小于上一街（翻牌>翻前，转牌>翻牌，河牌>转牌）
+      if(G._lastPotBB>0 && newPotBB<G._lastPotBB*0.5){
+        insLog.push('底池回退: Vision='+newPotBB+'BB<上街'+G._lastPotBB+'BB → 保持上街');
+        newPotBB=G._lastPotBB;
+      }
+      G.pot=newPotBB;
+      G._lastPotBB=newPotBB;
+    }else if(visionPot<=0 && G._lastPotBB>0){
+      // Vision没识别出底池→保持上一街（不要归零）
+      insLog.push('底池缺失: 保持上街'+G._lastPotBB+'BB');
+      G.pot=G._lastPotBB;
+    }
+
+    // === 5. 筹码保险：突变检测 ===
+    var visionChips=parseInt(data.my_chips)||0;
+    var newStkBB=visionChips>0?Math.max(1,Math.round(visionChips/bbValue)):0;
+    if(newStkBB>0 && G.stk>0){
+      var chipChange=Math.abs(newStkBB-G.stk)/G.stk;
+      // 筹码变化>80%且不是新一手牌（新一手牌筹码可能大变）→ 可能识别错
+      if(chipChange>0.8 && G.phase!=='pre'){
+        insLog.push('筹码突变: Vision='+newStkBB+'BB vs 旧='+G.stk+'BB (变化'+Math.round(chipChange*100)+'%) → 保持旧值');
+        // 不更新，保持旧值
+      }else{
+        G.stk=newStkBB;
+      }
+    }else if(newStkBB>0){
+      G.stk=newStkBB;
+    }
+
+    if(insLog.length>0) console.log('[Vision保险] '+insLog.join('; '));
+  })();
   // V2.9.133 BUG D: 用锁定后的 bbValue 更新 _lastVisionBB (rawBB 来源)
   window._lastVisionBB=bbValue;
   // 新一手牌时重置底池连续性追踪
@@ -11048,11 +11161,50 @@ function onVisionResult(data){
   }
   
   // V2.9.48: 底池合理性校验——防止Vision API误读
+  (function validatePot(){
+    var warnings=[];
+    // 翻后底池至少3BB（SB+BB+一些行动），如果<2BB很可能是识别错误
+    if(G.phase==='post'&&G.pot>0&&G.pot<2){
+      warnings.push('翻后pot='+G.pot+'BB太小，可能识别错误');
+      // 尝试从BB和人数推算最小底池
+      var minPot=bbValue>0?Math.round(1.5):3;
+      if(G.pot<minPot){G.pot=minPot;warnings.push('→修正为'+minPot+'BB');}
+    }
+    // 底池超过自己筹码5倍，可能把对手筹码当底池了
+    if(G.pot>G.stk*5&&G.stk>0){
+      warnings.push('pot='+G.pot+'BB>>stk='+G.stk+'BB，可能误读对手筹码为底池');
+    }
+    if(warnings.length>0)console.log('[底池校验] '+warnings.join('; '));
+  })();
   
   // V2.9.72: ★ 场景-赔率交叉校验 ★
   // 根因: Vision API有时不返回buttons→detectSceneFromButtons默认'check'→提示过牌但无过牌按钮
   // 修复: 用to_call(G.bet)反推场景——bet>0说明面对下注,不可能是check/open
   // V2.9.139: 加强——同时用data.to_call原始值做校验（在G.bet可能被bbValue除零等场景前）
+  (function validateSceneBet(){
+    var _rawToCall=parseInt(data.to_call)||0;
+    var _effectiveBet=G.bet>0?G.bet:(_rawToCall>0?1:0); // to_call>0但G.bet=0→至少1BB
+    if(_effectiveBet>0 || _rawToCall>0){
+      if(G.phase==='post' && (G.scene==='check' || G.scene==='open')){
+        console.log('[场景纠错] postflop to_call='+_rawToCall+'/G.bet='+G.bet+'BB但scene='+G.scene+'→强制bet(按钮检测失败,赔率推断)');
+        G.scene='bet';
+        if(G.bet===0 && _rawToCall>0){G.bet=Math.max(1,Math.round(_rawToCall/(bbValue||200)));} // V2.9.139: 补救bet=0
+        try{
+          document.querySelectorAll('#sceneBtnsPost .big-btn').forEach(function(b){b.classList.remove('on');});
+          var el=document.getElementById('scBet');if(el)el.classList.add('on');
+        }catch(e){}
+      }
+      if(G.phase==='pre' && G.scene==='open'){
+        console.log('[场景纠错] preflop to_call='+_rawToCall+'/G.bet='+G.bet+'BB但scene=open→强制raise(按钮检测失败,赔率推断)');
+        G.scene='raise';
+        if(G.bet===0 && _rawToCall>0){G.bet=Math.max(1,Math.round(_rawToCall/(bbValue||200)));}
+        try{
+          document.querySelectorAll('#sceneBtnsPre .big-btn').forEach(function(b){b.classList.remove('on');});
+          var el=document.getElementById('scRaise');if(el)el.classList.add('on');
+        }catch(e){}
+      }
+    }
+  })();
 
   // ===== V2.9.186: GG扑克特有游戏规则 — 新字段解析 =====
   try{
@@ -11292,6 +11444,12 @@ function onVisionResult(data){
   var suitColor={s:'blk',h:'red',d:'red',c:'blk'};
   var streetCN={preflop:'翻前',flop:'翻牌',turn:'转牌',river:'河牌',pre:'翻前'};
   
+  function makeRecCard(c){
+    if(!c||!c.rank) return '';
+    var sym=suitSymbol[c.suit]||'?';
+    var cls=suitColor[c.suit]||'blk';
+    return '<div class="rec-card '+cls+'"><span class="rc-r">'+(c.rank==='T'?'10':c.rank)+'</span><span class="rc-s">'+sym+'</span></div>';
+  }
   
   var cardsHtml='';
   // 手牌
