@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- V2.9.506: Android Lint 配置 -->
+<lint>
+    <!-- 严重性: fatal / error / warning / informational / ignore -->
+    
+    <!-- 必须检查的问题 -->
+    <issue id="HardcodedText" severity="error" />
+    <issue id="UseSparseArrays" severity="warning" />
+    <issue id="NewApi" severity="error" />
+    <issue id="MissingPermission" severity="error" />
+    <issue id="UnusedResources" severity="warning" />
+    
+    <!-- WebView 安全检查 -->
+    <issue id="SetJavaScriptEnabled" severity="warning" />
+    <issue id="JavascriptInterface" severity="error" />
+    
+    <!-- 线程安全 -->
+    <issue id="WifiManagerLeak" severity="error" />
+    <issue id="StaticFieldLeak" severity="warning" />
+    
+    <!-- 性能 -->
+    <issue id="HandlerLeak" severity="error" />
+    <issue id="Recycle" severity="error" />
+    
+    <!-- 降低噪音：关闭不影响功能的检查 -->
+    <issue id="IconLauncherShape" severity="ignore" />
+    <issue id="IconDuplicates" severity="ignore" />
+    <issue id="GoogleAppIndexingWarning" severity="ignore" />
+    <issue id="ContentDescription" severity="ignore" />
+    <issue id="RtlHardcoded" severity="ignore" />
+</lint>

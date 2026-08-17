@@ -466,7 +466,7 @@ class HttpServerService : Service() {
             try {
                 server?.start()
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("HttpServerService", "Failed to start HTTP server", e)
             }
         }
         return START_STICKY

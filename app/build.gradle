@@ -1,6 +1,7 @@
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+    id 'io.gitlab.arturbosch.detekt'
 }
 
 android {
@@ -11,8 +12,8 @@ android {
         applicationId "win.opt.view"
         minSdk 26
         targetSdk 34
-        versionCode 225
-        versionName "2.9.505"
+        versionCode 226
+        versionName "2.9.506"
     }
 
     buildTypes {
@@ -66,4 +67,36 @@ dependencies {
     implementation 'com.google.mlkit:text-recognition:16.0.1'
     implementation 'androidx.webkit:webkit:1.11.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+}
+
+// ===== V2.9.506: Detekt 静态分析配置 =====
+detekt {
+    config = files("${rootProject.projectDir}/detekt-config.yml")
+    buildUponDefaultConfig = true
+    allRules = false
+    autoCorrect = false
+    source = files("src/main/java")
+}
+
+tasks.withType(io.gitlab.arturbosch.detekt.Detekt).configureEach {
+    reports {
+        html.required.set(true)
+        xml.required.set(true)
+        txt.required.set(false)
+        sarif.required.set(false)
+        md.required.set(false)
+    }
+}
+
+// ===== V2.9.506: Android Lint 配置 =====
+android {
+    lintOptions {
+        abortOnError false
+        warningsAsErrors false
+        checkAllWarnings true
+        htmlReport true
+        xmlReport true
+        textReport true
+        lintConfig file("${rootProject.projectDir}/lint-config.xml")
+    }
 }
