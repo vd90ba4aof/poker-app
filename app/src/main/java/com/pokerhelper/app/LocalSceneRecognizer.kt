@@ -903,7 +903,7 @@ class LocalSceneRecognizer(
         // V2.9.503: 详细诊断 - 失败时记录具体原因
         if (!valid) {
             Log.w(TAG, "★ LocalCV失败详情: handCards=${result.holeCards.map{"${it.rank}${it.suit}"}} " +
-                    "pot=${result.potSize} buttons=${result.buttons.map{it.text}} " +
+                    "pot=${result.potSize} buttons=${result.buttons} " +
                     "street=${result.street} isPokerTable=${result.isPokerTable}")
             if (!handValid) Log.w(TAG, "  ❌ 手牌无效: 识别到${result.holeCards.size}张(需要2张)")
             if (!hasPot) Log.w(TAG, "  ❌ 底池无效: pot=${result.potSize}")
