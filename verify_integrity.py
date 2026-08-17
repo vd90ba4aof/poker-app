@@ -508,6 +508,44 @@ else:
 # ============================================================
 print()
 print("=" * 60)
+print("🔍 检查17: Kotlin类型安全 - 已知类型属性访问检查")
+print("=" * 60)
+
+# 检查17: 防止对已知 List<String> 字段调用 .text 等不存在的属性
+# 背景：V2.9.504曾出现 result.buttons.map{it.text} 编译错误，
+# buttons 是 List<String>，String 没有 .text 属性
+# 扫描所有 Kotlin 文件中对 List<String> 字段的 .map{it.xxx} 模式
+kotlin_files = []
+for root, dirs, files in os.walk("app/src"):
+    for f in files:
+        if f.endswith(".kt"):
+            kotlin_files.append(os.path.join(root, f))
+
+type_safety_ok = True
+for kf in kotlin_files:
+    with open(kf, "r", encoding="utf-8", errors="ignore") as fh:
+        content = fh.read()
+        lines = content.split("\n")
+        for i, line in enumerate(lines, 1):
+            # 检测 .map{it.text} 模式，这在 List<String> 上是错误的
+            if re.search(r'\.map\s*\{\s*it\.text\s*\}', line):
+                # 检查上下文是否有 List<String> 类型的变量
+                # 常见错误模式：.buttons.map{it.text}, .names.map{it.text} 等
+                # buttons 是 List<String>，String 没有 .text
+                # 但如果是 List<Button> 类型则有 .text
+                # 简单规则：对 buttons 字段调用 .map{it.text} 是错的
+                if 'buttons' in line.lower() or 'button' in line.lower():
+                    check(f"{kf}:{i} 类型安全: buttons是List<String>无.text属性",
+                          False,
+                          f"行内容: {line.strip()}")
+                    type_safety_ok = False
+
+if type_safety_ok:
+    check("Kotlin类型安全检查 (List<String>.map{it.xxx}模式)", True)
+
+# ============================================================
+print()
+print("=" * 60)
 total = passed + failed
 print(f"📊 验证结果: {passed}/{total} 通过, {failed} 失败, {warnings} 警告")
 print("=" * 60)
