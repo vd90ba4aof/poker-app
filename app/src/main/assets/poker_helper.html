@@ -400,7 +400,7 @@ body.speed-mode .rec-label{font-size:10px}
 </div>
 <!-- V2.9.131: 换桌建议弹窗 -->
 <div class="modal" id="tableChangeModal" style="display:none;z-index:9999;background:rgba(0,0,0,0.85);padding:10px;max-height:95vh;overflow-y:auto">
-  <div class="mt" style="background:linear-gradient(135deg,#3a3a1a,#5a4a1a);color:#ffd700">🔄 换桌建议（V2.9.131）</div>
+  <div class="mt" style="background:linear-gradient(135deg,#3a3a1a,#5a4a1a);color:#ffd700">🔄 换桌建议</div>
   <div id="tableChangeContent" style="padding:6px 0;color:#fff"></div>
   <div style="display:flex;gap:6px;margin-top:6px">
     <button class="m-cl" style="flex:1;background:#3a3a3a" onclick="TableChangeDialog.hide('know')">知道了</button>
@@ -1292,7 +1292,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.503',
+  CURRENT_VERSION:'2.9.504',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){

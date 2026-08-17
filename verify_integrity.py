@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-青云扑克 代码完整性自动验证脚本 v1.1
+青云扑克 代码完整性自动验证脚本 v1.2
 检测类型：
   1. AndroidBridge 方法一致性（JS调用 ↔ Kotlin实现）
-  2. 版本号一致性（build.gradle / HTML / Kotlin 三端对齐）
+  2. 版本号全链路一致性（build.gradle / HTML×2 / XML 五端对齐）
   3. 日志导出数据流完整性（exportLog必须包含所有关键数据）
   4. Pipeline耗时追踪覆盖率（所有执行路径必须调用updatePipelineTiming）
   5. try-catch 包裹检查（新增bridge调用）
   6. 硬编码版本号检测
   7. Kotlin诊断数据字段完整性
   8. _pipeline 变量定义完整性
+  9. Android 10+ Scoped Storage 兼容
+  10. UI文本旧版本号扫描（XML/HTML用户可见文本中的过时版本标记）
 """
-import re, sys, os
+import re, sys, os, glob
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 HTML = os.path.join(REPO, "app/src/main/assets/poker_helper.html")
@@ -73,7 +75,7 @@ for m in critical_methods:
 # ============================================================
 print()
 print("=" * 60)
-print("🔍 检查2: 版本号一致性")
+print("🔍 检查2: 版本号全链路一致性")
 print("=" * 60)
 
 gradle = read(GRADLE)
@@ -83,11 +85,33 @@ gv = gradle_version.group(1) if gradle_version else "UNKNOWN"
 html_version = re.search(r"var\s+APP_VERSION\s*=\s*'([^']+)'", html)
 hv = html_version.group(1) if html_version else "UNKNOWN"
 
-check(f"build.gradle版本({gv}) == HTML版本({hv})",
+# --- 2a: 各文件版本号必须一致 ---
+check(f"build.gradle版本({gv}) == HTML APP_VERSION({hv})",
       gv == hv,
       f"不一致: gradle={gv}, html={hv}")
 
-# exportLog 不能用硬编码版本号
+# CURRENT_VERSION 用于缓存清理机制，必须与 build.gradle 一致
+current_ver_match = re.search(r"CURRENT_VERSION\s*:\s*'([^']+)'", html)
+cv = current_ver_match.group(1) if current_ver_match else "UNKNOWN"
+check(f"HTML CURRENT_VERSION({cv}) == build.gradle({gv})",
+      cv == gv,
+      f"缓存版本不一致: CURRENT_VERSION={cv}, build.gradle={gv}")
+
+# activity_main.xml 的版本显示必须匹配
+ACTIVITY_XML = os.path.join(REPO, "app/src/main/res/layout/activity_main.xml")
+xml_content = read(ACTIVITY_XML) if os.path.exists(ACTIVITY_XML) else ""
+xml_ver_match = re.search(r'V2\.9\.(\d+)', xml_content)
+if xml_ver_match:
+    xml_ver_num = xml_ver_match.group(1)
+    gradle_ver_num = re.search(r'2\.9\.(\d+)', gv)
+    gradle_num = gradle_ver_num.group(1) if gradle_ver_num else "???"
+    check(f"activity_main.xml版本(V2.9.{xml_ver_num}) == build.gradle(V{gv})",
+          xml_ver_num == gradle_num,
+          f"不一致: xml=V2.9.{xml_ver_num}, gradle=V{gv}")
+else:
+    check("activity_main.xml包含版本号", False, "未找到版本显示")
+
+# --- 2b: exportLog 不能用硬编码版本号 ---
 export_fn_match = re.search(r'function\s+exportLog\s*\(\s*\)\s*\{(.*?)\n\}', html, re.DOTALL)
 if export_fn_match:
     export_body = export_fn_match.group(1)
@@ -275,6 +299,53 @@ for fpath in all_kt_files:
 check("无 getExternalStoragePublicDirectory 调用 (Android 10+)",
       len(scoped_storage_violations) == 0,
       f"发现{len(scoped_storage_violations)}处违规:\n" + "\n".join(scoped_storage_violations))
+
+# ============================================================
+print()
+print("=" * 60)
+print("🔍 检查10: UI文本旧版本号扫描")
+print("=" * 60)
+
+current_ver_short = gv  # e.g. "2.9.504"
+
+# --- 10a: XML布局中所有android:text含旧版本号 ---
+xml_stale = []
+for i, line in enumerate(xml_content.split('\n'), 1):
+    if 'android:text' not in line:
+        continue
+    ver_matches = re.findall(r'V(2\.9\.\d+)', line)
+    for v in ver_matches:
+        if v != current_ver_short:
+            xml_stale.append(f"  {os.path.basename(ACTIVITY_XML)}:L{i} 旧版本V{v} → {line.strip()[:80]}")
+
+check("XML布局无旧版本标记",
+      len(xml_stale) == 0,
+      f"发现{len(xml_stale)}处:\n" + "\n".join(xml_stale[:5]))
+
+# --- 10b: HTML用户可见文本含旧版本号（排除注释、console.log、变量定义） ---
+html_stale = []
+for i, line in enumerate(html.split('\n'), 1):
+    stripped = line.strip()
+    # 跳过非用户可见的内容
+    if (stripped.startswith('//') or stripped.startswith('/*') or
+        stripped.startswith('*') or 'console.log' in line or
+        'var APP_VERSION' in line or 'CURRENT_VERSION' in line or
+        'getVersion' in line):
+        continue
+    # 只检查HTML标签内的文本内容
+    if '>' not in line:
+        continue
+    # 提取HTML标签间的文本
+    text_parts = re.findall(r'>([^<]+)<', line)
+    for text in text_parts:
+        ver_matches = re.findall(r'V(2\.9\.\d+)', text)
+        for v in ver_matches:
+            if v != current_ver_short:
+                html_stale.append(f"  HTML:L{i} 旧版本V{v} → {text.strip()[:60]}")
+
+check("HTML用户可见文本无旧版本标记",
+      len(html_stale) == 0,
+      f"发现{len(html_stale)}处:\n" + "\n".join(html_stale[:5]))
 
 # ============================================================
 print()
