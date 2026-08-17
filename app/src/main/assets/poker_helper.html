@@ -1155,6 +1155,11 @@ var SessionStats={
 function exportLog(){
   var btn=document.getElementById('exportBtn');
   if(btn){btn.textContent='⏳导出中...';btn.disabled=true;}
+  // V2.9.503: 诊断日志——记录JS端数据状态，帮助排查数据为空的原因
+  console.log('[exportLog诊断] HandHistory.length=' + (typeof HandHistory!=='undefined'&&HandHistory.getAll?HandHistory.getAll().length:'HandHistory未定义'));
+  console.log('[exportLog诊断] LogBuffer.length=' + (typeof LogBuffer!=='undefined'&&LogBuffer.getAll?LogBuffer.getAll().length:'LogBuffer未定义'));
+  console.log('[exportLog诊断] DRTA.tracker=' + JSON.stringify(typeof DRTA!=='undefined'?DRTA.tracker:'DRTA未定义'));
+  console.log('[exportLog诊断] G.hole=' + JSON.stringify((G.hole||[]).map(function(c){return c?c.rank+c.suit:'null'})) + ' G.comm=' + JSON.stringify((G.comm||[]).filter(function(c){return c}).map(function(c){return c.rank+c.suit})));
   // V2.9.70: 获取Kotlin端错误日志（API/截屏失败等）
   var nativeErrors='';
   try{nativeErrors=typeof AndroidBridge!=='undefined'&&AndroidBridge.getErrorLogs?AndroidBridge.getErrorLogs():'';}catch(e){}
@@ -1165,7 +1170,7 @@ function exportLog(){
   var pipelineTiming='';
   try{pipelineTiming=typeof AndroidBridge!=='undefined'&&AndroidBridge.getPipelineTiming?AndroidBridge.getPipelineTiming():'';}catch(e){}
   var data={
-    version:typeof APP_VERSION!=='undefined'?APP_VERSION:'unknown',
+    version:typeof StrategyEngine!=='undefined'&&StrategyEngine.getVersion?StrategyEngine.getVersion():(typeof APP_VERSION!=='undefined'?APP_VERSION:'unknown'),
     exportTime:new Date().toISOString(),
     handHistory:HandHistory.getAll(),
     drtaTracker:DRTA.tracker,
@@ -2701,7 +2706,7 @@ var HandStateMachine=(function(){
 // 升级自 V2.9.215
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
-'use strict';var APP_VERSION='2.9.503';
+'use strict';var APP_VERSION='2.9.504';
 
 // ====== 第一部分: GTO翻前频率表 (5-Max专用) ======
 var _RFI={
@@ -9763,6 +9768,8 @@ function go(){
   }
   window._goLastTime=_now;
   window._goStartTime=_now;
+  // V2.9.503: go()入口诊断——确认go被调用时的状态
+  console.log('[go诊断] go()被调用 hand='+JSON.stringify((G.hole||[]).map(function(c){return c?c.rank+c.suit:'null'}))+' comm='+JSON.stringify((G.comm||[]).filter(function(c){return c}).map(function(c){return c.rank+c.suit}))+' phase='+G.phase+' scene='+G.scene+' pot='+G.pot+' bet='+G.bet);
   var resEl=document.getElementById('res');if(resEl)resEl.innerHTML='<div style="color:#4fc3f7;font-size:14px;text-align:center;padding:8px">⏳</div>';setTimeout(function(){
   // V2.9.30: 自动采集对手动作(在decide之前)
   // V2.9.73: ★ phase修正——post但公共牌数量异常→强制pre + 清空异常comm ★
@@ -9892,8 +9899,37 @@ function bridgeAdvice(r){
     var colorKey=r._colorInfo?r._colorInfo.colorKey:'FOLD';
     var signalType=r._colorInfo?r._colorInfo.signalType:'NONE';
     var _eqPct=r.eq?Math.round(r.eq):'';var bridgeData=fullAdv+'|COLOR:'+colorKey+'|SIGNAL:'+signalType+(_eqPct!==''?'|EQ:'+_eqPct:'');
-    if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+bridgeData.substring(0,80));AndroidBridge.showAdvice(bridgeData);try{if(typeof autoExecuteDecision==="function"){var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;if(_am)autoExecuteDecision(r,_am);}}catch(_ae){console.log("[autoExec] err:"+_ae.message);}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
+    // V2.9.503: 先执行autoExecuteDecision并保存结果，避免重复调用
+    var _autoExecResult='skip';
+    var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;
+    if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+bridgeData.substring(0,80));AndroidBridge.showAdvice(bridgeData);try{if(typeof autoExecuteDecision==="function"&&_am){var _execRet=autoExecuteDecision(r,_am);_autoExecResult=_execRet?'executed':'manual';}}catch(_ae){console.log("[autoExec] err:"+_ae.message);_autoExecResult='error';}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
     if(typeof AndroidBridge!=='undefined'&&AndroidBridge.updateNotification){AndroidBridge.updateNotification(fullAdv,reason);}
+    // V2.9.503: 记录决策到Kotlin端诊断日志
+    try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.logDecision){
+      var _holeCards=G.hole.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('');
+      var _commCards=G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('');
+      var _decData={
+        street:G.phase==='pre'?'preflop':'postflop',
+        holeCards:_holeCards,
+        communityCards:_commCards,
+        pot:G.pot||0,
+        myChips:G.stk||0,
+        toCall:G.bet||0,
+        totalPlayers:G.tt||0,
+        activePlayers:G.act||0,
+        position:G.pos||'',
+        action:r.a||'fold',
+        sizing:r.v||0,
+        eq:r.eq||0,
+        confidence:r.confidence||'medium',
+        reason:(r.r||'').substring(0,50),
+        hClass:r.hClass?r.hClass.name:'UNKNOWN',
+        auto:_am,
+        execResult:_autoExecResult,
+        oppStats:G.opp||''
+      };
+      AndroidBridge.logDecision(JSON.stringify(_decData));
+    }}catch(_logErr){console.log('[logDecision] err:'+_logErr.message);}
   }catch(e){
     // V2.9.133: bridgeAdvice 失败也调 notifyCrash
     try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.notifyCrash){AndroidBridge.notifyCrash('bridgeAdvice:'+e.message);}}catch(_){}

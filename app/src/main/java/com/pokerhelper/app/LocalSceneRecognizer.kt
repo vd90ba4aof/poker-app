@@ -900,6 +900,16 @@ class LocalSceneRecognizer(
         val valid = handValid && hasPot && hasButtons && ranksValid
         Log.d(TAG, "有效性检查: handValid=$handValid hasPot=$hasPot " +
                 "hasButtons=$hasButtons ranksValid=$ranksValid → valid=$valid")
+        // V2.9.503: 详细诊断 - 失败时记录具体原因
+        if (!valid) {
+            Log.w(TAG, "★ LocalCV失败详情: handCards=${result.holeCards.map{"${it.rank}${it.suit}"}} " +
+                    "pot=${result.potSize} buttons=${result.buttons.map{it.text}} " +
+                    "street=${result.street} isPokerTable=${result.isPokerTable}")
+            if (!handValid) Log.w(TAG, "  ❌ 手牌无效: 识别到${result.holeCards.size}张(需要2张)")
+            if (!hasPot) Log.w(TAG, "  ❌ 底池无效: pot=${result.potSize}")
+            if (!hasButtons) Log.w(TAG, "  ❌ 未检测到按钮")
+            if (!ranksValid) Log.w(TAG, "  ❌ 手牌rank无效: ${result.holeCards.map{"${it.rank}${it.suit}"}}")
+        }
         return valid
     }
 

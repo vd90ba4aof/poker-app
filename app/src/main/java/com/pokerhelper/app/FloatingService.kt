@@ -139,7 +139,7 @@ class FloatingService : Service() {
     private val AUTO_MAX_ERRORS = 3
     // V2.9.206: Shot Clock保护——记录上次决策时间，超时强制行动
     private var lastDecisionTime: Long = 0
-    private val SHOT_CLOCK_TIMEOUT = 18000L // 18秒超时（GG默认30秒，留12秒余量）
+    private val SHOT_CLOCK_TIMEOUT = 28000L // V2.9.503: 28秒超时（VLM平均23.5s，留2s余量给GG 30s限制）
     // V2.9.207: 记录当前手牌开始分析时间——修复Shot Clock新牌局永远不触发的bug
     private var handStartTime: Long = 0
     private var manualErrorCount = 0  // V2.9.184: 手动截屏连续失败计数
@@ -162,12 +162,12 @@ class FloatingService : Service() {
     private var _diagLocalHandCards = emptyList<VisionApiClient.CardInfo>()
     private var _diagLocalCommunityCards = emptyList<VisionApiClient.CardInfo>()
     private var _diagLocalStreet: String? = null
-    // V2.9.503: Pipeline耗时追踪
-    private var _pipelineScreenshotTime = 0L
-    private var _pipelineJsDecisionTimeMs = 0L
-    private var _pipelineEsp32TapTimeMs = 0L
-    private var _pipelineTotalTimeMs = 0L
-    private var _pipelineLastAction = ""
+    // V2.9.503: Pipeline耗时追踪（@Volatile保证@JavascriptInterface后台线程可见性）
+    @Volatile private var _pipelineScreenshotTime = 0L
+    @Volatile private var _pipelineJsDecisionTimeMs = 0L
+    @Volatile private var _pipelineEsp32TapTimeMs = 0L
+    @Volatile private var _pipelineTotalTimeMs = 0L
+    @Volatile private var _pipelineLastAction = ""
     // V2.9.114: WebViewAssetLoader——Google官方推荐的本地HTML加载方案
     private lateinit var assetLoader: WebViewAssetLoader
     // V2.9.70: 错误日志——API/截屏失败时记录，豪哥可导出反馈
@@ -808,6 +808,12 @@ class FloatingService : Service() {
     // V2.9.180: 全自动执行tap——根据action匹配按钮坐标并发送到ESP32
     private fun executeAutoTap(action: String, decisionData: org.json.JSONObject) {
         try {
+            // V2.9.503: BLE连接检查——未连接时记录警告并跳过，避免无效tap
+            if (bleManager?.isConnected != true) {
+                Log.w(TAG, "★ executeAutoTap跳过: BLE未连接 (action=$action)")
+                try { DiagnosticLogger.logEsp32Tap("autoTap_${action}_SKIPPED", 0, 0, action, "BLE_NOT_CONNECTED") } catch (_: Exception) {}
+                return
+            }
             // V2.9.207: Shot Clock保护——检查从手牌开始分析是否超时
             val now = System.currentTimeMillis()
             if (handStartTime > 0 && (now - handStartTime) > SHOT_CLOCK_TIMEOUT) {
@@ -1001,6 +1007,12 @@ class FloatingService : Service() {
 
     // V2.9.200: 回退动态坐标——使用GameModeConfig根据当前平台自动适配
     private fun executeAutoTapFallback(action: String) {
+        // V2.9.503: BLE连接检查——未连接时跳过tap，避免无效操作
+        if (bleManager?.isConnected != true) {
+            Log.w(TAG, "★ autoTapFallback跳过: BLE未连接 (action=$action)")
+            try { DiagnosticLogger.logEsp32Tap("fallback_${action}_SKIPPED", 0, 0, action, "BLE_NOT_CONNECTED") } catch (_: Exception) {}
+            return
+        }
         // V3.42: 优先用截图真实尺寸（Android 15显示缩放时截图≠屏幕尺寸）
         val rawSw = ScreenCaptureService.screenshotWidth
         val rawSh = ScreenCaptureService.screenshotHeight
@@ -2407,7 +2419,7 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
         if (autoCaptureEnabled && handStartTime == 0L) {
             handStartTime = tAnalyzeStart
             Log.d(TAG, "★ handStartTime set: $handStartTime")
-            // V2.9.207: 调度Shot Clock硬超时——16秒后强制弃牌（不等VLM返回）
+            // V2.9.503: 调度Shot Clock硬超时——26秒后强制弃牌（适配VLM平均23.5s延迟）
             _shotClockRunnable?.let { handler.removeCallbacks(it) }
             _shotClockRunnable = Runnable {
                 if (handStartTime > 0 && autoCaptureEnabled) {
@@ -2421,9 +2433,9 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     scheduleNextAutoCapture()
                 }
             }
-            handler.postDelayed(_shotClockRunnable!!, 16000)
+            handler.postDelayed(_shotClockRunnable!!, 26000)
         }
-        // V2.9.207: 预检——如果handStartTime已超18秒，跳过VLM直接弃牌
+        // V2.9.503: 预检——如果handStartTime已超28秒，跳过VLM直接弃牌
         if (autoCaptureEnabled && handStartTime > 0 && (tAnalyzeStart - handStartTime) > SHOT_CLOCK_TIMEOUT) {
             Log.w(TAG, "★ Shot Clock pre-check: ${(tAnalyzeStart - handStartTime)}ms, skip VLM and force fold")
             handStartTime = 0
