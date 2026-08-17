@@ -281,6 +281,9 @@ class FloatingService : Service() {
         // V2.9.200: 初始化游戏模式配置（读取用户上次选择的平台）
         GameModeConfig.init(this)
 
+        // V2.9.503: 初始化诊断日志器（获取Context以使用应用私有目录）
+        DiagnosticLogger.init(this)
+
         val notification = createNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -2770,14 +2773,14 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             // V2.9.215: 导出完整日志（识别+决策+错误）+ 复盘日志
             val logData = DiagnosticLogger.exportAsJson()
             val reviewData = DiagnosticLogger.exportReview()
-            val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-            val fileName = "poker_log_${java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())}.json"
+            val downloadDir = getExternalFilesDir(null) ?: filesDir
+            val fileName = "poker_log_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}.json"
             val exportFile = File(downloadDir, fileName)
             exportFile.writeText(logData, Charsets.UTF_8)
             
             // V2.9.215: 同时导出复盘日志
             try {
-                val reviewFile = File(downloadDir, "poker_review_${java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())}.json")
+                val reviewFile = File(downloadDir, "poker_review_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}.json")
                 reviewFile.writeText(reviewData, Charsets.UTF_8)
             } catch (_: Exception) {}
 

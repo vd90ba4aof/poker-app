@@ -1,6 +1,6 @@
 package com.pokerhelper.app
 
-import android.os.Environment
+import android.content.Context
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
@@ -20,6 +20,12 @@ import java.util.*
 object DiagnosticLogger {
     
     private const val TAG = "DiagnosticLogger"
+    private var appContext: Context? = null
+    
+    /** 初始化，必须在首次使用前调用（FloatingService.onCreate 中调用） */
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
     
     // ===== 错误分类 V2.9.215 =====
     enum class ErrorCategory(val label: String) {
@@ -95,18 +101,18 @@ object DiagnosticLogger {
     
     // ===== 文件路径 =====
     private fun getLogFile(): File {
-        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        return File(downloadsDir, "poker_log.txt")
+        val dir = appContext?.getExternalFilesDir(null) ?: File("/data/local/tmp")
+        return File(dir, "poker_log.txt")
     }
     
     private fun getDecisionLogFile(): File {
-        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        return File(downloadsDir, "poker_decisions.txt")
+        val dir = appContext?.getExternalFilesDir(null) ?: File("/data/local/tmp")
+        return File(dir, "poker_decisions.txt")
     }
     
     private fun getReviewFile(): File {
-        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        return File(downloadsDir, "poker_review.txt")
+        val dir = appContext?.getExternalFilesDir(null) ?: File("/data/local/tmp")
+        return File(dir, "poker_review.txt")
     }
     
     // ===== 识别日志持久化 =====

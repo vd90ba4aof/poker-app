@@ -256,6 +256,29 @@ for v in pipeline_vars:
 # ============================================================
 print()
 print("=" * 60)
+print("🔍 检查9: Android 10+ Scoped Storage 兼容")
+print("=" * 60)
+
+all_kt_files = []
+for root, dirs, files in os.walk(os.path.join(REPO, "app/src/main/java")):
+    for f in files:
+        if f.endswith(".kt"):
+            all_kt_files.append(os.path.join(root, f))
+
+scoped_storage_violations = []
+for fpath in all_kt_files:
+    with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+        for i, line in enumerate(f, 1):
+            if 'getExternalStoragePublicDirectory' in line:
+                scoped_storage_violations.append(f"  {os.path.basename(fpath)}:{i}")
+
+check("无 getExternalStoragePublicDirectory 调用 (Android 10+)",
+      len(scoped_storage_violations) == 0,
+      f"发现{len(scoped_storage_violations)}处违规:\n" + "\n".join(scoped_storage_violations))
+
+# ============================================================
+print()
+print("=" * 60)
 total = passed + failed
 print(f"📊 验证结果: {passed}/{total} 通过, {failed} 失败, {warnings} 警告")
 print("=" * 60)

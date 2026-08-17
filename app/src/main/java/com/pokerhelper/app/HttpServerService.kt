@@ -417,9 +417,9 @@ class HttpServerService : Service() {
                                 session.parseBody(files)
                                 // V2.9.75: NanoHTTPD 2.3.1默认UTF-8解码，直接用即可（旧代码ISO-8859-1→UTF-8转换反而把中文变成?）
                                 val postData = files["postData"] ?: ""
-                                // 保存到Download目录（用户容易找到，可在Coze上传）
-                                val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                                val fileName = "poker_log_${java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())}.json"
+                                // 保存到应用私有目录（Android 10+兼容，避免Scoped Storage限制）
+                                val downloadDir = getExternalFilesDir(null) ?: filesDir
+                                val fileName = "poker_log_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}.json"
                                 val exportFile = File(downloadDir, fileName)
                                 exportFile.writeText(postData, Charsets.UTF_8)
                                 // 同时复制到剪贴板（方便直接粘贴发送）
