@@ -212,6 +212,9 @@ class FloatingService : Service() {
     @Volatile private var _bleHeartbeatState = 0  // 0=disconnected, 1=connected-ok, 2=timeout
     // V2.9.240: RSSI信号强度缓存
     private var _lastRssi = 0
+    // V2.9.505: BLE断连诊断跟踪
+    private var _bleConnectTime = 0L  // BLE连接建立时间戳
+    private var _bleLastHeartbeatTime = 0L  // 最后一次心跳时间戳
 
     // V2.9.38: 隐身模式通知广播接收器
     private val notificationReceiver = object : BroadcastReceiver() {
@@ -321,6 +324,7 @@ class FloatingService : Service() {
             cardRecognizer?.init()
             CardRecognizer.updateScreenSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)  // V2.9.184
             sceneRecognizer = LocalSceneRecognizer(this, cardRecognizer!!)
+            sceneRecognizer!!.init(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
             Log.i(TAG, "本地CV识别器初始化完成")
         } catch (e: Exception) {
             Log.e(TAG, "本地CV识别器初始化失败", e)
@@ -357,6 +361,8 @@ class FloatingService : Service() {
                     // V2.9.173: 连接成功后自动发送status查询USB/HID状态
                     if (connected) {
                         _bleHeartbeatState = 1  // V1.0.35: 已连接
+                        _bleConnectTime = System.currentTimeMillis()  // V2.9.505: 记录连接时间
+                        _bleLastHeartbeatTime = _bleConnectTime  // V2.9.505: 初始化心跳时间
                         Log.i(TAG, "BLE 已连接，启动心跳监控")
                         updateBleIndicator()
                         bleManager?.startHeartbeatMonitor()  // V1.0.35: 启动心跳监控
@@ -374,8 +380,18 @@ class FloatingService : Service() {
                             } catch (_: Exception) {}
                         }, 5500)
                     } else {
+                        // V2.9.505: 记录BLE断连诊断信息
+                        val connectDuration = if (_bleConnectTime > 0) "${(System.currentTimeMillis() - _bleConnectTime) / 1000}s" else "unknown"
+                        val sinceLastHeartbeat = if (_bleLastHeartbeatTime > 0) "${(System.currentTimeMillis() - _bleLastHeartbeatTime) / 1000}s" else "unknown"
+                        val lastRssiAtDisconnect = _lastRssi
+                        val diagMsg = "BLE断开: 连接持续=$connectDuration, 距上次心跳=$sinceLastHeartbeat, 断开时RSSI=${lastRssiAtDisconnect}dBm, msg=$message"
+                        Log.w(TAG, diagMsg)
+                        try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.COMMUNICATION, DiagnosticLogger.Severity.MEDIUM, "BLE断开连接", "连接持续=$connectDuration, 距上次心跳=$sinceLastHeartbeat, RSSI=${lastRssiAtDisconnect}dBm, msg=$message") } catch (_: Exception) {}
+
                         _bleHeartbeatState = 0  // V1.0.35: 断开
                         _lastRssi = 0
+                        _bleConnectTime = 0L  // V2.9.505: 重置连接时间
+                        _bleLastHeartbeatTime = 0L  // V2.9.505: 重置心跳时间
                         Log.i(TAG, "BLE 已断开，停止心跳监控")
                         updateBleIndicator()
                         bleManager?.stopHeartbeatMonitor()  // V1.0.35: 停止心跳
@@ -392,6 +408,7 @@ class FloatingService : Service() {
                     val prevState = _bleHeartbeatState
                     if (connected) {
                         _bleHeartbeatState = 1  // 收到心跳=正常(绿)
+                        _bleLastHeartbeatTime = System.currentTimeMillis()  // V2.9.505: 记录心跳时间
                     } else {
                         _bleHeartbeatState = 2  // 心跳超时(黄)
                     }
@@ -491,6 +508,7 @@ class FloatingService : Service() {
             CardRecognizer.updateScreenSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)  // V2.9.184
             localCVEnabled = true
             sceneRecognizer = LocalSceneRecognizer(this, cardRecognizer!!)
+            sceneRecognizer!!.init(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
             Log.i(TAG, "reinit: CardRecognizer OK")
         } catch (e: Exception) {
             localCVEnabled = false
@@ -812,6 +830,7 @@ class FloatingService : Service() {
             if (bleManager?.isConnected != true) {
                 Log.w(TAG, "★ executeAutoTap跳过: BLE未连接 (action=$action)")
                 try { DiagnosticLogger.logEsp32Tap("autoTap_${action}_SKIPPED", 0, 0, action, "BLE_NOT_CONNECTED") } catch (_: Exception) {}
+                try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.COMMUNICATION, DiagnosticLogger.Severity.MEDIUM, "BLE未连接，${action}自动点击跳过", "bleConnected=false") } catch (_: Exception) {}
                 return
             }
             // V2.9.207: Shot Clock保护——检查从手牌开始分析是否超时
@@ -1011,6 +1030,7 @@ class FloatingService : Service() {
         if (bleManager?.isConnected != true) {
             Log.w(TAG, "★ autoTapFallback跳过: BLE未连接 (action=$action)")
             try { DiagnosticLogger.logEsp32Tap("fallback_${action}_SKIPPED", 0, 0, action, "BLE_NOT_CONNECTED") } catch (_: Exception) {}
+            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.COMMUNICATION, DiagnosticLogger.Severity.MEDIUM, "BLE未连接，${action}操作跳过", "bleConnected=false") } catch (_: Exception) {}
             return
         }
         // V3.42: 优先用截图真实尺寸（Android 15显示缩放时截图≠屏幕尺寸）
@@ -2466,10 +2486,10 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     vlmTimeMs = tAnalyzeEnd - tAnalyzeStart,
                     vlmResult = result,
                     totalTimeMs = System.currentTimeMillis() - _diagStartTime,
-                    hasError = result == null,
-                    errorMessage = if (result == null) VisionApiClient.lastError else null,
-                    strategySent = result != null && result.isPokerTable,
-                    rawResponse = if (result == null) VisionApiClient.lastRawResponse else null  // V2.9.193
+                    hasError = result == null || result.holeCards.isEmpty(),
+                    errorMessage = if (result == null) VisionApiClient.lastError else if (result.holeCards.isEmpty()) "VLM返回空手牌" else null,
+                    strategySent = result != null && result.isPokerTable && result.holeCards.isNotEmpty(),
+                    rawResponse = if (result == null) VisionApiClient.lastRawResponse else if (result.holeCards.isEmpty()) "VLM返回空手牌" else null  // V2.9.193
                 )
                 // 重置诊断变量
                 _diagLocalCVTimeMs = 0L

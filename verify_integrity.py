@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-青云扑克 代码完整性自动验证脚本 v1.3
-检测类型（16大类）：
+青云扑克 代码完整性自动验证脚本 v1.4
+检测类型（18大类）：
   1. AndroidBridge 方法一致性（JS调用 ↔ Kotlin实现）
   2. 版本号全链路一致性（build.gradle / HTML×2 / XML 五端对齐）
   3. 日志导出数据流完整性（exportLog必须包含所有关键数据）
@@ -18,6 +18,8 @@
   14. Shot Clock 时序合理性（防止超时过早导致VLM还没返回就弃牌）
   15. BLE安全检查（自动点击前必须检查BLE连接状态）
   16. versionCode递增检查（防止忘记递增）
+  17. Kotlin类型安全 - 已知类型属性访问检查
+  18. 初始化完整性检查 — 组件创建后是否调用了init()等初始化方法
 """
 import re, sys, os, glob
 
@@ -542,6 +544,160 @@ for kf in kotlin_files:
 
 if type_safety_ok:
     check("Kotlin类型安全检查 (List<String>.map{it.xxx}模式)", True)
+
+# ============================================================
+print()
+print("=" * 60)
+print("🔍 检查18: 初始化完整性检查")
+print("=" * 60)
+
+# 检测组件创建后是否调用了必要的初始化方法
+INIT_METHODS_NAMES = ["init", "initialize", "start", "setup", "configure", "load", "prepare"]
+SKIP_CLASSES = {
+    "String", "Int", "Long", "Float", "Double", "Boolean", "Char",
+    "List", "Map", "Set", "ArrayList", "HashMap", "HashSet", "Array",
+    "Context", "Activity", "Service", "View", "Intent", "Bundle",
+    "Handler", "Looper", "Thread", "Runnable", "BroadcastReceiver",
+    "SharedPreferences", "Gson", "Random", "Pattern", "Matcher",
+    "StringBuilder", "BufferedReader", "InputStreamReader",
+    "File", "FileInputStream", "FileOutputStream",
+    "ObjectMapper",
+    "AlertDialog", "Timer", "TimerTask", "CountDownTimer",
+    "Paint", "Rect", "RectF", "PointF", "Matrix", "Bitmap",
+    "Bundle", "Parcelable", "Serializable",
+}
+
+def _extract_data_classes(content):
+    """提取 data class / value class / enum class / object（不需要外部init）"""
+    classes = set()
+    for m in re.finditer(r'(?:data|value|enum)\s+class\s+(\w+)', content):
+        classes.add(m.group(1))
+    for m in re.finditer(r'^\s*object\s+(\w+)', content, re.MULTILINE):
+        classes.add(m.group(1))
+    return classes
+
+def _extract_class_methods_map(content):
+    """构建 className -> [methodNames] 映射，正确处理嵌套类"""
+    class_methods = {}
+    lines = content.split('\n')
+    
+    # 找到所有顶层类（缩进为0或仅空白）的起始行
+    top_classes = []  # (line_idx, class_name)
+    for i, line in enumerate(lines):
+        if re.match(r'^(?:public\s+|private\s+|internal\s+|open\s+|abstract\s+)*class\s+(\w+)', line):
+            m = re.search(r'class\s+(\w+)', line)
+            if m:
+                top_classes.append((i, m.group(1)))
+    
+    # 对每个顶层类，收集其所有方法（包括嵌套类中的）
+    for idx, (start_line, class_name) in enumerate(top_classes):
+        # 类的结束行 = 下一个顶层类的起始行 或 文件末尾
+        end_line = top_classes[idx + 1][0] if idx + 1 < len(top_classes) else len(lines)
+        
+        methods = []
+        for i in range(start_line, end_line):
+            for m in re.finditer(r'fun\s+(\w+)\s*\(', lines[i]):
+                methods.append(m.group(1))
+        class_methods[class_name] = methods
+    
+    return class_methods
+
+init_check_critical = []
+init_check_ok = []
+init_check_files = []
+for root, dirs, files in os.walk(os.path.join(REPO, "app/src/main/java")):
+    for f in files:
+        if f.endswith(".kt"):
+            init_check_files.append(os.path.join(root, f))
+
+# 收集所有文件中的类方法映射（跨文件查找）
+all_class_methods = {}
+all_file_contents = {}
+for fpath in init_check_files:
+    try:
+        with open(fpath, 'r', encoding='utf-8', errors='replace') as fh:
+            content = fh.read()
+            all_file_contents[fpath] = content
+            cm = _extract_class_methods_map(content)
+            all_class_methods.update(cm)
+    except Exception:
+        continue
+
+for fpath, content in all_file_contents.items():
+    lines = content.split('\n')
+    data_classes = _extract_data_classes(content)
+    all_skip = SKIP_CLASSES | data_classes
+
+    for line_idx, line in enumerate(lines):
+        # 模式1: val/var xxx = XxxClass(  (局部变量)
+        m1 = re.search(r'(?:val|var)\s+(\w+)\s*=\s*(\w+)\s*\(', line)
+        # 模式2: xxx = XxxClass(  (字段赋值，不含val/var，排除 == 比较)
+        m2 = re.search(r'^\s+(\w+)\s*=\s*(\w+)\s*\(', line) if not m1 else None
+
+        match = m1 or m2
+        if not match:
+            continue
+        var_name = match.group(1)
+        class_name = match.group(2)
+
+        if class_name in all_skip:
+            continue
+
+        methods = all_class_methods.get(class_name, [])
+        # 精确匹配 init 方法名（不做前缀匹配，避免 startScan 误匹配 start）
+        has_init_method = any(m in INIT_METHODS_NAMES for m in methods)
+        if not has_init_method:
+            continue
+
+        # 检查同一函数/作用域内是否有 init 调用
+        # 策略：向下搜索20行，或者到下一个函数定义为止
+        search_end = min(line_idx + 30, len(lines))
+        found_init = None
+        for j in range(line_idx + 1, search_end):
+            l = lines[j].strip()
+            # 如果遇到新的函数定义，停止搜索
+            if re.match(r'(?:private\s+|public\s+|internal\s+|override\s+)*fun\s+\w+', l):
+                break
+            for im in INIT_METHODS_NAMES:
+                if re.search(rf'{re.escape(var_name)}[!?]*\.\s*{im}\s*\(', l):
+                    found_init = im
+                    break
+            if found_init:
+                break
+
+        # 也向上搜索（init 可能在创建之前的作用域中已调用，
+        # 但更常见的是在创建后调用；对于字段赋值，检查同函数体内）
+        if not found_init and m2:
+            # 对于字段赋值，向上搜索到函数开头
+            for j in range(line_idx - 1, max(line_idx - 30, 0), -1):
+                l = lines[j].strip()
+                for im in INIT_METHODS_NAMES:
+                    if re.search(rf'{re.escape(var_name)}[!?]*\.\s*{im}\s*\(', l):
+                        found_init = im
+                        break
+                if found_init:
+                    break
+                # 遇到函数定义开头则停止
+                if re.match(r'(?:private\s+|public\s+|internal\s+|override\s+)*fun\s+\w+', l):
+                    break
+
+        rel = os.path.relpath(fpath, REPO)
+        if found_init:
+            init_check_ok.append(f"{var_name}({class_name}) → {found_init}() @ {rel}:{line_idx+1}")
+        else:
+            init_check_critical.append(f"{rel}:{line_idx+1} — {class_name} `{var_name}` 创建后未调用初始化方法")
+
+# 输出结果
+for c in init_check_ok:
+    check(f"初始化OK: {c}", True)
+
+if init_check_critical:
+    for c in init_check_critical:
+        check(f"初始化缺失: {c}", False, "组件创建后未调用 init() 等初始化方法")
+else:
+    if not init_check_ok:
+        check("初始化完整性检查（未发现需要外部初始化的组件）", True)
+    # else: 已经有OK的check输出了
 
 # ============================================================
 print()

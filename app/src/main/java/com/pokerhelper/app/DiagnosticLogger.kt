@@ -472,7 +472,8 @@ object DiagnosticLogger {
         val cat = if (hasError) {
             when {
                 errorMessage?.contains("timeout", ignoreCase = true) == true ||
-                errorMessage?.contains("超时") == true -> ErrorCategory.TIMEOUT
+                errorMessage?.contains("超时") == true ||
+                rawResponse?.contains("timeout", ignoreCase = true) == true -> ErrorCategory.TIMEOUT
                 errorMessage?.contains("network", ignoreCase = true) == true ||
                 errorMessage?.contains("connect", ignoreCase = true) == true ||
                 errorMessage?.contains("网络") == true -> ErrorCategory.NETWORK
