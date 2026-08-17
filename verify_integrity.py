@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-青云扑克 代码完整性自动验证脚本 v1.2
-检测类型：
+青云扑克 代码完整性自动验证脚本 v1.3
+检测类型（16大类）：
   1. AndroidBridge 方法一致性（JS调用 ↔ Kotlin实现）
   2. 版本号全链路一致性（build.gradle / HTML×2 / XML 五端对齐）
   3. 日志导出数据流完整性（exportLog必须包含所有关键数据）
@@ -12,6 +12,12 @@
   8. _pipeline 变量定义完整性
   9. Android 10+ Scoped Storage 兼容
   10. UI文本旧版本号扫描（XML/HTML用户可见文本中的过时版本标记）
+  11. 线程安全 — 共享变量@Volatile检查（WebView线程可见性）
+  12. 策略引擎完整性（getVersion/isEnabled/decide方法必须存在）
+  13. DiagnosticLogger 方法完整性（所有log方法+export必须存在）
+  14. Shot Clock 时序合理性（防止超时过早导致VLM还没返回就弃牌）
+  15. BLE安全检查（自动点击前必须检查BLE连接状态）
+  16. versionCode递增检查（防止忘记递增）
 """
 import re, sys, os, glob
 
@@ -346,6 +352,158 @@ for i, line in enumerate(html.split('\n'), 1):
 check("HTML用户可见文本无旧版本标记",
       len(html_stale) == 0,
       f"发现{len(html_stale)}处:\n" + "\n".join(html_stale[:5]))
+
+# ============================================================
+print()
+print("=" * 60)
+print("🔍 检查11: 线程安全 — 共享变量@Volatile")
+print("=" * 60)
+
+# 所有 _pipeline* 变量必须有 @Volatile 注解（WebView @JavascriptInterface 运行在后台线程）
+lines = kotlin.split('\n')
+pipeline_no_volatile = []
+for i, line in enumerate(lines):
+    if re.search(r'private\s+var\s+_pipeline\w+', line):
+        # 检查同一行或上一行是否有 @Volatile
+        has_volatile = '@Volatile' in line
+        if i > 0 and not has_volatile:
+            has_volatile = '@Volatile' in lines[i-1]
+        if not has_volatile:
+            pipeline_no_volatile.append(f"  L{i+1}: {line.strip()[:70]}")
+
+check("所有 _pipeline 变量都有 @Volatile",
+      len(pipeline_no_volatile) == 0,
+      f"缺少@Volatile:\n" + "\n".join(pipeline_no_volatile[:5]))
+
+# _strategyReceived 也必须 @Volatile（WebView回调写入，主线程读取）
+strategy_recv_volatile = False
+for i, line in enumerate(lines):
+    if '_strategyReceived' in line and 'private var' in line:
+        strategy_recv_volatile = '@Volatile' in line or (i > 0 and '@Volatile' in lines[i-1])
+        break
+check("_strategyReceived 有 @Volatile", strategy_recv_volatile,
+      "WebView回调写入的变量缺少@Volatile，主线程可能看不到最新值")
+
+# ============================================================
+print()
+print("=" * 60)
+print("🔍 检查12: 策略引擎完整性")
+print("=" * 60)
+
+# StrategyEngine 关键方法必须在HTML中存在
+se_methods = {
+    'getVersion': r'getVersion\s*:\s*function',
+    'isEnabled': r'isEnabled\s*:\s*function',
+    'decidePreflop': r'(?:decidePreflop\s*:\s*function|function\s+decidePreflop\b)',
+    'decidePostflop': r'(?:decidePostflop\s*:\s*function|function\s+decidePostflop\b|decidePostflop\s*:\s*decidePostflop)',
+}
+
+for method, pattern in se_methods.items():
+    found = bool(re.search(pattern, html))
+    check(f"StrategyEngine.{method}() 方法存在", found,
+          f"策略引擎缺少 {method} 方法，exportLog可能输出version:unknown")
+
+# exportLog 必须通过 StrategyEngine.getVersion() 获取版本号（非硬编码）
+export_uses_se = 'StrategyEngine.getVersion' in html or 'StrategyEngine.getVersion()' in html
+check("exportLog 使用 StrategyEngine.getVersion()", export_uses_se,
+      "exportLog未调用StrategyEngine.getVersion()，可能导致version:unknown")
+
+# ============================================================
+print()
+print("=" * 60)
+print("🔍 检查13: DiagnosticLogger 方法完整性")
+print("=" * 60)
+
+diag_methods = [
+    ('logDecision', '记录策略决策'),
+    ('logRecognition', '记录识别结果'),
+    ('logEsp32Tap', '记录ESP32点击'),
+    ('exportAsJson', '导出诊断数据'),
+    ('updatePipelineTiming', '更新Pipeline耗时'),
+]
+
+for method, purpose in diag_methods:
+    check(f"DiagnosticLogger.{method}() 存在 ({purpose})",
+          f'fun {method}' in diag_export or f'fun {method}(' in diag_export,
+          f"缺少 {method} 方法")
+
+# logDecision 必须在 bridgeAdvice 流程中被调用
+bridge_advice_section = re.search(r'function\s+bridgeAdvice\b.*?(?=\nfunction\s|\Z)', html, re.DOTALL)
+if bridge_advice_section:
+    bridge_body = bridge_advice_section.group(0)
+    check("bridgeAdvice() 调用 logDecision()",
+          'logDecision' in bridge_body,
+          "bridgeAdvice未调用logDecision，导致decisions:[]为空")
+else:
+    warn("bridgeAdvice() 函数未找到", "可能已改名或移除")
+
+# ============================================================
+print()
+print("=" * 60)
+print("🔍 检查14: Shot Clock 时序合理性")
+print("=" * 60)
+
+# SHOT_CLOCK_TIMEOUT 必须足够大（VLM平均23.5s，最慢35s）
+shot_clock_match = re.search(r'SHOT_CLOCK_TIMEOUT\s*=\s*(\d+)L', kotlin)
+if shot_clock_match:
+    shot_clock_ms = int(shot_clock_match.group(1))
+    check(f"SHOT_CLOCK_TIMEOUT >= 25000ms (当前{shot_clock_ms}ms)",
+          shot_clock_ms >= 25000,
+          f"Shot Clock {shot_clock_ms}ms 太短，VLM平均23.5s可能来不及返回")
+    check(f"SHOT_CLOCK_TIMEOUT <= 29000ms (当前{shot_clock_ms}ms, GG限制30s)",
+          shot_clock_ms <= 29000,
+          f"Shot Clock {shot_clock_ms}ms 超过GG 30s限制，可能超时")
+else:
+    check("SHOT_CLOCK_TIMEOUT 常量存在", False, "未找到SHOT_CLOCK_TIMEOUT")
+
+# 硬超时必须 < SHOT_CLOCK_TIMEOUT 且 > 20000ms
+hard_timeout_match = re.search(r'handler\.postDelayed\(_shotClockRunnable!!,\s*(\d+)\)', kotlin)
+if hard_timeout_match:
+    hard_timeout_ms = int(hard_timeout_match.group(1))
+    check(f"硬超时 >= 23000ms (当前{hard_timeout_ms}ms)",
+          hard_timeout_ms >= 23000,
+          f"硬超时 {hard_timeout_ms}ms 太短")
+    if shot_clock_match:
+        check(f"硬超时({hard_timeout_ms}ms) < SHOT_CLOCK_TIMEOUT({shot_clock_ms}ms)",
+              hard_timeout_ms < shot_clock_ms,
+              "硬超时不应大于SHOT_CLOCK_TIMEOUT")
+else:
+    check("Shot Clock 硬超时设置存在", False, "未找到硬超时")
+
+# ============================================================
+print()
+print("=" * 60)
+print("🔍 检查15: BLE安全检查")
+print("=" * 60)
+
+# executeAutoTap 必须在tap前检查BLE连接
+for func_name in ['executeAutoTap', 'executeAutoTapFallback']:
+    pattern = rf'fun\s+{func_name}\b.*?(?=\n    (?:fun |private |suspend |override )|\Z)'
+    match = re.search(pattern, kotlin, re.DOTALL)
+    if match:
+        body = match.group(0)
+        has_ble_check = 'isConnected' in body or 'bleConnected' in body
+        check(f"{func_name} 执行前检查BLE连接",
+              has_ble_check,
+              f"{func_name}未检查BLE连接状态就执行tap，可能导致无效操作")
+    else:
+        warn(f"{func_name} 函数未找到", "可能已改名或移除")
+
+# ============================================================
+print()
+print("=" * 60)
+print("🔍 检查16: versionCode 递增检查")
+print("=" * 60)
+
+vc_match = re.search(r'versionCode\s+(\d+)', gradle)
+if vc_match:
+    vc = int(vc_match.group(1))
+    # V2.9.500对应versionCode 223，每版本递增1
+    check(f"versionCode({vc}) >= 224 (V2.9.504基准)",
+          vc >= 224,
+          f"versionCode={vc} 低于V2.9.504基准值224，可能忘记递增")
+else:
+    check("versionCode 存在", False, "build.gradle中未找到versionCode")
 
 # ============================================================
 print()
