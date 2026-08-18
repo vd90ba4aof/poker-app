@@ -881,6 +881,7 @@ class LocalSceneRecognizer(
             result
         } catch (e: Exception) {
             Log.e(TAG, "本地场景识别异常", e)
+            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.RECOGNITION, DiagnosticLogger.Severity.HIGH, "LocalCV场景识别异常", "${e.javaClass.simpleName}: ${e.message}") } catch (_: Exception) {}
             null
         }
     }
