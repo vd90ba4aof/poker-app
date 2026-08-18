@@ -11,3 +11,29 @@ build/
 
 # Ignore local config
 local.properties
+
+# === 清理项 2026-08-18 ===
+# Gradle/JDK 缓存与安装包
+.gradle_local/
+gradle-local/
+gradle-*.zip
+jdk-*/
+jdk*.tar.gz
+# 旧 APK 压缩包
+*-debug*.zip
+*-latest*.zip
+poker-v*.zip
+# 临时脚本与分析文件
+lxpk_*.kt
+lxpk_*.js
+lxpk_compare/
+check_qingyun_*.js
+fix_dead_code.py
+upgrade_engine_*.py
+temp_all_js.js
+*_report.md
+ISSUES_*.md
+# 备份文件
+*.bak_fix*
+# codeact 临时目录
+codeact/
