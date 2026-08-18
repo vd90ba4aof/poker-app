@@ -6,15 +6,13 @@ import android.util.Log
 
 /**
  * V2.9.200: 游戏模式配置中心
- * 支持多平台（标准/GG扑克/短牌）切换，统一管理坐标、Rake、按钮风格等平台差异
+ * V2.9.508: 简化为仅支持GGPOKER竖屏
  * 所有平台差异在此处集中配置，业务层通过 getPlatformConfig() 获取当前配置
  */
 
-// 游戏平台枚举
+// 游戏平台枚举（V2.9.508: 仅保留GGPOKER）
 enum class GamePlatform(val displayName: String) {
-    STANDARD("标准扑克"),
-    GGPOKER("GG扑克"),
-    SHORT_DECK("短牌(6+)")
+    GGPOKER("GG扑克")
 }
 
 // 游戏类型枚举
@@ -91,8 +89,8 @@ object GameModeConfig {
 
     private var prefs: SharedPreferences? = null
 
-    // 当前平台（运行时变量，默认STANDARD保证向后兼容）
-    var currentPlatform: GamePlatform = GamePlatform.STANDARD
+    // 当前平台（V2.9.508: 仅支持GGPOKER）
+    var currentPlatform: GamePlatform = GamePlatform.GGPOKER
         private set
     var currentGameType: GameType = GameType.NORMAL
         private set
@@ -105,15 +103,10 @@ object GameModeConfig {
      */
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val savedPlatformName = prefs?.getString(KEY_PLATFORM, GamePlatform.STANDARD.name) ?: GamePlatform.STANDARD.name
+        // V2.9.508: 强制使用GGPOKER，忽略旧配置
+        currentPlatform = GamePlatform.GGPOKER
         val savedGameTypeName = prefs?.getString(KEY_GAME_TYPE, GameType.NORMAL.name) ?: GameType.NORMAL.name
         val savedGameModeName = prefs?.getString(KEY_GAME_MODE, GameMode.CASH.name) ?: GameMode.CASH.name
-        try {
-            currentPlatform = GamePlatform.valueOf(savedPlatformName)
-        } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "无效平台名称: $savedPlatformName，使用默认STANDARD")
-            currentPlatform = GamePlatform.STANDARD
-        }
         try {
             currentGameType = GameType.valueOf(savedGameTypeName)
         } catch (e: IllegalArgumentException) {
@@ -237,70 +230,40 @@ object GameModeConfig {
         )
     )
 
-    // 标准扑克横屏坐标配置（与当前V2.9.199一致）
-    private val STANDARD_LANDSCAPE_COORDS = CoordinateConfig(
-        handCardsBase = listOf(Pair(85, 180), Pair(180, 295)),
-        handYBase = Pair(1780, 1940),
-        communityCardsBase = listOf(
-            Pair(155, 315), Pair(305, 465), Pair(455, 615),
-            Pair(605, 765), Pair(755, 915)
-        ),
-        communityYBase = Pair(1060, 1210),
-        referenceWidth = 1080,
-        referenceHeight = 2344,
-        orientation = ScreenOrientation.LANDSCAPE
-    )
+    // V2.9.508: 删除STANDARD_LANDSCAPE_COORDS，仅保留GGPOKER竖屏
 
     fun getCoordinateConfig(): CoordinateConfig {
-        return when (currentPlatform) {
-            GamePlatform.GGPOKER -> GG_PORTRAIT_COORDS
-            GamePlatform.SHORT_DECK -> STANDARD_LANDSCAPE_COORDS  // 短牌沿用横屏坐标
-            GamePlatform.STANDARD -> STANDARD_LANDSCAPE_COORDS
-        }
+        // V2.9.508: 仅支持GGPOKER竖屏
+        return GG_PORTRAIT_COORDS
     }
 
     fun getRakeConfig(): RakeConfig {
-        return when (currentPlatform) {
-            GamePlatform.GGPOKER -> RakeConfig(
-                percentage = 0.05,
-                caps = mapOf(
-                    "NL2" to 20, "NL5" to 50, "NL10" to 100,
-                    "NL25" to 200, "NL50" to 400, "NL100" to 500,
-                    "NL200" to 600, "NL500" to 830
-                )
+        // V2.9.508: 仅支持GGPOKER
+        return RakeConfig(
+            percentage = 0.05,
+            caps = mapOf(
+                "NL2" to 20, "NL5" to 50, "NL10" to 100,
+                "NL25" to 200, "NL50" to 400, "NL100" to 500,
+                "NL200" to 600, "NL500" to 830
             )
-            else -> RakeConfig()
-        }
+        )
     }
 
     fun getPlatformConfig(): PlatformConfig {
-        return when (currentPlatform) {
-            GamePlatform.GGPOKER -> PlatformConfig(
-                platform = GamePlatform.GGPOKER,
-                coordinates = GG_PORTRAIT_COORDS,
-                rake = getRakeConfig(),
-                supportedGameTypes = listOf(
-                    GameType.NORMAL, GameType.STRADDLE, GameType.BOMB_POT,
-                    GameType.PKO, GameType.RUSH_CASH
-                ),
-                hasBetSlider = false,
-                hasCardSqueeze = true,
-                buttonZoomFactor = 1.1,
-                preferEnglishButtons = true
-            )
-            GamePlatform.SHORT_DECK -> PlatformConfig(
-                platform = GamePlatform.SHORT_DECK,
-                coordinates = STANDARD_LANDSCAPE_COORDS,
-                supportedGameTypes = listOf(GameType.NORMAL),
-                hasBetSlider = false
-            )
-            GamePlatform.STANDARD -> PlatformConfig(
-                platform = GamePlatform.STANDARD,
-                coordinates = STANDARD_LANDSCAPE_COORDS,
-                supportedGameTypes = listOf(GameType.NORMAL, GameType.STRADDLE),
-                hasBetSlider = true
-            )
-        }
+        // V2.9.508: 仅支持GGPOKER
+        return PlatformConfig(
+            platform = GamePlatform.GGPOKER,
+            coordinates = GG_PORTRAIT_COORDS,
+            rake = getRakeConfig(),
+            supportedGameTypes = listOf(
+                GameType.NORMAL, GameType.STRADDLE, GameType.BOMB_POT,
+                GameType.PKO, GameType.RUSH_CASH
+            ),
+            hasBetSlider = false,
+            hasCardSqueeze = true,
+            buttonZoomFactor = 1.1,
+            preferEnglishButtons = true
+        )
     }
 
     // ============ V2.9.208: 底池区域坐标（百分比，用于本地OCR） ============
@@ -310,11 +273,8 @@ object GameModeConfig {
      * @return (x1%, y1%, x2%, y2%) 底池文字所在区域
      */
     fun getPotRegionPct(): Pair<Pair<Double, Double>, Pair<Double, Double>> {
-        return when (currentPlatform) {
-            GamePlatform.GGPOKER -> (0.25 to 0.35) to (0.75 to 0.42)  // GG竖屏：桌面中央绿色pill区域
-            GamePlatform.SHORT_DECK -> (0.35 to 0.13) to (0.65 to 0.21)
-            GamePlatform.STANDARD -> (0.35 to 0.13) to (0.65 to 0.21)
-        }
+        // V2.9.508: 仅支持GGPOKER竖屏
+        return (0.25 to 0.35) to (0.75 to 0.42)  // GG竖屏：桌面中央绿色pill区域
     }
 
     /**

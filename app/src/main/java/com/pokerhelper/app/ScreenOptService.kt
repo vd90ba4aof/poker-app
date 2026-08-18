@@ -113,9 +113,9 @@ class ScreenOptService : AccessibilityService() {
                             // ScreenshotResult没有close()方法，不需要关闭
 
                             if (softwareBitmap != null) {
-                                // 4. 压缩为JPEG
+                                // 4. 压缩为JPEG（V2.9.508: 质量85→95，减少识别损失）
                                 val stream = ByteArrayOutputStream()
-                                softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+                                softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
                                 val jpegBytes = stream.toByteArray()
                                 softwareBitmap.recycle()
 

@@ -36,7 +36,8 @@ class CardRecognizer(private val context: Context) {
         private var HAND_Y = 1780 to 1940
         private var HAND_CARDS = listOf(85 to 180, 180 to 295)
         // V2.9.200: 记录当前坐标对应的平台，用于切换时强制刷新
-        private var currentPlatform: GamePlatform = GamePlatform.STANDARD
+        // V2.9.508: 仅支持GGPOKER
+        private var currentPlatform: GamePlatform = GamePlatform.GGPOKER
 
         /**
          * V2.9.200: 应用当前游戏模式坐标 + 按屏幕尺寸缩放

@@ -1299,27 +1299,10 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             setPadding(6, 2, 6, 2)
             setBackgroundColor(0x00000000)
             setOnClickListener {
-                // 循环切换：STANDARD → GGPOKER → SHORT_DECK → STANDARD
-                val nextPlatform = when (GameModeConfig.currentPlatform) {
-                    GamePlatform.STANDARD -> GamePlatform.GGPOKER
-                    GamePlatform.GGPOKER -> GamePlatform.SHORT_DECK
-                    GamePlatform.SHORT_DECK -> GamePlatform.STANDARD
-                }
-                GameModeConfig.setPlatform(nextPlatform)
-                // 更新CardRecognizer坐标
-                CardRecognizer.applyGameMode()
-                // 更新按钮文字颜色提示当前平台
-                when (nextPlatform) {
-                    GamePlatform.STANDARD -> setTextColor(0xFF4ade80.toInt())
-                    GamePlatform.GGPOKER -> setTextColor(0xFFfbbf24.toInt())  // GG=金色
-                    GamePlatform.SHORT_DECK -> setTextColor(0xFFf472b6.toInt())  // 短牌=粉色
-                }
-                tvStatus?.text = "已切换到${nextPlatform.displayName}"
-                Log.i(TAG, "平台切换: ${nextPlatform.displayName}")
-                // 重置手牌锁定，避免跨平台锁定污染
-                VisionApiClient.holeCardsLocked = null
-                VisionApiClient.holeCardsRankLocked = null
-                // dButtonLocked 有 private set，通过下次截图的内部逻辑自动重置
+                // V2.9.508: 仅支持GGPOKER，禁用平台切换
+                tvStatus?.text = "仅支持GGPOKER"
+                Log.i(TAG, "平台切换已禁用: 仅支持GGPOKER")
+            }
                 VisionApiClient.streetLocked = null
                 latestButtonPositions = emptyList()
             }

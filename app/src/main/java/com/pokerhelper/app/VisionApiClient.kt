@@ -144,8 +144,8 @@ object VisionApiClient {
         // V2.9.xxx: 游戏类型与抽水（数据链补齐）
         val gameType: String = "normal",           // 游戏类型: normal/rush_cash
         val rakeCap: Int = 0,                      // 抽水上限（单位同筹码）
-        // V2.9.220: 自动检测到的平台（基于OCR文本识别，仅供参考，不自动切换）
-        val detectedPlatform: String = "STANDARD",  // 自动检测平台: STANDARD/GGPOKER/SHORT_DECK
+        // V2.9.220: 自动检测到的平台（V2.9.508: 仅支持GGPOKER）
+        val detectedPlatform: String = "GGPOKER",  // 自动检测平台
         // V2.9.230: 本地suit识别标记——标记最终suit是否来自本地推断（用于前端判断可信度）
         val localSuitUsed: Boolean = false
     )
@@ -353,7 +353,7 @@ object VisionApiClient {
                         isInsurance = last?.isInsurance ?: false,
                         isPKO = last?.isPKO ?: false,
                         gameMode = last?.gameMode ?: "cash",
-                        detectedPlatform = last?.detectedPlatform ?: "STANDARD",
+                        detectedPlatform = last?.detectedPlatform ?: "GGPOKER",
                         localSuitUsed = false  // 兜底模式下suit为空，未使用本地推断
                     )
                 } catch (ex: Exception) {
@@ -455,33 +455,11 @@ object VisionApiClient {
 
     /**
      * V2.9.220: 根据OCR识别文本自动检测平台
-     * 基于关键词匹配，失败时返回默认 STANDARD
-     * 检测结果仅供参考，不自动切换用户手动选择的平台
+     * V2.9.508: 简化为仅返回GGPOKER
      */
     private fun detectPlatform(content: String): String {
-        return try {
-            Log.d(TAG, "detectPlatform: content length=${content.length}")
-            val result = when {
-                // GG扑克：匹配 GGPoker / GG Poker / GGPOKER 等变体
-                content.contains("GGPoker", ignoreCase = true) ||
-                content.contains("GG Poker", ignoreCase = true) ||
-                content.contains("GGPOKER", ignoreCase = true) -> "GGPOKER"
-                // PokerStars：按标准处理
-                content.contains("PokerStars", ignoreCase = true) ||
-                content.contains("POKERSTARS", ignoreCase = true) -> "STANDARD"
-                // 短牌：匹配 6+ / Short Deck / 短牌
-                content.contains("6+") ||
-                content.contains("Short Deck", ignoreCase = true) ||
-                content.contains("短牌") -> "SHORT_DECK"
-                // 默认标准扑克
-                else -> "STANDARD"
-            }
-            Log.d(TAG, "detectPlatform result: $result")
-            result
-        } catch (e: Exception) {
-            Log.e(TAG, "detectPlatform 异常: ${e.message}，使用默认STANDARD", e)
-            "STANDARD"
-        }
+        // V2.9.508: 仅支持GGPOKER，直接返回
+        return "GGPOKER"
     }
 
     /**
@@ -489,20 +467,11 @@ object VisionApiClient {
      * 返回 Pair(平台前缀描述, 按钮描述文本)
      */
     private fun buildPlatformPromptHint(): Pair<String, String> {
-        return when (GameModeConfig.currentPlatform) {
-            GamePlatform.GGPOKER -> Pair(
-                "GG扑克(GGPoker)。特征:深蓝/深绿色桌面,竖屏布局,按钮可能是英文(Fold/Check/Call/Raise/All In)或中文,行动时按钮放大10%,可能有Straddle/Bomb Pot/Insurance/PKO等特殊模式。",
-                "Fold/Check/Call含金额/Raise含金额/All In,可能含预设加注额(1/2Pot,2/3Pot,Pot),中英文都可能"
-            )
-            GamePlatform.SHORT_DECK -> Pair(
-                "短牌扑克(6+)。特征:去掉2-5,只有36张牌(A-6),牌面显示与常规一致。",
-                "弃牌/让牌/跟注含金额/加注含金额比例/下注/全押"
-            )
-            GamePlatform.STANDARD -> Pair(
-                "标准德州扑克。",
-                "弃牌/让牌/跟注含金额/加注含金额比例/下注/全押"
-            )
-        }
+        // V2.9.508: 仅支持GGPOKER
+        return Pair(
+            "GG扑克(GGPoker)。特征:深蓝/深绿色桌面,竖屏布局,按钮可能是英文(Fold/Check/Call/Raise/All In)或中文,行动时按钮放大10%,可能有Straddle/Bomb Pot/Insurance/PKO等特殊模式。",
+            "Fold/Check/Call含金额/Raise含金额/All In,可能含预设加注额(1/2Pot,2/3Pot,Pot),中英文都可能"
+        )
     }
 
     // V2.9.156: 分层Prompt+Schema+Few-Shot+JSON Mode+temperature=0
@@ -516,7 +485,7 @@ object VisionApiClient {
         // V2.9.200: 根据当前平台动态调整prompt描述（GG/标准/短牌）
         val platformHint = buildPlatformPromptHint()
         val prompt = """${platformHint.first}5-max识别引擎。只输出JSON。
-Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"blinds":"100/200","phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"STANDARD"}
+Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"blinds":"100/200","phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"GGPOKER"}
 花色:s=♠黑 h=♥红心 d=♦方块 c=♣梅花。对子花色须不同。
 pot展开简写:1.2K=1200,1.5M=1500000。底池=桌面中央筹码堆。
 active_players=仅有牌(明/暗)的玩家,弃牌/空座不计。
@@ -525,8 +494,8 @@ button_positions=每按钮{text与buttons一致,xPct=中心X/屏宽,yPct=中心Y
 opp_seats须含nickname(头像旁用户名)。showdown_cards=摊牌对手牌,看不到填[]。opp_hud=对手统计,看不到填[]。
 GG特有字段:is_straddle=是否Straddle(第三盲注);is_bomb_pot=是否BombPot(所有玩家ante后直接翻牌);is_insurance=是否出现Insurance/EV Cashout按钮;is_pko=是否PKO赏金赛(牌桌有赏金标识)。
 game_mode=现金桌填cash,锦标赛填tournament。判断依据:有"锦标赛/报名费/奖池/剩余人数/盲注倒计时"填tournament,否则填cash。
-detected_platform=根据桌面logo/品牌文字自动识别平台。判断依据:看到GGPoker/GG标志填GGPOKER,看到6+/Short Deck/短牌填SHORT_DECK,看到PokerStars或其他填STANDARD。
-示例:{"is_poker_table":true,"hole_cards":[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}],"community_cards":[{"rank":"Q","suit":"d"}],"pot":1500,"my_chips":25000,"bet_to_call":0,"dealer_seat":3,"my_seat":1,"blinds":"100/200","phase":"flop","opp_seats":[{"seat":2,"nickname":"King","chips":"18000","action":"check"}],"buttons":["让牌","下注500"],"button_positions":[{"text":"让牌","xPct":0.50,"yPct":0.88},{"text":"下注500","xPct":0.83,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"STANDARD"}
+detected_platform=根据桌面logo/品牌文字自动识别平台。判断依据:看到GGPoker/GG标志填GGPOKER,仅支持GGPOKER。
+示例:{"is_poker_table":true,"hole_cards":[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}],"community_cards":[{"rank":"Q","suit":"d"}],"pot":1500,"my_chips":25000,"bet_to_call":0,"dealer_seat":3,"my_seat":1,"blinds":"100/200","phase":"flop","opp_seats":[{"seat":2,"nickname":"King","chips":"18000","action":"check"}],"buttons":["让牌","下注500"],"button_positions":[{"text":"让牌","xPct":0.50,"yPct":0.88},{"text":"下注500","xPct":0.83,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"GGPOKER"}
 ${streetHint}${rankHint}识别:"""
 
         return JSONObject().apply {
@@ -626,42 +595,9 @@ ${streetHint}${rankHint}识别:"""
         val isPKO = data.optBoolean("is_pko", false)
         // V2.9.212: 游戏模式检测——现金桌vs锦标赛
         val gameMode = data.optString("game_mode", "cash").takeIf { it.isNotEmpty() } ?: "cash"
-        // V2.9.220: 平台自动检测——双重策略：优先用VLM返回的detected_platform，兜底用OCR关键词匹配
-        val vlmDetectedPlatform = data.optString("detected_platform", "").takeIf { it.isNotEmpty() }
-        val ocrDetectedPlatform = detectPlatform(content)
-        val detectedPlatform = vlmDetectedPlatform ?: ocrDetectedPlatform
-        Log.i(TAG, "平台检测: VLM=$vlmDetectedPlatform, OCR=$ocrDetectedPlatform, 最终=$detectedPlatform, 当前配置=${GameModeConfig.currentPlatform.name}")
-        // V2.9.240: 连续3次检测一致时自动切换平台
-        try {
-            if (detectedPlatform.isNotEmpty() && detectedPlatform != "STANDARD") {
-                if (detectedPlatform == _lastDetectedPlatform) {
-                    _detectedPlatformCount++
-                    Log.d(TAG, "平台检测计数: platform=$detectedPlatform, count=$_detectedPlatformCount/3")
-                } else {
-                    _lastDetectedPlatform = detectedPlatform
-                    _detectedPlatformCount = 1
-                    Log.d(TAG, "平台检测变化: 新平台=$detectedPlatform, 重置计数为1")
-                }
-                // 连续3次一致 → 自动切换
-                if (_detectedPlatformCount >= 3 && detectedPlatform != GameModeConfig.currentPlatform.name) {
-                    try {
-                        val platformEnum = GamePlatform.valueOf(detectedPlatform)
-                        GameModeConfig.setPlatform(platformEnum)
-                        Log.i(TAG, "★ 平台自动切换成功: ${GameModeConfig.currentPlatform.name} → $detectedPlatform (连续${_detectedPlatformCount}次一致)")
-                        // 切换后重置计数，避免反复触发
-                        _detectedPlatformCount = 0
-                        _lastDetectedPlatform = ""
-                    } catch (e: Exception) {
-                        Log.w(TAG, "平台自动切换失败: 无法解析 '$detectedPlatform' 为 GamePlatform", e)
-                        _detectedPlatformCount = 0
-                    }
-                }
-            } else {
-                Log.d(TAG, "平台检测: 检测值为$detectedPlatform，跳过自动切换计数")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "平台自动检测逻辑异常", e)
-        }
+        // V2.9.508: 仅支持GGPOKER，跳过平台自动切换逻辑
+        val detectedPlatform = "GGPOKER"
+        Log.i(TAG, "平台检测: 当前仅支持GGPOKER")
 return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), parseCards(data.optJSONArray("community_cards")), insuredPot, parseChipValue(data, "my_chips"), data.optInt("total_players", 6), data.optInt("active_players", 2), data.optString("my_position", ""), street, finalToCall, data.optInt("min_raise", 0), buttons, blindSB, blindBB, parseChipValue(data, "ante"), players, data.optString("d_button_pos", ""), content, showdownCards, oppHud, buttonPositions, suitUncertain, isStraddle, isBombPot, isInsurance, isPKO, gameMode, detectedPlatform)
     }
 
