@@ -338,6 +338,8 @@ class FloatingService : Service() {
         // V2.9.112: 初始化BLE管理器
         bleManager = Esp32BleManager(this)
         setupBleCallbacks()
+        // v1.0.39-fix: 悬浮窗启动后自动连接BLE，不再依赖青云触发
+        handler.postDelayed({ try { bleManager?.startScan() } catch (e: Exception) { Log.w(TAG, "auto BLE scan on startup error", e) } }, 3000)
     }
 
     // V2.9.184: 服务重启后恢复关键组件——onStartCommand(START_STICKY)重启时onCreate不会被调用
@@ -521,6 +523,8 @@ class FloatingService : Service() {
         // 重新初始化BLE
         bleManager = Esp32BleManager(this)
         setupBleCallbacks()
+        // v1.0.39-fix: 服务重启后也自动重连BLE
+        handler.postDelayed({ try { bleManager?.startScan() } catch (e: Exception) { Log.w(TAG, "auto BLE scan on reinit error", e) } }, 3000)
 
         Log.i(TAG, "reinit: all components restored")
     }

@@ -1,26 +1,92 @@
 /**
  * ============================================================================
- * 青云扑克 ESP32-S3 - 经典蓝牙SPP + USB HID 固件 (v1.0.38)
+ * 青云扑克 ESP32-S3 - BLE + USB HID 固件 (v1.0.35)
  * ============================================================================
  *
- * v1.0.38：BLE → 经典蓝牙SPP (Serial Port Profile)
- *   - 彻底抛弃BLE，改用经典蓝牙SPP（BluetoothSerial）
- *   - 配对后系统自动连接，不再需要App主动发起连接
- *   - 连接由Android系统维持，断连后自动重连
- *   - USB等待改为非阻塞，SPP先启动不阻塞
- *   - 通信协议完全不变（tap:x,y,ms / status / log / ping / diag / selftest）
+ * v1.0.39：BLE发射功率拉满（USB供电不耗电，最大功率加速连接和稳定性）
+ * v1.0.36：日志增强 + 心跳字段扩展 + rssi命令
+ *   - 命令接收时记录完整命令内容
+ *   - 心跳推送时记录当前heap和连接状态
+ *   - tap执行时记录原始坐标、HID坐标、抖动偏移量
+ *   - selftest结果记录每个轴的详细状态
+ *   - 断连事件记录当时的运行状态（heap、uptime、heartbeat计数）
+ *   - hb通知追加rssi字段（-1占位保持一致性）
+ *   - hb通知追加dc（断连计数）字段
+ *   - 新增rssi命令：返回当前BLE连接状态和相关信息
+ *   - tap命令执行后返回执行结果（ok:tap 或 err:tap_fail）
  *
- * 经典蓝牙SPP优势：
- *   - 配对后自动连接（像XCMG设备一样）
- *   - 系统维持连接，不需要App管理
- *   - 连接稳定性远高于BLE
- *   - 代码更简单（不需要GATT、心跳、自动重连等复杂逻辑）
+ * v1.0.35：实战级BLE连接监控
+ *   - BLE主动心跳：每5秒推送hb通知到手机（含heap/hid/usb状态）
+ *   - 断连计数+防护：记录BLE断连次数和最近断连时间
+ *   - ping增强：返回心跳计数、断连计数、运行时间
+ *   - 新命令diag：全面诊断（ver/heap/usb/hid/ble/hb/dc/uptime/fails）
+ *   - status增强：末尾追加dc/rssi字段（向后兼容）
+ *   - loop delay从3s降到100ms，心跳通过时间判断精确控制
  *
- * 兼容App：Serial Bluetooth Terminal (Kai Morich), 青云APP
+ * v1.0.34：点击随机抖动，降低行为检测风险
+ *   - tap()坐标±5px随机偏移，时长±20ms随机变化
+ *   - 自检走touchDown/touchUp直连，不受抖动影响
+ *
+ * v1.0.33：增加HID自检功能（selftest命令+USB挂载自动触发）
+ *   - USB首次挂载后自动执行tap(540,1172,50)并记录每步结果
+ *   - BLE命令selftest手动触发自检
+ *   - status回复增加st/st_down/st_up字段，BLE看结果无需盯屏幕
+ *   - 自检结果：ok=全部成功 / down_failed=touchDown失败 / up_failed=touchUp失败
+ *
+ * v1.0.32：修复touchUp contact_id不一致导致触点无法释放
+ *   - touchUp时contact_id从0改为1（与touchDown一致），否则Android收到
+ *     "触点1按下→触点0释放"，触点1被判为一直按住未松开
+ *   - touchUp的X/Y保持上次位置（不再清零），对齐Android释放坐标要求
+ *
+ * v1.0.31：恢复Contact ID，去除Feature报告（根因修复）
+ *   - v1.0.30去掉Contact ID后Android识别为鼠标指针，根因是Contact ID(0x51)
+ *     是Android InputReader区分触摸屏vs鼠标的关键Usage
+ *   - 恢复v1.0.28的Input Report结构：contact_id + flags + X + Y = 6字节
+ *   - 去掉Feature报告(Contact Count Maximum)，避免GET_REPORT STALL
+ *   - 保留In Range(0x32)，去掉Touch Valid(0x47)（Android不识别此Usage）
+ *   - TouchReport结构体：contact_id→flags→x→y
+ *
+ * v1.0.30：极简5字节描述符，去掉Feature报告避免GET_REPORT STALL
+ *   - 去掉Contact Count Maximum + Contact ID，精简到5字节
+ *   - 增加Touch Valid(0x47)位
+ *   - 结果：Android识别为鼠标指针而非触摸屏（缺少Contact ID）
+ *   - 修正字段顺序：Tip Switch(bit0) + In Range(bit1) + 6bit padding = 1字节（先于Contact ID）
+ *   - 增加 In Range (0x32) usage（Android HID多点触控协议必需字段，缺少则丢弃触摸）
+ *   - Contact Count Maximum Feature report 显式声明 Report Size=8/Count=1（之前继承错误）
+ *   - Contact ID Logical Max 从1改为127（符合HID规范的触点ID范围）
+ *   - 增加 Physical Min/Max 和 Unit 声明，提升Android/Windows兼容性
+ *   - TouchReport结构体同步调整字段顺序：flags→contact_id→x→y→contact_count
+ *   - touchDown时flags=0x03(Tip+InRange)；touchUp时flags=0x00
+ *   - touchDown/touchUp增加诊断日志（x/y原始值+HID转换值）
+ *
+ * v1.0.28：USB HID修复
+ *   - HID描述符：Touch Screen(0x04) + Contact Count Maximum(0x55)，Android可识别
+ *   - Report ID=0（无前缀），去掉多余ID
+ *   - 设置VID(0x303A)/PID(0x8266)/Manufacturer/Product/Serial
+ *   - status增加mnt字段：使用(bool)USB检测真正mounted状态（arduino-esp32 operator bool() = _started && mounted）
+ *   - 修正API：USB.firmwareVersion() 替代不存在的USB.productVersion()
+ *   - BLE MTU协商到512（App端v2.9.179已支持）
+ *
+ * BLE协议（Nordic UART Service）：
+ *   Service UUID: 6E400001-B5A3-F393-E0A9-E50E24DAB9E9
+ *   RX Char (手机写): 6E400002-B5A3-F393-E0A9-E50E24DAB9E9
+ *   TX Char (ESP通知): 6E400003-B5A3-F393-E0A9-E50E24DAB9E9
+ *
+ * 指令格式：
+ *   tap:x,y,duration  → 执行触摸点击 → 回复 ok:tap(x,y,ms) 或 err:xxx
+ *   status            → 查询设备状态   → 回复 ok:ver=...,heap=...,...
+ *   log               → 获取完整日志   → 回复日志内容
+ *
+ * 兼容App：Serial Bluetooth Terminal (Kai Morich), Adafruit Bluefruit Connect
+ *
+ * v1.0.25：修复HID send failure（yield+retry机制）
+ * v1.0.24：修复 /tap 端点 JSON+表单双格式
+ * v1.0.23：精简版砍Camera
+ * v1.0.21~v1.0.16：WiFi AP + USB HID + Camera 迭代
  *
  * 核心实现：
  *   - USBHID 触摸屏模拟（Digitizer HID Report）
- *   - 经典蓝牙SPP（Serial Port Profile）
+ *   - BLE GATT Server（Nordic UART Service）
  *   - platformio.ini: ARDUINO_USB_MODE=0 + ARDUINO_USB_CDC_ON_BOOT=0
  */
 
@@ -28,8 +94,11 @@
 #include <USB.h>
 #include <USBHID.h>
 
-// 经典蓝牙SPP库
-#include "BluetoothSerial.h"
+// BLE 库
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
 // 禁用 brownout detector
 #include "soc/soc.h"
@@ -38,10 +107,15 @@
 // ============================================================================
 // 常量配置
 // ============================================================================
-#define FW_VERSION "v1.0.38"
+#define FW_VERSION "v1.0.39"
 
-// 蓝牙设备名
-#define BT_DEVICE_NAME "QingYun-ESP32"
+// BLE设备名
+#define BLE_DEVICE_NAME "QingYun-ESP32"
+
+// Nordic UART Service UUIDs
+#define NUS_SERVICE_UUID  "6E400001-B5A3-F393-E0A9-E50E24DAB9E9"
+#define RX_CHAR_UUID      "6E400002-B5A3-F393-E0A9-E50E24DAB9E9"  // Write
+#define TX_CHAR_UUID      "6E400003-B5A3-F393-E0A9-E50E24DAB9E9"  // Notify
 
 // 屏幕分辨率（一加13T）
 #define SCREEN_WIDTH  1080
@@ -50,7 +124,7 @@
 // HID 坐标范围
 #define HID_MAX 32767
 
-// 点击随机抖动（降低行为检测风险）
+// 点击随机抖动（v1.0.34：降低行为检测风险）
 #define JITTER_PX  5     // 坐标±5px随机偏移
 #define JITTER_MS  20    // 时长±20ms随机变化
 
@@ -58,7 +132,7 @@
 #define HID_REPORT_ID_TOUCH 0
 
 // ============================================================================
-// 日志缓冲区（Serial + BT log指令可用）
+// 日志缓冲区（Serial + BLE log指令可用）
 // ============================================================================
 static String log_buf = "";
 static const size_t LOG_BUF_MAX = 6144;  // 6KB上限
@@ -95,8 +169,16 @@ static void qlogf(const char* fmt, ...) {
 }
 
 // ============================================================================
-// HID 报告描述符（触摸屏 Digitizer - 6字节带Contact ID）
+// HID 报告描述符（触摸屏 Digitizer - 6字节带Contact ID）v1.0.31
 // ============================================================================
+// 关键发现：Android InputReader靠Contact ID(0x51)区分触摸屏vs鼠标指针。
+// v1.0.30去掉了Contact ID，Android fallback到鼠标模式（屏幕出现指针图标）。
+// v1.0.31恢复Contact ID，同时去掉Feature报告避免GET_REPORT STALL。
+// 输入报告布局（共6字节，无Report ID前缀）：
+//   Byte 0: contact_id  = 0=释放, 1=按下
+//   Byte 1: flags       = bit0:Tip Switch | bit1:In Range | bits2-7:0
+//   Byte 2-3: X         = 绝对X坐标（0~32767，小端序）
+//   Byte 4-5: Y         = 绝对Y坐标（0~32767，小端序）
 static const uint8_t touch_report_descriptor[] = {
     0x05, 0x0D,             // Usage Page (Digitizers)
     0x09, 0x04,             // Usage (Touch Screen)
@@ -144,6 +226,9 @@ static const uint8_t touch_report_descriptor[] = {
     0xC0                    // End Collection (Application)
 };
 
+// 必须与描述符声明的输入报告完全对应（packed保证无padding字节）
+// contact_id: 0=释放, 1=按下
+// flags: bit0=Tip Switch, bit1=In Range, bits2-7=0
 struct __attribute__((packed)) TouchReport {
     uint8_t  contact_id;     // byte 0
     uint8_t  flags;          // byte 1
@@ -158,6 +243,7 @@ class USBHIDTouchpad : public USBHIDDevice {
 private:
     USBHID hid;
     TouchReport _report;
+    // V2.9.175: HID诊断追踪
     bool _everMounted = false;
     int _failCount = 0;
     const char* _lastFailReason = "none";
@@ -181,6 +267,7 @@ public:
         return r;
     }
 
+    // V2.9.175: 诊断接口
     bool wasEverMounted() const { return _everMounted; }
     int hidFailCount() const { return _failCount; }
     const char* hidLastFailReason() const { return _lastFailReason; }
@@ -220,8 +307,10 @@ public:
             _lastFailReason = "not_ready";
             return false;
         }
+        // contact_id必须和touchDown一致(1)，否则Android认为触点未释放
         _report.contact_id = 1;
         _report.flags = 0x00;
+        // X/Y保持上次位置，部分Android版本要求释放坐标与按下一致
         Serial.printf("[HID] up cid=%u\n", _report.contact_id);
         for (int retry = 0; retry < 5; retry++) {
             if (hid.SendReport(HID_REPORT_ID_TOUCH, &_report, sizeof(_report))) return true;
@@ -234,7 +323,7 @@ public:
     }
 
     bool tap(uint16_t screenX, uint16_t screenY, uint32_t durationMs) {
-        // 坐标±5px + 时长±20ms随机抖动，降低行为检测风险
+        // v1.0.34: 坐标±5px + 时长±20ms随机抖动，降低行为检测风险
         int16_t jx = (int16_t)(esp_random() % (JITTER_PX * 2 + 1)) - JITTER_PX;
         int16_t jy = (int16_t)(esp_random() % (JITTER_PX * 2 + 1)) - JITTER_PX;
         int16_t adjX = (int16_t)screenX + jx;
@@ -248,6 +337,7 @@ public:
         int32_t adjDur = (int32_t)durationMs + jms;
         if (adjDur < 10) adjDur = 10;
 
+        // v1.0.36: tap执行时记录原始坐标、HID坐标、抖动偏移量
         uint16_t hidX = (uint16_t)((uint32_t)adjX * HID_MAX / SCREEN_WIDTH);
         uint16_t hidY = (uint16_t)((uint32_t)adjY * HID_MAX / SCREEN_HEIGHT);
         Serial.printf("[TAP] raw=(%u,%u) jitter=(%d,%d) adj=(%d,%d) hid=(%u,%u) dur=%dms (jitter=%dms)\n",
@@ -284,6 +374,7 @@ static void runHidSelfTest() {
         return;
     }
 
+    // 执行一次完整tap，记录每步结果
     g_selftestDown = touchpad.touchDown(540, 1172);
     if (!g_selftestDown) {
         g_selftestFails = touchpad.hidFailCount();
@@ -309,6 +400,7 @@ static void runHidSelfTest() {
               g_selftestFails, touchpad.hidLastFailReason());
     }
 
+    // v1.0.36: selftest结果记录每个轴的详细状态
     qlogf("[SELFTEST] Axis detail - X: screen=540 hid_max=%d ratio=%.4f | Y: screen=1172 hid_max=%d ratio=%.4f | USB: %s | HID: %s",
           HID_MAX, (float)HID_MAX / SCREEN_WIDTH,
           HID_MAX, (float)HID_MAX / SCREEN_HEIGHT,
@@ -317,28 +409,76 @@ static void runHidSelfTest() {
 }
 
 // ============================================================================
-// 经典蓝牙SPP
+// BLE GATT Server（Nordic UART Service）
 // ============================================================================
-static BluetoothSerial SerialBT;
+static BLECharacteristic* g_pTxChar = nullptr;
+static bool g_bleConnected = false;
 
-// SPP连接状态追踪
-static bool g_btConnected = false;
-static bool g_lastBtState = false;
-static uint32_t g_disconnectCount = 0;
-static unsigned long g_lastDisconnect = 0;
-static unsigned long g_lastConnectTime = 0;
+// v1.0.35: BLE主动心跳 + 断连监控
+static unsigned long g_lastHeartbeat  = 0;
+static uint32_t      g_heartbeatCount = 0;
+#define HEARTBEAT_INTERVAL 5000  // 5秒
 
-// --- 发送回复到手机 ---
-static void btReply(const char* msg) {
-    if (SerialBT.hasClient()) {
-        SerialBT.println(msg);
-        qlogf("[BT] TX: %s", msg);
+static uint32_t      g_disconnectCount  = 0;
+static unsigned long g_lastDisconnect   = 0;
+static unsigned long g_lastConnectTime  = 0;
+
+// BLE命令队列（回调中接收，loop中处理，避免在回调中做耗时操作）
+static volatile bool g_hasNewCmd = false;
+static String g_pendingCmd = "";
+
+// --- BLE Server Callbacks ---
+class MyServerCallbacks : public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) override {
+        g_bleConnected = true;
+        g_lastConnectTime = millis();
+        qlog("[BLE] Client connected!");
+    }
+
+    void onDisconnect(BLEServer* pServer) override {
+        g_bleConnected = false;
+        g_disconnectCount++;
+        g_lastDisconnect = millis();
+        // v1.0.36: 断连事件记录当时的运行状态（heap、uptime、heartbeat计数）
+        qlogf("[BLE] Client disconnected (dc=%lu) - heap=%u uptime=%lus hb=%lu usb=%s hid=%s - restarting advertising",
+              g_disconnectCount,
+              ESP.getFreeHeap(),
+              (unsigned long)(millis() / 1000),
+              g_heartbeatCount,
+              (bool)USB ? "ok" : "no",
+              touchpad.ready() ? "ok" : "no");
+        // 重新开始广播
+        pServer->startAdvertising();
+    }
+};
+
+// --- BLE RX Callback（手机→ESP32写入指令） ---
+class MyRxCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic* pChar) override {
+        std::string val = pChar->getValue();
+        if (val.length() > 0) {
+            String cmd = String(val.c_str());
+            cmd.trim();
+            // v1.0.36: 每次收到命令时记录完整命令内容（含长度和原始值摘要）
+            qlogf("[BLE] CMD received: len=%d raw='%s'", cmd.length(), cmd.c_str());
+            g_pendingCmd = cmd;
+            g_hasNewCmd = true;
+        }
+    }
+};
+
+// --- BLE回复（ESP32→手机通知） ---
+static void bleReply(const char* msg) {
+    if (g_pTxChar && g_bleConnected) {
+        g_pTxChar->setValue(msg);
+        g_pTxChar->notify();
+        qlogf("[BLE] TX: %s", msg);
     } else {
-        qlogf("[BT] TX skipped (not connected): %s", msg);
+        qlogf("[BLE] TX skipped (not connected): %s", msg);
     }
 }
 
-// --- 处理指令 ---
+// --- 处理BLE指令 ---
 static void processCommand(const String& cmd) {
     if (cmd.startsWith("tap:")) {
         // 格式: tap:x,y,duration
@@ -357,7 +497,7 @@ static void processCommand(const String& cmd) {
                 snprintf(buf, sizeof(buf),
                          "err:coords_out_of_range(x:0-%d,y:0-%d,got=%d,%d)",
                          SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, x, y);
-                btReply(buf);
+                bleReply(buf);
                 return;
             }
 
@@ -365,22 +505,23 @@ static void processCommand(const String& cmd) {
             if (ok) {
                 char buf[128];
                 snprintf(buf, sizeof(buf), "ok:tap(%d,%d,%dms)", x, y, dur);
-                btReply(buf);
+                bleReply(buf);
             } else {
-                btReply("err:tap_fail(hid_send_failed)");
+                bleReply("err:tap_fail(hid_send_failed)");
             }
         } else {
-            btReply("err:bad_format,use:tap:x,y,ms");
+            bleReply("err:bad_format,use:tap:x,y,ms");
         }
 
     } else if (cmd == "status") {
+        // V1.0.28: (bool)USB 在arduino-esp32中 = _started && tinyusb_device_mounted（真正被主机枚举）
         bool usbMounted = (bool)USB;
         bool hidReady = touchpad.ready();
-        bool btConnected = SerialBT.hasClient();
-        
+        // v1.0.35: RSSI（ESP32 BLE库不直接提供RSSI，-1表示已连接但无法获取具体值）
+        int rssi = g_bleConnected ? -1 : 0;
         char buf[512];
         snprintf(buf, sizeof(buf),
-            "ok:ver=%s,heap=%u,psram=%u,usb=%s,hid=%s,ever=%s,fails=%d,reason=%s,bt=%s,uptime=%lus,mnt=%d,st=%s,st_down=%s,st_up=%s,dc=%lu",
+            "ok:ver=%s,heap=%u,psram=%u,usb=%s,hid=%s,ever=%s,fails=%d,reason=%s,ble=connected,uptime=%lus,mnt=%d,st=%s,st_down=%s,st_up=%s,dc=%lu,rssi=%d",
             FW_VERSION,
             ESP.getFreeHeap(),
             (unsigned)ESP.getFreePsram(),
@@ -389,57 +530,60 @@ static void processCommand(const String& cmd) {
             touchpad.wasEverMounted() ? "yes" : "no",
             touchpad.hidFailCount(),
             touchpad.hidLastFailReason(),
-            btConnected ? "connected" : "disconnected",
             (unsigned long)(millis() / 1000),
             usbMounted ? 1 : 0,
             g_selftestDone ? g_selftestResult.c_str() : "waiting",
             g_selftestDown ? "ok" : "no",
             g_selftestUp ? "ok" : "no",
-            g_disconnectCount);
-        btReply(buf);
+            g_disconnectCount,
+            rssi);
+        bleReply(buf);
 
     } else if (cmd == "log") {
+        // 分段发送日志（BLE MTU限制，每段最多128字节）
         if (log_buf.length() == 0) {
-            btReply("ok:log_empty");
+            bleReply("ok:log_empty");
         } else {
+            // 先发总长度
             char hdr[64];
             snprintf(hdr, sizeof(hdr), "ok:log_len=%d", (int)log_buf.length());
-            btReply(hdr);
+            bleReply(hdr);
             delay(100);
 
-            // 分段发送（SPP没有MTU限制，但分段更稳）
-            const int CHUNK = 200;
+            // 分段发送
+            const int CHUNK = 120;
             int totalLen = log_buf.length();
             int sent = 0;
-            while (sent < totalLen && SerialBT.hasClient()) {
+            while (sent < totalLen && g_bleConnected) {
                 int end = sent + CHUNK;
                 if (end > totalLen) end = totalLen;
                 String chunk = log_buf.substring(sent, end);
-                btReply(chunk.c_str());
+                bleReply(chunk.c_str());
                 sent = end;
-                delay(30);
+                delay(50);  // 给手机端处理时间
             }
-            btReply("[END]");
+            bleReply("[END]");
         }
 
     } else if (cmd == "ping") {
         char pongBuf[128];
-        snprintf(pongBuf, sizeof(pongBuf), "pong:dc=%lu,uptime=%lus",
-                 g_disconnectCount, (unsigned long)(millis() / 1000));
-        btReply(pongBuf);
+        snprintf(pongBuf, sizeof(pongBuf), "pong:hb=%lu,dc=%lu,uptime=%lus",
+                 g_heartbeatCount, g_disconnectCount, (unsigned long)(millis() / 1000));
+        bleReply(pongBuf);
 
     } else if (cmd == "diag") {
+        // v1.0.35: 全面诊断
         char diagBuf[256];
         snprintf(diagBuf, sizeof(diagBuf),
-            "ok:ver=%s,heap=%u,usb=%s,hid=%s,bt=%s,dc=%lu,uptime=%lus,fails=%d",
+            "ok:ver=%s,heap=%u,usb=%s,hid=%s,ble=%s,hb=%lu,dc=%lu,uptime=%lus,fails=%d",
             FW_VERSION, ESP.getFreeHeap(),
             (bool)USB ? "ok" : "no",
             touchpad.ready() ? "ok" : "no",
-            SerialBT.hasClient() ? "conn" : "disc",
-            g_disconnectCount,
+            g_bleConnected ? "conn" : "disc",
+            g_heartbeatCount, g_disconnectCount,
             (unsigned long)(millis() / 1000),
             touchpad.hidFailCount());
-        btReply(diagBuf);
+        bleReply(diagBuf);
 
     } else if (cmd == "selftest") {
         runHidSelfTest();
@@ -450,17 +594,70 @@ static void processCommand(const String& cmd) {
             g_selftestDown ? "ok" : "no",
             g_selftestUp ? "ok" : "no",
             g_selftestFails);
-        btReply(stBuf);
+        bleReply(stBuf);
 
-    } else if (cmd == "version") {
-        char verBuf[64];
-        snprintf(verBuf, sizeof(verBuf), "ok:version=%s,type=SPP,heap=%u",
-                 FW_VERSION, ESP.getFreeHeap());
-        btReply(verBuf);
+    } else if (cmd == "rssi") {
+        // v1.0.36: 新增rssi命令，返回当前BLE连接状态和相关信息
+        int rssi = g_bleConnected ? -1 : 0;
+        char rssiBuf[192];
+        snprintf(rssiBuf, sizeof(rssiBuf),
+            "ok:rssi=%d,ble=%s,dc=%lu,hb=%lu,uptime=%lus,heap=%u,usb=%s,hid=%s",
+            rssi,
+            g_bleConnected ? "connected" : "disconnected",
+            g_disconnectCount,
+            g_heartbeatCount,
+            (unsigned long)(millis() / 1000),
+            ESP.getFreeHeap(),
+            (bool)USB ? "ok" : "no",
+            touchpad.ready() ? "ok" : "no");
+        bleReply(rssiBuf);
 
     } else {
-        btReply("err:unknown_cmd. cmds: tap:x,y,ms | status | log | selftest | ping | diag | version");
+        bleReply("err:unknown_cmd. cmds: tap:x,y,ms | status | log | selftest | ping | diag | rssi");
     }
+}
+
+// --- BLE初始化 ---
+static void initBLE() {
+    qlog("---- BLE Init ----");
+
+    BLEDevice::init(BLE_DEVICE_NAME);
+    BLEDevice::setMTU(128);  // 协商较大MTU
+    BLEDevice::setPower(ESP_PWR_LVL_P9);  // v1.0.39: USB供电，发射功率拉满，加速连接
+
+    BLEServer* pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new MyServerCallbacks());
+
+    // Nordic UART Service
+    BLEService* pService = pServer->createService(NUS_SERVICE_UUID);
+
+    // RX Characteristic（手机写入→ESP32接收）
+    BLECharacteristic* pRxChar = pService->createCharacteristic(
+        RX_CHAR_UUID,
+        BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
+    );
+    pRxChar->setCallbacks(new MyRxCallbacks());
+
+    // TX Characteristic（ESP32通知→手机接收）
+    g_pTxChar = pService->createCharacteristic(
+        TX_CHAR_UUID,
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
+    g_pTxChar->addDescriptor(new BLE2902());
+
+    pService->start();
+    qlog("[BLE] NUS Service started");
+
+    // Advertising
+    BLEAdvertising* pAdv = BLEDevice::getAdvertising();
+    pAdv->addServiceUUID(NUS_SERVICE_UUID);
+    pAdv->setScanResponse(true);
+    pAdv->setMinPreferred(0x06);
+    pAdv->setMaxPreferred(0x12);
+    BLEDevice::startAdvertising();
+
+    qlogf("[BLE] Advertising started as '%s'", BLE_DEVICE_NAME);
+    qlog("[BLE] Waiting for phone to connect via BLE...");
 }
 
 // ============================================================================
@@ -470,12 +667,12 @@ void setup() {
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
     Serial.begin(115200);
-    delay(1000);
+    delay(2000);
 
     qlog("");
     qlog("========================================================");
-    qlog("  QingYun ESP32-S3 SPP+HID Firmware " FW_VERSION);
-    qlog("  经典蓝牙SPP + USB HID Touch (No WiFi, No Camera)");
+    qlog("  QingYun ESP32-S3 BLE+HID Firmware " FW_VERSION);
+    qlog("  BLE (Nordic UART) + USB HID Touch (No WiFi, No Camera)");
     qlog("========================================================");
     qlog("");
 
@@ -491,26 +688,17 @@ void setup() {
     qlogf("  Heap: %.1f KB", ESP.getFreeHeap() / 1024.0f);
     qlog("");
 
-    // ---- 经典蓝牙SPP初始化（先启动，不阻塞） ----
-    qlog("---- 经典蓝牙SPP Init ----");
-    
-    // 初始化SPP，设置为可被发现和连接
-    if (!SerialBT.begin(BT_DEVICE_NAME)) {
-        qlog("[BT] ERROR: BluetoothSerial.begin() failed!");
-    } else {
-        qlogf("[BT] SPP started as '%s'", BT_DEVICE_NAME);
-        qlog("[BT] 配对后系统自动连接，无需App主动发起");
-    }
-
     // ---- USB HID ----
     qlog("---- USB HID Init ----");
 
+    // V1.0.28: 设置USB设备描述符 - VID/PID/Manufacturer/Product/Serial
+    // 用Espressif官方VID(0x303A) + 触摸屏设备PID
     USB.VID(0x303A);
     USB.PID(0x8266);
     USB.manufacturerName("QingYun");
     USB.productName("QingYun Touch Screen");
     USB.serialNumber("QY000001");
-    USB.firmwareVersion(0x0100);
+    USB.firmwareVersion(0x0100);  // v1.0
 
     qlogf("[USB] USB vendorID=0x%04X productID=0x%04X (Touch Screen)", USB.VID(), USB.PID());
 
@@ -521,29 +709,57 @@ void setup() {
     qlog("[USB] Calling USB.begin()...");
     bool usbResult = USB.begin();
     qlogf("[USB] USB.begin() returned: %s", usbResult ? "true" : "false");
+    qlogf("[USB] (bool)USB=%s | HID.ready=%s",
+          ((bool)USB) ? "true" : "false",
+          touchpad.ready() ? "true" : "false");
 
     disableCore0WDT();
     disableCore1WDT();
     qlog("[TWDT] Dual-core Task WDT disabled");
 
-    // USB非阻塞检查（不等待，直接继续）
-    bool usbMounted = (bool)USB && touchpad.ready();
-    if (usbMounted) {
-        qlog("[USB] *** USB Touch Screen already mounted! ***");
-    } else {
-        qlog("[USB] USB not yet mounted, will work after OTG plug-in");
+    // V1.0.28: USB mount wait - (bool)USB = _started && tinyusb_device_mounted（真正被主机枚举）
+    qlog("[USB] Waiting for USB mount (30s max)...");
+    int waitCount = 0;
+    bool wasMounted = false;
+    while (waitCount < 300) {
+        delay(100);
+        waitCount++;
+        bool nowMounted = (bool)USB && touchpad.ready();
+        if (nowMounted && !wasMounted) {
+            qlogf("[USB] *** MOUNTED at %d.%ds! HID ready=YES ***",
+                  waitCount / 10, waitCount % 10);
+        }
+        wasMounted = nowMounted;
+
+        if (waitCount % 50 == 0) {
+            qlogf("[USB] t=%d.%ds | mounted=%s | HID.ready=%s | Heap=%u",
+                  waitCount / 10, waitCount % 10,
+                  ((bool)USB) ? "YES" : "no",
+                  touchpad.ready() ? "READY" : "not-ready",
+                  ESP.getFreeHeap());
+        }
     }
 
-    qlogf("[Status] Heap after init: %u (%.1f KB)",
+    if ((bool)USB && touchpad.ready()) {
+        qlog("[USB] *** SUCCESS: USB Touch Screen MOUNTED! ***");
+    } else {
+        qlog("[USB] *** WARNING: Host not detected after 30s ***");
+        qlog("[USB] If USB not connected yet, plug OTG after boot");
+    }
+
+    qlogf("[Status] Heap after USB init: %u (%.1f KB)",
           ESP.getFreeHeap(), ESP.getFreeHeap() / 1024.0f);
+
+    // ---- BLE Init ----
+    initBLE();
 
     qlog("");
     qlog("==========================================");
     qlog("  Setup COMPLETE. Entering loop...");
-    qlogf("  BT: '%s' (SPP) - 配对后自动连接", BT_DEVICE_NAME);
-    qlog("  >>> Commands: tap:x,y,ms | status | log | ping | diag | version <<<");
-    qlogf("  USB: %s | HID: %s | BT: waiting...",
-          usbMounted ? "MOUNTED" : "NOT MOUNTED",
+    qlogf("  BLE: '%s' | NUS Service active", BLE_DEVICE_NAME);
+    qlog("  >>> Commands: tap:x,y,ms | status | log | ping | diag | rssi <<<");
+    qlogf("  USB: %s | HID: %s",
+          ((bool)USB) ? "MOUNTED" : "NOT MOUNTED",
           touchpad.ready() ? "READY" : "NOT READY");
     qlog("==========================================");
 }
@@ -552,42 +768,25 @@ void setup() {
 // loop()
 // ============================================================================
 void loop() {
-    // ---- 处理蓝牙收到的命令 ----
-    if (SerialBT.hasClient()) {
-        // 连接状态变化追踪
-        if (!g_btConnected) {
-            g_btConnected = true;
-            g_lastConnectTime = millis();
-            qlog("[BT] === Client CONNECTED ===");
-        }
-
-        // 读取命令
-        if (SerialBT.available()) {
-            String cmd = SerialBT.readStringUntil('\n');
-            cmd.trim();
-            if (cmd.length() > 0) {
-                qlogf("[BT] CMD received: len=%d raw='%s'", cmd.length(), cmd.c_str());
-                processCommand(cmd);
-            }
-        }
-    } else {
-        // 断连检测
-        if (g_btConnected) {
-            g_btConnected = false;
-            g_disconnectCount++;
-            g_lastDisconnect = millis();
-            qlogf("[BT] === Client DISCONNECTED (dc=%lu) ===", g_disconnectCount);
-            qlogf("[BT] Heap=%u uptime=%lus", ESP.getFreeHeap(), (unsigned long)(millis() / 1000));
-        }
+    // 处理BLE收到的命令
+    if (g_hasNewCmd) {
+        g_hasNewCmd = false;
+        String cmd = g_pendingCmd;
+        g_pendingCmd = "";
+        processCommand(cmd);
     }
 
-    // ---- USB状态变化监控 ----
+    // USB状态变化监控
+    static int hbCounter = 0;
+    hbCounter++;
+
     static bool lastUsbState = false;
     bool curUsbState = (bool)USB;
     if (curUsbState != lastUsbState) {
-        qlogf("[USB] State change: %s -> %s",
+        qlogf("[USB] State change: %s -> %s (HB #%d)",
               lastUsbState ? "MOUNTED" : "not-mounted",
-              curUsbState ? "MOUNTED" : "not-mounted");
+              curUsbState ? "MOUNTED" : "not-mounted",
+              hbCounter);
         lastUsbState = curUsbState;
 
         // USB刚挂载时自动触发HID自检
@@ -596,19 +795,40 @@ void loop() {
         }
     }
 
-    // ---- 定期状态日志（每5秒） ----
-    static unsigned long lastStatusLog = 0;
-    if (millis() - lastStatusLog >= 5000) {
-        lastStatusLog = millis();
-        qlogf("[%s] Heap:%u USB:%s HID:%s BT:%s DC:%lu Uptime:%lus",
-              FW_VERSION,
+    // 心跳日志（每1秒一次，100ms × 10 = 1s）
+    if (hbCounter % 10 == 0) {
+        qlogf("[%s] HB #%d | Heap: %u | USB: %s | HID: %s | BLE: %s",
+              FW_VERSION, hbCounter,
               ESP.getFreeHeap(),
               curUsbState ? "OK" : "NO",
               touchpad.ready() ? "OK" : "NO",
-              g_btConnected ? "CONN" : "DISC",
-              g_disconnectCount,
-              (unsigned long)(millis() / 1000));
+              g_bleConnected ? "CONN" : "DISC");
     }
 
-    delay(50);  // SPP读取间隔
+    // v1.0.35: BLE主动心跳 - 每5秒推送通知到手机
+    // v1.0.36: 心跳追加rssi字段和dc（断连计数）字段
+    if (g_bleConnected && (millis() - g_lastHeartbeat >= HEARTBEAT_INTERVAL)) {
+        g_lastHeartbeat = millis();
+        g_heartbeatCount++;
+        int rssi = g_bleConnected ? -1 : 0;
+        char hb[192];
+        snprintf(hb, sizeof(hb), "hb:%lu,heap=%u,hid=%s,usb=%s,rssi=%d,dc=%lu",
+                 g_heartbeatCount,
+                 ESP.getFreeHeap(),
+                 touchpad.ready() ? "ok" : "no",
+                 (bool)USB ? "ok" : "no",
+                 rssi,
+                 g_disconnectCount);
+        // v1.0.36: 心跳推送时记录当前heap和连接状态
+        qlogf("[HEARTBEAT] #%lu | heap=%u | hid=%s | usb=%s | ble=CONN | rssi=%d | dc=%lu",
+              g_heartbeatCount,
+              ESP.getFreeHeap(),
+              touchpad.ready() ? "ok" : "no",
+              (bool)USB ? "ok" : "no",
+              rssi,
+              g_disconnectCount);
+        bleReply(hb);
+    }
+
+    delay(100);  // v1.0.35: 从3000ms降到100ms，心跳通过时间判断精确控制间隔
 }
