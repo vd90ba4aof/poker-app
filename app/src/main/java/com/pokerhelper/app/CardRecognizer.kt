@@ -326,7 +326,20 @@ class CardRecognizer(private val context: Context) {
             if (hasCardAt(screenshot, x1, y1, x2, y2)) {
                 val card = recognizeRank(screenshot, x1, y1, x2, y2, isHand = false)
                 if (card != null) {
-                    communityCards.add(card.copy(position = index))
+                    // V2.9.508修复：去重检查，避免同一张牌被多个slot识别
+                    val cardKey = "${card.rank}${card.suit}"
+                    val existingIdx = communityCards.indexOfFirst { "${it.rank}${it.suit}" == cardKey }
+                    if (existingIdx >= 0) {
+                        // 已有相同牌，只保留置信度更高的
+                        if (card.confidence > communityCards[existingIdx].confidence) {
+                            Log.d(TAG, "公共牌去重: slot$index 的 $cardKey(${String.format("%.2f", card.confidence)}) 替换 slot${communityCards[existingIdx].position}(${String.format("%.2f", communityCards[existingIdx].confidence)})")
+                            communityCards[existingIdx] = card.copy(position = index)
+                        } else {
+                            Log.d(TAG, "公共牌去重: slot$index 的 $cardKey(${String.format("%.2f", card.confidence)}) 被丢弃")
+                        }
+                    } else {
+                        communityCards.add(card.copy(position = index))
+                    }
                     allConfidences.add(card.confidence)
                 }
             }
@@ -451,17 +464,9 @@ class CardRecognizer(private val context: Context) {
         val (suit, suitSym) = detectSuit(pixels, w, h, isHand)
 
         if (bestScore < RANK_MATCH_THRESHOLD) {
-            Log.w(TAG, "Rank匹配分数过低: ${String.format("%.3f", bestScore)} ($bestRank) suit=$suit")
-            // 仍然返回结果，但置信度低 → 混合方案会用API兜底
-            return IdentifiedCard(
-                rank = if (bestRank == "10") "T" else if (bestRank.isNotEmpty()) bestRank else "?",
-                suit = suit,
-                suitSymbol = suitSym,
-                fullKey = if (suit != "?" && (bestRank == "10" || bestRank.isNotEmpty()))
-                    (if (bestRank == "10") "T" else bestRank) + suit else "",
-                confidence = confidence,
-                position = -1
-            )
+            Log.w(TAG, "Rank匹配分数过低: ${String.format("%.3f", bestScore)} ($bestRank) suit=$suit → 返回null")
+            // V2.9.508修复：低置信度匹配返回null，避免错误识别
+            return null
         }
 
         val rankDisplay = if (bestRank == "10") "T" else bestRank

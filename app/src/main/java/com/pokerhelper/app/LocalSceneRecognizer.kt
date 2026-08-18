@@ -898,20 +898,41 @@ class LocalSceneRecognizer(
         // 置信度检查：rank置信度
         val ranksValid = result.holeCards.all { it.rank.isNotEmpty() && it.rank != "?" }
 
-        val valid = handValid && hasPot && hasButtons && ranksValid
+        // V2.9.508修复：检查communityCards是否有重复牌
+        val communityCardsUnique = checkCommunityCardsUnique(result.communityCards)
+
+        val valid = handValid && hasPot && hasButtons && ranksValid && communityCardsUnique
         Log.d(TAG, "有效性检查: handValid=$handValid hasPot=$hasPot " +
-                "hasButtons=$hasButtons ranksValid=$ranksValid → valid=$valid")
+                "hasButtons=$hasButtons ranksValid=$ranksValid communityUnique=$communityCardsUnique → valid=$valid")
         // V2.9.503: 详细诊断 - 失败时记录具体原因
         if (!valid) {
             Log.w(TAG, "★ LocalCV失败详情: handCards=${result.holeCards.map{"${it.rank}${it.suit}"}} " +
+                    "communityCards=${result.communityCards.map{"${it.rank}${it.suit}"}} " +
                     "pot=${result.potSize} buttons=${result.buttons} " +
                     "street=${result.street} isPokerTable=${result.isPokerTable}")
             if (!handValid) Log.w(TAG, "  ❌ 手牌无效: 识别到${result.holeCards.size}张(需要2张)")
             if (!hasPot) Log.w(TAG, "  ❌ 底池无效: pot=${result.potSize}")
             if (!hasButtons) Log.w(TAG, "  ❌ 未检测到按钮")
             if (!ranksValid) Log.w(TAG, "  ❌ 手牌rank无效: ${result.holeCards.map{"${it.rank}${it.suit}"}}")
+            if (!communityCardsUnique) Log.w(TAG, "  ❌ 公共牌有重复: ${result.communityCards.map{"${it.rank}${it.suit}"}}")
         }
         return valid
+    }
+
+    /**
+     * V2.9.508修复：检查communityCards是否有重复牌
+     * 德州扑克中5张公共牌必须全部不同
+     */
+    private fun checkCommunityCardsUnique(communityCards: List<VisionApiClient.CardInfo>): Boolean {
+        if (communityCards.isEmpty()) return true
+        val cardKeys = communityCards.map { "${it.rank}${it.suit}" }
+        val uniqueKeys = cardKeys.toSet()
+        val hasDuplicate = cardKeys.size != uniqueKeys.size
+        if (hasDuplicate) {
+            val duplicates = cardKeys.groupBy { it }.filter { it.value.size > 1 }.keys
+            Log.w(TAG, "公共牌重复检测: $cardKeys, 重复: $duplicates")
+        }
+        return !hasDuplicate
     }
 
     fun release() {
