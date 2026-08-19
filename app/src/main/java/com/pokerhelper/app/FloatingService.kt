@@ -158,7 +158,7 @@ class FloatingService : Service() {
     // V2.9.155: 崩溃状态——JS ReferenceError/未捕获异常时悬浮球显示「崩」+红+快闪
     private var _isCrashed = false
     private var _lastCrashReason = ""
-    private val pendingJsCalls = mutableListOf<String>()
+    private val pendingJsCalls = java.util.Collections.synchronizedList(mutableListOf<String>())  // P2-fix: WebView线程与主线程并发安全
     // V2.9.167: 诊断日志变量——记录每次识别的完整信息
     private var _diagStartTime = 0L
     private var _diagLocalCVTimeMs = 0L
@@ -328,10 +328,10 @@ class FloatingService : Service() {
 
         // V2.9.165: 初始化本地CV牌面识别器
         try {
-            cardRecognizer = CardRecognizer(this)
+            cardRecognizer = CardRecognizer(applicationContext)  // P3-fix: 用applicationContext防Service Context泄漏
             cardRecognizer?.init()
             CardRecognizer.updateScreenSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)  // V2.9.184
-            sceneRecognizer = LocalSceneRecognizer(this, cardRecognizer!!)
+            sceneRecognizer = LocalSceneRecognizer(applicationContext, cardRecognizer!!)  // P3-fix: 同上
             sceneRecognizer!!.init(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
             Log.i(TAG, "本地CV识别器初始化完成")
         } catch (e: Exception) {
@@ -514,11 +514,11 @@ class FloatingService : Service() {
         
         // 重新初始化本地CV
         try {
-            cardRecognizer = CardRecognizer(this)
+            cardRecognizer = CardRecognizer(applicationContext)  // P3-fix: 用applicationContext防Service Context泄漏
             cardRecognizer?.init()
             CardRecognizer.updateScreenSize(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)  // V2.9.184
             localCVEnabled = true
-            sceneRecognizer = LocalSceneRecognizer(this, cardRecognizer!!)
+            sceneRecognizer = LocalSceneRecognizer(applicationContext, cardRecognizer!!)  // P3-fix: 同上
             sceneRecognizer!!.init(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
             Log.i(TAG, "reinit: CardRecognizer OK")
         } catch (e: Exception) {
@@ -901,26 +901,30 @@ class FloatingService : Service() {
                     val betBtnAction = GameModeConfig.getBetButtonAction(sizing, pot)
                     Log.d(TAG, "★ GG bet sizing: action=$action sizing=$sizing pot=$pot → $betBtnAction")
                     // V3.14: 优先尝试精确金额输入（配置了键盘坐标时）
-                    var exactDone = false
-                    try {
-                        exactDone = executeExactBet(sizing)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "精确输入异常，fallback预设按钮", e)
-                    }
-                    if (!exactDone) {
-                        // 先点击下注预设按钮
-                        executeAutoTapFallback(betBtnAction)
-                    }
-                    // 延迟200ms后点击加注按钮确认
-                    handler.postDelayed({
+                    // P1-fix: 精确输入含Thread.sleep(~1秒)，移后台线程防ANR
+                    Thread({
+                        var exactDone = false
                         try {
-                            executeAutoTapFallback("raise")
-                            handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
-                            Log.d(TAG, "★ GG bet confirm: raise button tapped")
+                            exactDone = executeExactBet(sizing)
                         } catch (e: Exception) {
-                            Log.e(TAG, "GG bet confirm error", e)
+                            Log.w(TAG, "精确输入异常，fallback预设按钮", e)
                         }
-                    }, 200)
+                        if (!exactDone) {
+                            // 先点击下注预设按钮
+                            executeAutoTapFallback(betBtnAction)
+                        }
+                        // 延迟200ms后点击加注按钮确认
+                        try { Thread.sleep(200) } catch (_: InterruptedException) {}
+                        handler.post {
+                            try {
+                                executeAutoTapFallback("raise")
+                                handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                                Log.d(TAG, "★ GG bet confirm: raise button tapped")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "GG bet confirm error", e)
+                            }
+                        }
+                    }, "ExactBetThread").start()
                     return
                 }
             }

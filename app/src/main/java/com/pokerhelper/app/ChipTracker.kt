@@ -265,17 +265,21 @@ object ChipTracker {
         val image = InputImage.fromBitmap(cropBitmap, 0)
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         
-        recognizer.process(image)
-            .addOnSuccessListener { visionText ->
-                resultText = visionText.text
-                latch.countDown()
-            }
-            .addOnFailureListener { e ->
-                Log.w(TAG, "区域OCR失败: ${e.message}")
-                latch.countDown()
-            }
-        
-        latch.await(2, TimeUnit.SECONDS)
+        try {
+            recognizer.process(image)
+                .addOnSuccessListener { visionText ->
+                    resultText = visionText.text
+                    latch.countDown()
+                }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "区域OCR失败: ${e.message}")
+                    latch.countDown()
+                }
+            
+            latch.await(2, TimeUnit.SECONDS)
+        } finally {
+            recognizer.close()  // P2-fix: 释放ML Kit资源防止内存泄漏
+        }
         return parseChipText(resultText)
     }
     
@@ -287,17 +291,21 @@ object ChipTracker {
         val image = InputImage.fromBitmap(cropBitmap, 0)
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         
-        recognizer.process(image)
-            .addOnSuccessListener { visionText ->
-                resultText = visionText.text.trim()
-                latch.countDown()
-            }
-            .addOnFailureListener { e ->
-                Log.w(TAG, "区域文本OCR失败: ${e.message}")
-                latch.countDown()
-            }
-        
-        latch.await(2, TimeUnit.SECONDS)
+        try {
+            recognizer.process(image)
+                .addOnSuccessListener { visionText ->
+                    resultText = visionText.text.trim()
+                    latch.countDown()
+                }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "区域文本OCR失败: ${e.message}")
+                    latch.countDown()
+                }
+            
+            latch.await(2, TimeUnit.SECONDS)
+        } finally {
+            recognizer.close()  // P2-fix: 释放ML Kit资源防止内存泄漏
+        }
         return resultText
     }
     
@@ -313,17 +321,21 @@ object ChipTracker {
             val image = InputImage.fromBitmap(bitmap, 0)
             val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
             
-            recognizer.process(image)
-                .addOnSuccessListener { visionText ->
-                    result = extractChipsFromText(visionText.textBlocks)
-                    latch.countDown()
-                }
-                .addOnFailureListener { e ->
-                    Log.e(TAG, "ML Kit OCR失败: ${e.message}")
-                    latch.countDown()
-                }
-            
-            latch.await(3, TimeUnit.SECONDS)
+            try {
+                recognizer.process(image)
+                    .addOnSuccessListener { visionText ->
+                        result = extractChipsFromText(visionText.textBlocks)
+                        latch.countDown()
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e(TAG, "ML Kit OCR失败: ${e.message}")
+                        latch.countDown()
+                    }
+                
+                latch.await(3, TimeUnit.SECONDS)
+            } finally {
+                recognizer.close()  // P2-fix: 释放ML Kit资源防止内存泄漏
+            }
             val chips = result ?: return null
             
             val clusteredChips = clusterChips(chips)

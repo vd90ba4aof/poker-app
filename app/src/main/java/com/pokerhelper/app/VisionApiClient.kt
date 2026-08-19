@@ -1060,12 +1060,10 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             }
         }
         return try {
-            coroutineScope {
-                screenshotPaths.mapIndexed { index, path ->
-                    async(Dispatchers.IO) {
-                        analyzeSingleScreenshotSafe(index, path)
-                    }
-                }.awaitAll()
+            // P1-fix: 多桌分析改串行——analyzeScreenshot修改单例共享状态(holeCardsLocked/lastResult等)
+            // 并行执行会导致多表识别结果交叉污染
+            screenshotPaths.mapIndexed { index, path ->
+                analyzeSingleScreenshotSafe(index, path)
             }
         } catch (e: Exception) {
             Log.e(TAG, "analyzeMultipleScreenshots 整体异常: ${e.message}", e)

@@ -63,6 +63,7 @@ class ScreenOptService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        onScreenshotReady = null  // P2-fix: 清除回调防止泄漏和悬空引用
         instance = null
         isRunning = false
     }

@@ -536,19 +536,24 @@ object DiagnosticLogger {
         }
     }
     
-    private var lastChips = 0
-    private var lastPot = 0
+    @Volatile private var lastChips = 0
+    @Volatile private var lastPot = 0
+    private val chipTrackLock = Any()  // P2-fix: 读-改-写复合操作加锁防数据竞争
     
     private fun calcChipDelta(currentChips: Int): Long {
-        val delta = if (lastChips > 0) (currentChips - lastChips).toLong() else null
-        lastChips = currentChips
-        return delta ?: 0L
+        synchronized(chipTrackLock) {
+            val delta = if (lastChips > 0) (currentChips - lastChips).toLong() else null
+            lastChips = currentChips
+            return delta ?: 0L
+        }
     }
     
     private fun calcPotDelta(currentPot: Int): Int {
-        val delta = if (lastPot > 0) currentPot - lastPot else 0
-        lastPot = currentPot
-        return delta
+        synchronized(chipTrackLock) {
+            val delta = if (lastPot > 0) currentPot - lastPot else 0
+            lastPot = currentPot
+            return delta
+        }
     }
     
     private fun determineChipStatus(delta: Long?): String {

@@ -284,7 +284,13 @@ class HttpServerService : Service() {
                         // V2.1: 按需截屏+API识别（仅无障碍截图，绝不走MediaProjection）
                         session.uri == "/api/capture" -> {
                             try {
-                                if (ScreenOptService.isServiceRunning()) {
+                                // P3-fix: 检查是否有正在进行的截屏流程，防止回调覆写
+                                if (ScreenOptService.onScreenshotReady != null) {
+                                    val json = JSONObject().apply { put("ok", false); put("error", "capture_in_progress") }.toString()
+                                    newFixedLengthResponse(Response.Status.CONFLICT, "application/json", json).apply {
+                                        addHeader("Access-Control-Allow-Origin", "*")
+                                    }
+                                } else if (ScreenOptService.isServiceRunning()) {
                                     val latch = java.util.concurrent.CountDownLatch(1)
                                     var captureSuccess = false
                                     ScreenOptService.onScreenshotReady = { success ->
