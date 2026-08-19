@@ -566,6 +566,12 @@ class Esp32BleManager(private val context: Context) {
                 return
             }
             reconnectAttempts++
+            // P2-fix: 使用MAX_RECONNECT_ATTEMPTS防止无限重连
+            if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+                Log.w(TAG, "★ BLE重连次数超限(${MAX_RECONNECT_ATTEMPTS})，停止自动重连")
+                notifyStatus(false, "BLE连接失败，请手动重连")
+                return
+            }
             // 递增延迟，上限30秒：2,4,6,...,30,30,30...
             val delay = minOf(RECONNECT_DELAY_BASE * reconnectAttempts, 30000L)
             Log.i(TAG, "BLE自动重连: 第${reconnectAttempts}次, ${delay}ms后, device=${device.address}")

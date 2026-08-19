@@ -174,7 +174,8 @@ class FloatingService : Service() {
     // V2.9.114: WebViewAssetLoader——Google官方推荐的本地HTML加载方案
     private lateinit var assetLoader: WebViewAssetLoader
     // V2.9.70: 错误日志——API/截屏失败时记录，豪哥可导出反馈
-    private val errorLogs = mutableListOf<String>()
+    // P2-fix: 线程安全的errorLogs，防止并发写入导致ConcurrentModificationException
+    private val errorLogs = java.util.Collections.synchronizedList(mutableListOf<String>())
     private val ERROR_LOG_FILE = "error_logs.txt"
     private val MAX_ERROR_LOGS = 50
     private var isBlinkingError = false
@@ -734,7 +735,11 @@ class FloatingService : Service() {
     // V2.9.4: 统一JS调用入口 — WebView未就绪时自动排队
     private fun executeJs(js: String) {
         if (webViewReady && webView != null) {
-            webView?.evaluateJavascript(js, null)
+            // P2-fix: WebView可能已destroy但未置null，try-catch防崩溃
+            try { webView?.evaluateJavascript(js, null) } catch (_: Exception) {
+                webViewReady = false
+                Log.w(TAG, "★ executeJs失败,WebView可能已销毁")
+            }
         } else {
             // P0-fix: JS队列上限，防止WebView永久未就绪时内存无限堆积
             if (pendingJsCalls.size < _PENDING_JS_MAX) {
@@ -1139,6 +1144,11 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
      * V2.9.38: 触发截屏（通知栏按钮调用）
      */
     private fun triggerCapture() {
+        // P2-fix: 防止手动截屏与自动截屏/多帧截屏同时触发导致回调被覆盖
+        if (isVisionInProgress) {
+            Log.w(TAG, "★ triggerCapture被忽略: 上一次识别尚未完成")
+            return
+        }
         Log.d(TAG, "★ triggerCapture开始: webViewReady=$webViewReady, stealth=$isStealthMode, screenOpt=${ScreenOptService.isServiceRunning()}, apiKey=${VisionApiClient.apiKey.takeLast(4)}")
         executeJs("if(typeof clr==='function'){clr()}")
         tvRecResult?.text = ""

@@ -324,7 +324,8 @@ object VisionApiClient {
                     } ?: emptyList()
                     val fallbackStreet = streetLocked ?: "preflop"
                     // 使用上一次成功结果中的部分信息（如果有）
-                    val last = lastResult
+                    // P2-fix: 超过60秒的lastResult视为过期，不使用其数据防止误导
+                    val last = if (System.currentTimeMillis() - lastResultTime < 60_000) lastResult else null
                     VisionResult(
                         isPokerTable = false,  // 标记为非牌桌，表示这是兜底结果
                         holeCards = fallbackHoleCards,
@@ -407,32 +408,41 @@ object VisionApiClient {
     // V2.9.156: 1080px/Q80 + 底部裁切 + 对比度增强
     private fun compressImage(jpegData: ByteArray, maxWidth: Int): ByteArray {
         val bitmap = android.graphics.BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size) ?: return jpegData
-        // 裁切顶部2%（标题栏）和底部8%（系统栏）
-        val cropTop = (bitmap.height * 0.02).toInt()
-        val cropBottom = (bitmap.height * 0.92).toInt()
-        val cropLeft = (bitmap.width * 0.02).toInt()
-        val cropRight = (bitmap.width * 0.98).toInt()
-        val cropped = try {
-            android.graphics.Bitmap.createBitmap(bitmap, cropLeft, cropTop,
-                cropRight - cropLeft, cropBottom - cropTop)
-        } catch (_: Exception) {
-            // fallback: 只裁顶部
-            try { android.graphics.Bitmap.createBitmap(bitmap, 0, cropTop, bitmap.width, bitmap.height - cropTop) } catch (_: Exception) { bitmap }
+        // P2-fix: try-finally保证异常路径也能recycle，防止Bitmap泄漏
+        var current: android.graphics.Bitmap = bitmap
+        try {
+            // 裁切顶部2%（标题栏）和底部8%（系统栏）
+            val cropTop = (bitmap.height * 0.02).toInt()
+            val cropBottom = (bitmap.height * 0.92).toInt()
+            val cropLeft = (bitmap.width * 0.02).toInt()
+            val cropRight = (bitmap.width * 0.98).toInt()
+            val cropped = try {
+                android.graphics.Bitmap.createBitmap(bitmap, cropLeft, cropTop,
+                    cropRight - cropLeft, cropBottom - cropTop)
+            } catch (_: Exception) {
+                // fallback: 只裁顶部
+                try { android.graphics.Bitmap.createBitmap(bitmap, 0, cropTop, bitmap.width, bitmap.height - cropTop) } catch (_: Exception) { bitmap }
+            }
+            if (cropped !== bitmap) bitmap.recycle()
+            current = cropped
+            // 分辨率提升: 960→1080
+            val targetWidth = 1080
+            val scale = if (cropped.width > targetWidth) targetWidth.toFloat() / cropped.width else 1f
+            val scaled = if (scale < 1f) {
+                val s = android.graphics.Bitmap.createScaledBitmap(cropped, (cropped.width * scale).toInt(), (cropped.height * scale).toInt(), true)
+                cropped.recycle(); s
+            } else cropped
+            current = scaled
+            // V2.9.156: 对比度增强(1.2x)帮助花色识别
+            val enhanced = enhanceContrast(scaled, 1.2f)
+            if (enhanced !== scaled) scaled.recycle()
+            current = enhanced
+            val stream = ByteArrayOutputStream()
+            enhanced.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, stream)
+            return stream.toByteArray()
+        } finally {
+            try { current.recycle() } catch (_: Exception) {}
         }
-        if (cropped !== bitmap) bitmap.recycle()
-        // 分辨率提升: 960→1080
-        val targetWidth = 1080
-        val scale = if (cropped.width > targetWidth) targetWidth.toFloat() / cropped.width else 1f
-        val scaled = if (scale < 1f) {
-            val s = android.graphics.Bitmap.createScaledBitmap(cropped, (cropped.width * scale).toInt(), (cropped.height * scale).toInt(), true)
-            cropped.recycle(); s
-        } else cropped
-        // V2.9.156: 对比度增强(1.2x)帮助花色识别
-        val enhanced = enhanceContrast(scaled, 1.2f)
-        if (enhanced !== scaled) scaled.recycle()
-        val stream = ByteArrayOutputStream()
-        enhanced.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, stream); enhanced.recycle()
-        return stream.toByteArray()
     }
 
     // V2.9.156: 对比度增强——帮助VLM区分♠♣和♥♦
