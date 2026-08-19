@@ -1302,7 +1302,6 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                 // V2.9.508: 仅支持GGPOKER，禁用平台切换
                 tvStatus?.text = "仅支持GGPOKER"
                 Log.i(TAG, "平台切换已禁用: 仅支持GGPOKER")
-            }
                 VisionApiClient.streetLocked = null
                 latestButtonPositions = emptyList()
             }

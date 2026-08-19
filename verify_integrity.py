@@ -716,6 +716,12 @@ for root, dirs, files in os.walk(os.path.join(REPO, "app/src/main/java")):
         if f.endswith(".kt"):
             kt_files.append(os.path.join(root, f))
 
+java_files = []
+for root, dirs, files in os.walk(os.path.join(REPO, "app/src/main/java")):
+    for f in files:
+        if f.endswith(".java"):
+            java_files.append(os.path.join(root, f))
+
 lint_errors = []
 lint_warnings = []
 
@@ -885,6 +891,125 @@ else:
     else:
         check("Android基础检查通过（CI将运行完整Lint检查）", True)
         print("    ℹ️  完整 Lint 检查将在 CI 构建时自动运行")
+
+# ============================================================
+print()
+print("=" * 60)
+print("🔍 检查21: Kotlin/Java 花括号平衡检查（防止作用域错位）")
+print("=" * 60)
+
+def check_brace_balance(filepath):
+    """检查文件中花括号是否平衡，返回 (是否平衡, 首个不平衡行号, 详情)"""
+    with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+    
+    depth = 0
+    in_string = False
+    in_line_comment = False
+    in_block_comment = False
+    escape_next = False
+    string_char = None
+    
+    for lineno, line in enumerate(lines, 1):
+        in_line_comment = False
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            
+            # 处理转义字符
+            if escape_next:
+                escape_next = False
+                i += 1
+                continue
+            
+            # 在块注释中，只找 */
+            if in_block_comment:
+                if ch == '*' and i + 1 < len(line) and line[i + 1] == '/':
+                    in_block_comment = False
+                    i += 2
+                    continue
+                i += 1
+                continue
+            
+            # 在行注释中，跳过剩余
+            if in_line_comment:
+                break
+            
+            # 在字符串中
+            if in_string:
+                if ch == '\\':
+                    escape_next = True
+                    i += 1
+                    continue
+                if ch == string_char:
+                    in_string = False
+                i += 1
+                continue
+            
+            # 正常代码
+            if ch == '/' and i + 1 < len(line) and line[i + 1] == '/':
+                in_line_comment = True
+                i += 2
+                continue
+            if ch == '/' and i + 1 < len(line) and line[i + 1] == '*':
+                in_block_comment = True
+                i += 2
+                continue
+            if ch in ('"', "'"):
+                # 检查字符串模板 ${...} 中的花括号不计（简化处理：只计顶层）
+                in_string = True
+                string_char = ch
+                i += 1
+                continue
+            
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth < 0:
+                    return False, lineno, f"行{lineno}处花括号多余（嵌套深度变为-1）"
+            
+            i += 1
+    
+    if depth != 0:
+        # 找到最后一个未匹配的位置
+        return False, len(lines), f"文件末尾花括号不平衡（未闭合数: {depth}）"
+    
+    return True, 0, ""
+
+# 检查所有 Kotlin 和 Java 文件
+brace_failures = []
+for fpath in kt_files + java_files:
+    rel = os.path.relpath(fpath, REPO)
+    balanced, lineno, detail = check_brace_balance(fpath)
+    if not balanced:
+        brace_failures.append((rel, lineno, detail))
+
+if brace_failures:
+    for rel, lineno, detail in brace_failures:
+        check(f"花括号平衡: {rel}", False, f"行{lineno}: {detail}")
+    print(f"    ❗ 共 {len(brace_failures)} 个文件花括号不平衡，此类错误会导致编译失败！")
+else:
+    check(f"花括号平衡: 所有 {len(kt_files) + len(java_files)} 个 Kotlin/Java 文件", True)
+
+# 同时检查圆括号和方括号平衡（简化版，不做位置追踪）
+paren_failures = []
+for fpath in kt_files + java_files:
+    rel = os.path.relpath(fpath, REPO)
+    with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+        content = f.read()
+    # 移除注释和字符串后计数（简化：直接计数，允许小幅偏差因字符串中含括号）
+    opens = content.count('(') - content.count(')')
+    sq_opens = content.count('[') - content.count(']')
+    # 允许字符串导致的±2偏差，只报严重不平衡
+    if abs(opens) > 3 or abs(sq_opens) > 3:
+        paren_failures.append((rel, opens, sq_opens))
+
+if paren_failures:
+    for rel, po, sq in paren_failures:
+        check(f"圆/方括号平衡: {rel}", False, f"圆括号差{po}, 方括号差{sq}")
+else:
+    check(f"圆/方括号平衡: 所有文件", True)
 
 # ============================================================
 print()
