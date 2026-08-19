@@ -147,6 +147,9 @@ class FloatingService : Service() {
 
     // V2.9.4: WebView加载追踪 + JS调用队列
     private var webViewReady = false
+    private var _webViewRetryCount = 0  // P0-fix: WebView加载重试计数
+    private val _WEBVIEW_MAX_RETRY = 3  // P0-fix: 最多重试3次
+    private val _PENDING_JS_MAX = 50    // P0-fix: JS队列上限，防止内存堆积
     @Volatile private var _strategyReceived = false  // V2.9.113: 策略引擎是否已回调
     private var _strategyTimeoutRunnable: Runnable? = null  // V2.9.125: 策略超时定时器引用
     // V2.9.207: Shot Clock硬超时定时器——16秒强制弃牌（比SHOT_CLOCK_TIMEOUT早2秒，留缓冲）
@@ -296,6 +299,10 @@ class FloatingService : Service() {
         isRunning = true
 
         // V2.9.68: WakeLock保活——防止一加/小米等杀后台
+        // P0-fix: 先释放旧WakeLock防止re-create时泄漏（旧引用丢失导致无法release）
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+        } catch (_: Exception) {}
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pokerhelper::FloatingService")
@@ -531,8 +538,10 @@ class FloatingService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        // P0-fix: 清除ScreenOptService回调，防止引用已死FloatingService实例导致NPE/内存泄漏
+        try { ScreenOptService.onScreenshotReady = null } catch (_: Exception) {}
         // V2.9.68: 释放WakeLock
-        try { wakeLock?.release() } catch (_: Exception) {}
+        try { wakeLock?.let { if (it.isHeld) it.release() } } catch (_: Exception) {}
         wakeLock = null
         currentPanelWidth = 0
         currentPanelHeight = 0
@@ -726,7 +735,12 @@ class FloatingService : Service() {
         if (webViewReady && webView != null) {
             webView?.evaluateJavascript(js, null)
         } else {
-            pendingJsCalls.add(js)
+            // P0-fix: JS队列上限，防止WebView永久未就绪时内存无限堆积
+            if (pendingJsCalls.size < _PENDING_JS_MAX) {
+                pendingJsCalls.add(js)
+            } else {
+                Log.w(TAG, "★ pendingJsCalls已满($_PENDING_JS_MAX)，丢弃JS调用")
+            }
         }
     }
 
@@ -1403,12 +1417,26 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
                 Log.e(TAG, "WebView加载失败: code=$errorCode desc=$description url=$failingUrl")
                 addErrorLog("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())} WebView错误: $errorCode $description")
-                // V2.9.114: 用AssetLoader URL重载（不依赖HTTP服务器）
-                wv.postDelayed({ wv.loadUrl("https://appassets.androidplatform.net/assets/poker_helper.html") }, 1000)
+                // P0-fix: 限制重试次数，防止无限重试循环
+                _webViewRetryCount++
+                if (_webViewRetryCount <= _WEBVIEW_MAX_RETRY) {
+                    Log.w(TAG, "★ WebView重试($_webViewRetryCount/$_WEBVIEW_MAX_RETRY)")
+                    wv.postDelayed({ wv.loadUrl("https://appassets.androidplatform.net/assets/poker_helper.html") }, 1000)
+                } else {
+                    Log.e(TAG, "★ WebView重试次数耗尽，标记为不可用")
+                    addErrorLog("WebView加载重试${_WEBVIEW_MAX_RETRY}次仍失败，需手动重启服务")
+                    // 标记崩溃态让用户知道
+                    handler.post {
+                        _isCrashed = true
+                        _lastCrashReason = "WebView加载失败(${_WEBVIEW_MAX_RETRY}次)"
+                        try { renderCrashBall() } catch (_: Exception) {}
+                    }
+                }
             }
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 Log.d(TAG, "★ WebView加载完成: url=$url")
+                _webViewRetryCount = 0  // P0-fix: 成功加载，重置重试计数
                 if (!webViewReady) {
                     webViewReady = true
                     val calls = ArrayList(pendingJsCalls)

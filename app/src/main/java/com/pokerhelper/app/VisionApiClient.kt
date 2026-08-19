@@ -72,40 +72,40 @@ object VisionApiClient {
     var apiKey = ""
     var apiUrl = "https://api.siliconflow.cn/v1/chat/completions"
     var modelName = "Qwen/Qwen3-VL-8B-Instruct"
-    var lastError = ""
+    @Volatile var lastError = ""
     // V2.9.193: 保存API原始响应——用于诊断识别失败根因
-    var lastRawResponse = ""
-    var lastResult: VisionResult? = null
+    @Volatile var lastRawResponse = ""
+    @Volatile var lastResult: VisionResult? = null
         private set
-    var lastResultTime: Long = 0
+    @Volatile var lastResultTime: Long = 0
         private set
 
     // V2.9.230: 断网兜底模式标志位——当API调用失败时是否启用本地识别兜底
-    var isOfflineFallback: Boolean = false
+    @Volatile var isOfflineFallback: Boolean = false
 
     // V2.9.240: 平台自动检测——连续3次一致时自动切换
-    private var _detectedPlatformCount = 0
-    private var _lastDetectedPlatform = ""
+    @Volatile private var _detectedPlatformCount = 0
+    @Volatile private var _lastDetectedPlatform = ""
 
-    var dButtonPosition: String = ""
-    var dButtonLocked: String = ""
+    @Volatile var dButtonPosition: String = ""
+    @Volatile var dButtonLocked: String = ""
         private set
 
-    var holeCardsLocked: List<CardInfo>? = null
-    var streetLocked: String? = null  // V2.9.165: 本地CV根据公共牌数量锁定的street
-    var suitUncertain: Boolean = false
-    var lockReason: String = ""
+    @Volatile var holeCardsLocked: List<CardInfo>? = null
+    @Volatile var streetLocked: String? = null  // V2.9.165: 本地CV根据公共牌数量锁定的street
+    @Volatile var suitUncertain: Boolean = false
+    @Volatile var lockReason: String = ""
     // V2.9.197: 混合方案 — 仅锁定rank（本地CV高置信度），suit仍由API识别
-    var holeCardsRankLocked: List<String>? = null
+    @Volatile var holeCardsRankLocked: List<String>? = null
 
-    // V2.9.108: 统计信息
-    var compactSuccessCount = 0
-        private set
-    var compactFailCount = 0
-        private set
-    var fallbackSuccessCount = 0
-        private set
-    var lastPromptMode = ""
+    // V2.9.108: 统计信息（AtomicInteger防并发丢失）
+    private val _compactSuccessCount = java.util.concurrent.atomic.AtomicInteger(0)
+    var compactSuccessCount: Int get() = _compactSuccessCount.get(); private set(value) { _compactSuccessCount.set(value) }
+    private val _compactFailCount = java.util.concurrent.atomic.AtomicInteger(0)
+    var compactFailCount: Int get() = _compactFailCount.get(); private set(value) { _compactFailCount.set(value) }
+    private val _fallbackSuccessCount = java.util.concurrent.atomic.AtomicInteger(0)
+    var fallbackSuccessCount: Int get() = _fallbackSuccessCount.get(); private set(value) { _fallbackSuccessCount.set(value) }
+    @Volatile var lastPromptMode = ""
         private set
 
     data class VisionResult(
@@ -226,7 +226,7 @@ object VisionApiClient {
                 result = parseResponse(rawResponse)
                 val tApi1 = System.currentTimeMillis()
                 if (result != null) {
-                    compactSuccessCount++; lastPromptMode = "v156_schema"
+                    _compactSuccessCount.incrementAndGet(); lastPromptMode = "v156_schema"
                     Log.d(TAG, "⏱ v156 API: ${tApi1-tApi0}ms 成功(${compactSuccessCount}/${compactFailCount})")
                     // V2.9.230: 应用本地suit识别融合（仅对suit_uncertain=true的牌生效）
                     // 使用原始JPEG解码的bitmap进行本地花色识别
@@ -242,7 +242,7 @@ object VisionApiClient {
             }
             
             if (result == null) {
-                compactFailCount++
+                _compactFailCount.incrementAndGet()
                 Log.e(TAG, "★ API解析失败, 原始响应前300字符: ${rawResponse?.take(300) ?: "null"}")
                 Log.d(TAG, "v156失败(${compactFailCount}次)")
                 lastError = "API错误: 识别失败"; return null
