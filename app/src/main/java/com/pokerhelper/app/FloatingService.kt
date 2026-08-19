@@ -495,7 +495,8 @@ class FloatingService : Service() {
     }
 
     private fun reinitializeComponents() {
-        // 重新注册通知广播接收器
+        // P1-fix: 先反注册再重新注册，防止重复注册导致IllegalArgumentException
+        try { unregisterReceiver(notificationReceiver) } catch (_: Exception) {}
         try {
             val filter = IntentFilter().apply {
                 addAction(ACTION_CAPTURE)

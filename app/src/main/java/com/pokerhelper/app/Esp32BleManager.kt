@@ -332,9 +332,15 @@ class Esp32BleManager(private val context: Context) {
     }
     
     // V2.9.184: 命令队列——避免并发写入导致命令丢失
+    // P1-fix: 队列上限20条，超出丢弃最旧的（过期的tap命令无意义）
+    private val COMMAND_QUEUE_MAX = 20
     private fun sendCommand(cmd: String) {
         Log.d(TAG, "sendCommand: cmd=$cmd, isWriting=$isWriting, queueSize=${commandQueue.size}")
         if (isWriting) {
+            if (commandQueue.size >= COMMAND_QUEUE_MAX) {
+                commandQueue.removeAt(0)  // 丢弃最旧的命令
+                Log.w(TAG, "sendCommand: queue满(${COMMAND_QUEUE_MAX}), 丢弃最旧命令")
+            }
             commandQueue.add(cmd)
             Log.d(TAG, "sendCommand: queued, new queueSize=${commandQueue.size}")
             return
