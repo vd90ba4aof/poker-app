@@ -367,6 +367,25 @@ object VisionApiClient {
     }
 
     /**
+     * P1-R3-2: 只读分析方法，不修改任何共享状态
+     * 专供后台HUD线程使用，避免与主线程识别逻辑产生竞态
+     */
+    fun analyzeScreenshotReadOnly(jpegData: ByteArray): VisionResult? {
+        if (apiKey.isEmpty()) return null
+        return try {
+            val compressedJpeg = compressImage(jpegData, maxWidth = 960)
+            val base64Image = android.util.Base64.encodeToString(compressedJpeg, android.util.Base64.NO_WRAP)
+            val dataUri = "data:image/jpeg;base64,$base64Image"
+            val requestJson = buildRequest(dataUri, compact = true)
+            val rawResponse = sendRequest(requestJson)
+            parseResponse(rawResponse)
+        } catch (e: Exception) {
+            Log.w(TAG, "ReadOnly分析失败: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * V3.0.0: 本地识别结果应用D按钮保险
      * 复用与API路径相同的保险逻辑
      */

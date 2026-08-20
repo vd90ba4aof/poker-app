@@ -43,6 +43,26 @@ class ScreenOptService : AccessibilityService() {
             }
             svc.performCapture()
         }
+        
+        /**
+         * P2-R3-5: 同步截屏方法，不依赖共享回调
+         * 供HttpServerService等外部调用，避免回调覆盖
+         */
+        fun captureScreenSync(timeoutMs: Long = 3000): Boolean {
+            val svc = instance ?: return false
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var result = false
+            val originalCallback = onScreenshotReady
+            onScreenshotReady = { success ->
+                result = success
+                latch.countDown()
+            }
+            svc.performCapture()
+            latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            // 恢复原始回调
+            onScreenshotReady = originalCallback
+            return result
+        }
     }
 
     private val handler = Handler(Looper.getMainLooper())

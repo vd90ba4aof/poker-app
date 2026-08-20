@@ -212,60 +212,43 @@ class HttpServerService : Service() {
                         // v2.9.35: 热更新——从GitHub下载最新poker_helper.html
                         // V2.9.164: 双URL保险——ghfast代理失败时直连GitHub
                         session.uri == "/api/hotload" -> {
-                            try {
-                                var html: String? = null
-                                var lastError: String? = null
-                                // 先试ghfast代理（国内快）
+                            // P2-R3-7: 异步热更新，避免阻塞NanoHTTPD工作线程
+                            Thread({
                                 try {
-                                    val conn = URL(HOTLOAD_URL).openConnection()
-                                    conn.connectTimeout = HOTLOAD_TIMEOUT / 2
-                                    conn.readTimeout = HOTLOAD_TIMEOUT / 2
-                                    html = conn.getInputStream().bufferedReader(Charsets.UTF_8).readText()
-                                } catch (e1: Exception) { lastError = e1.message }
-                                // ghfast失败→直连GitHub
-                                if (html == null || html.isEmpty() || !html.contains("poker")) {
+                                    var html: String? = null
+                                    // 先试ghfast代理（国内快）
                                     try {
-                                        val conn2 = URL(HOTLOAD_URL_FALLBACK).openConnection()
-                                        conn2.connectTimeout = HOTLOAD_TIMEOUT
-                                        conn2.readTimeout = HOTLOAD_TIMEOUT
-                                        html = conn2.getInputStream().bufferedReader(Charsets.UTF_8).readText()
-                                    } catch (e2: Exception) { lastError = (lastError ?: "") + " | fallback: " + e2.message }
-                                }
-                                if (html != null && html.isNotEmpty() && html.contains("poker") && html.length > 1000) {
-                                    // 验证下载内容有效（包含poker关键词且大于1KB）
-                                    pokerHelperHtml = html
-                                    hotloadSource = "remote"
-                                    // 持久化到文件，重启App也能用
-                                    try {
-                                        File(filesDir, HOTLOAD_FILE).writeText(html, Charsets.UTF_8)
+                                        val conn = URL(HOTLOAD_URL).openConnection()
+                                        conn.connectTimeout = HOTLOAD_TIMEOUT / 2
+                                        conn.readTimeout = HOTLOAD_TIMEOUT / 2
+                                        html = conn.getInputStream().bufferedReader(Charsets.UTF_8).readText()
                                     } catch (_: Exception) {}
-                                    // V2.9.164: 标记热更新完成，通知WebView重载
-                                    try {
-                                        getSharedPreferences("poker_prefs", MODE_PRIVATE).edit().putBoolean("hotload_updated", true).apply()
-                                    } catch (_: Exception) {}
-                                    // 提取版本号
-                                    val verMatch = Regex("""V(\d+\.\d+\.\d+)""").find(html)
-                                    val remoteVer = verMatch?.groupValues?.get(1) ?: "unknown"
-                                    val json = JSONObject().apply {
-                                        put("ok", true)
-                                        put("size", html.length)
-                                        put("version", remoteVer)
-                                        put("source", "remote")
-                                    }.toString()
-                                    newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                        addHeader("Access-Control-Allow-Origin", "*")
+                                    // ghfast失败→直连GitHub
+                                    if (html == null || html.isEmpty() || !html.contains("poker")) {
+                                        try {
+                                            val conn2 = URL(HOTLOAD_URL_FALLBACK).openConnection()
+                                            conn2.connectTimeout = HOTLOAD_TIMEOUT
+                                            conn2.readTimeout = HOTLOAD_TIMEOUT
+                                            html = conn2.getInputStream().bufferedReader(Charsets.UTF_8).readText()
+                                        } catch (_: Exception) {}
                                     }
-                                } else {
-                                    newFixedLengthResponse(Response.Status.OK, "application/json",
-                                        """{"ok":false,"error":"invalid_content","msg":"下载内容无效"}""").apply {
-                                        addHeader("Access-Control-Allow-Origin", "*")
+                                    if (html != null && html.isNotEmpty() && html.contains("poker") && html.length > 1000) {
+                                        pokerHelperHtml = html
+                                        hotloadSource = "remote"
+                                        try { File(filesDir, HOTLOAD_FILE).writeText(html, Charsets.UTF_8) } catch (_: Exception) {}
+                                        try {
+                                            getSharedPreferences("poker_prefs", MODE_PRIVATE).edit().putBoolean("hotload_updated", true).apply()
+                                        } catch (_: Exception) {}
                                     }
-                                }
-                            } catch (e: Exception) {
-                                newFixedLengthResponse(Response.Status.OK, "application/json",
-                                    """{"ok":false,"error":"download_failed","msg":"${e.message}"}""").apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                }
+                                } catch (_: Exception) {}
+                            }, "HotloadThread").start()
+                            // 立即返回"已触发"响应
+                            val json = JSONObject().apply {
+                                put("ok", true)
+                                put("status", "downloading")
+                            }.toString()
+                            newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
+                                addHeader("Access-Control-Allow-Origin", "*")
                             }
                         }
                         // v2.9.35: 恢复本地版本
@@ -284,21 +267,9 @@ class HttpServerService : Service() {
                         // V2.1: 按需截屏+API识别（仅无障碍截图，绝不走MediaProjection）
                         session.uri == "/api/capture" -> {
                             try {
-                                // P3-fix: 检查是否有正在进行的截屏流程，防止回调覆写
-                                if (ScreenOptService.onScreenshotReady != null) {
-                                    val json = JSONObject().apply { put("ok", false); put("error", "capture_in_progress") }.toString()
-                                    newFixedLengthResponse(Response.Status.CONFLICT, "application/json", json).apply {
-                                        addHeader("Access-Control-Allow-Origin", "*")
-                                    }
-                                } else if (ScreenOptService.isServiceRunning()) {
-                                    val latch = java.util.concurrent.CountDownLatch(1)
-                                    var captureSuccess = false
-                                    ScreenOptService.onScreenshotReady = { success ->
-                                        captureSuccess = success
-                                        latch.countDown()
-                                    }
-                                    ScreenOptService.captureScreen()
-                                    latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+                                // P2-R3-5: 使用同步截屏方法，避免回调覆盖竞态
+                                if (ScreenOptService.isServiceRunning()) {
+                                    val captureSuccess = ScreenOptService.captureScreenSync(3000)
                                     val json = JSONObject().apply {
                                         put("ok", ScreenCaptureService.latestScreenshot != null)
                                         put("method", if (captureSuccess) "accessibility" else "failed")

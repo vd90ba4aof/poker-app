@@ -192,8 +192,11 @@ class FloatingService : Service() {
     }
     
     private fun addErrorLog(entry: String) {
-        errorLogs.add(entry)
-        if (errorLogs.size > MAX_ERROR_LOGS) errorLogs.removeAt(0)
+        // P2-R3-8: 使用同步块保证复合操作原子性
+        synchronized(errorLogs) {
+            errorLogs.add(entry)
+            if (errorLogs.size > MAX_ERROR_LOGS) errorLogs.removeAt(0)
+        }
         try {
             File(filesDir, ERROR_LOG_FILE).appendText(entry + "\n", Charsets.UTF_8)
             // 滚动保留最近200行
@@ -496,6 +499,19 @@ class FloatingService : Service() {
     }
 
     private fun reinitializeComponents() {
+        // P1-R3-3: 先销毁旧WebView，防止内存泄漏和双重回调
+        try {
+            webView?.let { oldWv ->
+                oldWv.stopLoading()
+                oldWv.removeJavascriptInterface("AndroidBridge")
+                oldWv.webViewClient = android.webkit.WebViewClient()
+                oldWv.destroy()
+            }
+        } catch (_: Exception) {}
+        webView = null
+        webViewReady = false
+        pendingJsCalls.clear()
+        
         // P1-fix: 先反注册再重新注册，防止重复注册导致IllegalArgumentException
         try { unregisterReceiver(notificationReceiver) } catch (_: Exception) {}
         try {
@@ -548,6 +564,10 @@ class FloatingService : Service() {
         currentPanelWidth = 0
         currentPanelHeight = 0
         handler.removeCallbacksAndMessages(null)
+        // P2-R3-6: 清理闪烁信号Handler，防止Service销毁后仍执行Runnable
+        ballSignalRunnable?.let { ballSignalHandler?.removeCallbacks(it) }
+        ballSignalRunnable = null
+        ballSignalHandler = null
         speechRecognizer?.destroy()
         // V2.9.165: 释放本地CV识别器资源
         try { cardRecognizer?.release() } catch (_: Exception) {}
@@ -1767,6 +1787,14 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     put("lastAction", _pipelineLastAction)
                 }.toString()
             }
+            
+            // P3-R3-9: 将setBlinkFreq移到JS接口对象中，修复JS调用静默失败
+            @JavascriptInterface
+            fun setBlinkFreq(freq: Int) {
+                handler.post {
+                    try { startBallSignal(freq) } catch (_: Exception) {}
+                }
+            }
         }, "AndroidBridge")
 
         // V2.9.114: WebViewAssetLoader加载——Google官方推荐，零竞态风险
@@ -2168,14 +2196,6 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
         } catch (_: Exception) {}
     }
 
-    // V2.9.131: 公开 setBlinkFreq 供 JS 端直接调用
-    @JavascriptInterface
-    fun setBlinkFreq(freq: Int) {
-        handler.post {
-            try { startBallSignal(freq) } catch (_: Exception) {}
-        }
-    }
-
     // V2.9.63: 悬浮球信号闪烁
     private var ballSignalRunnable: Runnable? = null
     private var ballSignalHandler: android.os.Handler? = null
@@ -2413,7 +2433,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         // 后台API异步补充 — HUD统计/摊牌记录/玩家名字（不阻塞当前决策）
                         Thread {
                             try {
-                                val bgResult = VisionApiClient.analyzeScreenshot(screenshot)
+                                // P1-R3-2: 使用只读方法，避免与主线程识别逻辑产生竞态
+                                val bgResult = VisionApiClient.analyzeScreenshotReadOnly(screenshot)
                                 if (bgResult != null && bgResult.isPokerTable) {
                                     val level = when {
                                         bgResult.blindBB <= 10 -> "micro_nl2"

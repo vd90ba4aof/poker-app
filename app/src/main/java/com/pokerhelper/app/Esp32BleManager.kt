@@ -43,6 +43,9 @@ class Esp32BleManager(private val context: Context) {
     private val MAX_RECONNECT_ATTEMPTS = 5
     private val RECONNECT_DELAY_BASE = 2000L  // 基础重连延迟2秒
     private var reconnectRunnable: Runnable? = null
+    // P1-R3-4: 记录连接时间，用于判断稳定连接后重置重连计数器
+    private var lastStableConnectTime = 0L
+    private val STABLE_CONNECTION_THRESHOLD = 30000L  // 连接持续30秒视为稳定
     
     var isConnected = false
         private set
@@ -410,6 +413,8 @@ class Esp32BleManager(private val context: Context) {
                     Log.i(TAG, "onConnectionStateChange: STATE_CONNECTED, status=$status")
                     // V2.9.183: 保存设备用于自动重连
                     lastConnectedDevice = gatt.device
+                    // P1-R3-4: 记录连接时间
+                    lastStableConnectTime = System.currentTimeMillis()
                     reconnectAttempts = 0
                     handler.post {
                         // V2.9.179: 请求最大MTU，减少分包
@@ -418,7 +423,16 @@ class Esp32BleManager(private val context: Context) {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.i(TAG, "Disconnected from GATT server, stopping heartbeat monitor")
+                    // P1-R3-4: 如果连接持续超过30秒，视为稳定连接后的正常断连，完全重置计数器
+                    val connectedDuration = System.currentTimeMillis() - lastStableConnectTime
+                    if (connectedDuration > STABLE_CONNECTION_THRESHOLD) {
+                        reconnectAttempts = 0
+                        Log.i(TAG, "稳定连接(${connectedDuration/1000}s)后断连，重置重连计数器")
+                    }
                     isConnected = false
+                    // P0-R3-1: 断连时重置写入状态，防止命令队列死锁
+                    isWriting = false
+                    commandQueue.clear()
                     stopHeartbeatMonitor()  // V2.9.240: 断连立即停止心跳，避免泄漏
                     notifyStatus(false, "已断开")
                     // V2.9.183: 自动重连
