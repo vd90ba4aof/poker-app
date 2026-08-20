@@ -234,7 +234,7 @@ class Esp32BleManager(private val context: Context) {
             reconnectAttempts = 0
             handler.removeCallbacks(bleFlushTimeout)
             bleRxBuffer.clear()
-            commandQueue.clear()  // V2.9.240: 断开时清空命令队列
+            synchronized(writeLock) { isWriting = false; commandQueue.clear() }  // P0-fix #7
             bluetoothGatt?.disconnect()
             bluetoothGatt?.close()
             bluetoothGatt = null
@@ -342,15 +342,19 @@ class Esp32BleManager(private val context: Context) {
     // P1-fix: 队列上限20条，超出丢弃最旧的（过期的tap命令无意义）
     private val COMMAND_QUEUE_MAX = 20
     private fun sendCommand(cmd: String) {
-        Log.d(TAG, "sendCommand: cmd=$cmd, isWriting=$isWriting, queueSize=${commandQueue.size}")
-        if (isWriting) {
-            if (commandQueue.size >= COMMAND_QUEUE_MAX) {
-                commandQueue.removeAt(0)  // 丢弃最旧的命令
-                Log.w(TAG, "sendCommand: queue满(${COMMAND_QUEUE_MAX}), 丢弃最旧命令")
+        // P0-fix #7: 加锁保护isWriting检查与入队的原子性
+        synchronized(writeLock) {
+            Log.d(TAG, "sendCommand: cmd=$cmd, isWriting=$isWriting, queueSize=${commandQueue.size}")
+            if (isWriting) {
+                if (commandQueue.size >= COMMAND_QUEUE_MAX) {
+                    commandQueue.removeAt(0)  // 丢弃最旧的命令
+                    Log.w(TAG, "sendCommand: queue满(${COMMAND_QUEUE_MAX}), 丢弃最旧命令")
+                }
+                commandQueue.add(cmd)
+                Log.d(TAG, "sendCommand: queued, new queueSize=${commandQueue.size}")
+                return
             }
-            commandQueue.add(cmd)
-            Log.d(TAG, "sendCommand: queued, new queueSize=${commandQueue.size}")
-            return
+            isWriting = true  // 预先标记，防止并发进入writeCommand
         }
         writeCommand(cmd)
     }
@@ -365,9 +369,8 @@ class Esp32BleManager(private val context: Context) {
             characteristic.value = cmd.toByteArray(Charsets.UTF_8)
             characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             val success = bluetoothGatt?.writeCharacteristic(characteristic) ?: false
-            if (success) {
-                isWriting = true
-            } else {
+            if (!success) {
+                synchronized(writeLock) { /* isWriting already true from sendCommand */ }
                 onCommandResult?.invoke("err:write_failed")
                 processNextCommand()
             }
@@ -379,10 +382,15 @@ class Esp32BleManager(private val context: Context) {
     }
     
     private fun processNextCommand() {
-        isWriting = false
-        if (commandQueue.isNotEmpty()) {
-            val next = commandQueue.removeAt(0)
-            writeCommand(next)
+        // P0-fix #7: 加锁保护队列出队与isWriting状态
+        val nextCmd: String?
+        synchronized(writeLock) {
+            isWriting = false
+            nextCmd = if (commandQueue.isNotEmpty()) commandQueue.removeAt(0) else null
+            if (nextCmd != null) isWriting = true
+        }
+        if (nextCmd != null) {
+            writeCommand(nextCmd)
         }
     }
     
@@ -434,9 +442,8 @@ class Esp32BleManager(private val context: Context) {
                         Log.i(TAG, "稳定连接(${connectedDuration/1000}s)后断连，重置重连计数器")
                     }
                     isConnected = false
-                    // P0-R3-1: 断连时重置写入状态，防止命令队列死锁
-                    isWriting = false
-                    commandQueue.clear()
+                    // P0-R3-1 + P0-fix #7: 断连时加锁重置写入状态，防止命令队列死锁
+                    synchronized(writeLock) { isWriting = false; commandQueue.clear() }
                     stopHeartbeatMonitor()  // V2.9.240: 断连立即停止心跳，避免泄漏
                     notifyStatus(false, "已断开")
                     // V2.9.183: 自动重连
