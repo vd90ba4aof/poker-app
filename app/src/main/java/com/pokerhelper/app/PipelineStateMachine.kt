@@ -214,7 +214,7 @@ class PipelineStateMachine {
                 (oldState == PipelineState.COOLDOWN ||
                  oldState == PipelineState.IDLE ||
                  oldState == PipelineState.ERROR_RECOVERY)) {
-                Log.d(TAG, "Shot Clock忽略: 当前状态$oldState无需强制fold")
+                Log.d(TAG, "Shot Clock忽略: 当前状态${oldState}无需强制fold")
                 return oldState
             }
             if (oldState == globalTarget) {

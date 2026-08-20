@@ -67,7 +67,7 @@ class Esp32BleManager(private val context: Context) {
     // 必须拼接多包才能拿到完整数据
     private val bleRxBuffer = StringBuilder()
     // R6-fix: BLE接收缓冲区上限（32KB），防止恶意ESP32持续发送导致OOM
-    private const val BLE_BUFFER_MAX_SIZE = 32 * 1024
+    private val BLE_BUFFER_MAX_SIZE = 32 * 1024
     private val bleFlushTimeout = Runnable { flushBleBuffer() }
     
     private fun flushBleBuffer() {

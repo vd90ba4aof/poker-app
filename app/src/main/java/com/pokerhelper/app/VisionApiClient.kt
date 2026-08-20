@@ -380,7 +380,7 @@ object VisionApiClient {
             // 防止深度嵌套JSON解析导致StackOverflowError绕过try-catch(Exception)
             Log.e(TAG, "analyzeScreenshot Error: ${e.javaClass.simpleName}: ${e.message}")
             lastError = "内部错误: ${e.javaClass.simpleName}"
-            null
+            return null
         } finally {
             analyzeLock.unlock()
         }

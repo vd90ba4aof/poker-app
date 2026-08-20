@@ -192,7 +192,7 @@ class FloatingService : Service() {
     private var isBlinkingError = false
     // R6-fix: addErrorLog文件写入频率限制（防I/O风暴导致ANR）
     @Volatile private var lastErrorLogWriteTime = 0L
-    private const val ERROR_LOG_MIN_INTERVAL_MS = 1000L // 最少1秒写一次文件
+    private val ERROR_LOG_MIN_INTERVAL_MS = 1000L // 最少1秒写一次文件
     
     // V2.9.183: errorLogs文件持久化——防止重启丢失
     private fun loadErrorLogs() {
@@ -2542,7 +2542,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                 val bmp = android.graphics.BitmapFactory.decodeByteArray(screenshot, 0, screenshot.size)
                 if (bmp != null) {
                     try { CardRecognizer.updateScreenSize(bmp.width, bmp.height) } catch (_: Exception) {}
-                    var sceneResult: LocalSceneRecognizer.SceneResult? = null
+                    var sceneResult: VisionApiClient.VisionResult? = null
                     try {
                         sceneResult = sceneRecognizer!!.recognizeScene(bmp)
                     } catch (e: Exception) {
@@ -2565,7 +2565,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                     if (sceneResult != null && sceneRecognizer!!.isValidResult(sceneResult)) {
                         // ✅ 本地识别成功 → 直接驱动策略引擎
                         pipelineFSM.transition(PipelineStateMachine.PipelineEvent.LOCAL_RECOG_OK)  // V3.50: RECOGNIZING_LOCAL→STRATEGY_COMPUTING
-                        Log.i(TAG, "★ 本地场景识别成功: ${localElapsed}ms | hand=${sceneResult.holeCards.map{"${it.rank}${it.suit}"}} board=${sceneResult.communityCards.map{"${it.rank}${it.suit}"}} street=${sceneResult.street} pot=${sceneResult.potSize} toCall=${sceneResult.toCall} D=${sceneResult.dButtonPosition} | state=${pipelineFSM.getCurrentState()}")
+                        Log.i(TAG, "★ 本地场景识别成功: ${localElapsed}ms | hand=${sceneResult.holeCards.map { c -> "${c.rank}${c.suit}" }} board=${sceneResult.communityCards.map { c -> "${c.rank}${c.suit}" }} street=${sceneResult.street} pot=${sceneResult.potSize} toCall=${sceneResult.toCall} D=${sceneResult.dButtonPosition} | state=${pipelineFSM.getCurrentState()}")
 
                         // 更新场景缓存（供fallback和下一帧使用）
                         cachedPotSize = sceneResult.potSize
@@ -2579,7 +2579,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                         cachedPlayerChips = sceneResult.playerChips
                         if (sceneResult.buttonPositions.isNotEmpty()) {
                             latestButtonPositions = sceneResult.buttonPositions
-                            Log.d(TAG, "★ 按钮坐标已存储: ${sceneResult.buttonPositions.map { "${it.text}(${it.xPct},${it.yPct})" }}")
+                            Log.d(TAG, "★ 按钮坐标已存储: ${sceneResult.buttonPositions.map { b -> "${b.text}(${b.xPct},${b.yPct})" }}")
                         }
 
                         // 发送到策略引擎WebView
