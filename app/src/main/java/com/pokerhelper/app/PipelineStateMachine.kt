@@ -147,7 +147,8 @@ class PipelineStateMachine {
 
         // === ERROR_RECOVERY 出发 ===
         (PipelineState.ERROR_RECOVERY to PipelineEvent.RECOVERY_DONE) to PipelineState.IDLE,
-        (PipelineState.ERROR_RECOVERY to PipelineEvent.RESET) to PipelineState.IDLE
+        (PipelineState.ERROR_RECOVERY to PipelineEvent.RESET) to PipelineState.IDLE,
+        (PipelineState.ERROR_RECOVERY to PipelineEvent.START_CAPTURE) to PipelineState.CAPTURING  // V3.50: Bug#7 允许从错误恢复中重新截屏
     )
 
     /**

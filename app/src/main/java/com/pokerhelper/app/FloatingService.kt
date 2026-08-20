@@ -852,7 +852,7 @@ class FloatingService : Service() {
         hideOverlay()  // V2.9.190: 截屏前隐藏悬浮层
         ScreenOptService.onScreenshotReady={s->handler.post{
             showOverlay()  // V2.9.190: 截屏后恢复悬浮层
-            if(s)processScreenshotAndAnalyze(isAutoCapture=true)else{
+            if(s){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);processScreenshotAndAnalyze(isAutoCapture=true)}else{
                 pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL);autoConsecutiveErrors++  // V3.50: CAPTURING→ERROR_RECOVERY
                 // V3.44: 截屏回调失败也记录
                 if (autoConsecutiveErrors % 5 == 0) {
@@ -877,7 +877,7 @@ class FloatingService : Service() {
             floatingBall?.visibility = android.view.View.VISIBLE
         } catch (_: Exception) {}
     }
-    fun onAutoCaptureVisionDone(success:Boolean){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE);if(success)autoConsecutiveErrors=0 else{autoConsecutiveErrors++;checkAutoErrors()};if(success)executeJs("if(typeof FrameDiffEngine!=='undefined')FrameDiffEngine.onAutoFrameDone()");scheduleNextAutoCapture()}  // V3.50: pipelineFSM替代isVisionInProgress
+    fun onAutoCaptureVisionDone(success:Boolean){val state=pipelineFSM.getCurrentState();when(state){PipelineStateMachine.PipelineState.ERROR_RECOVERY->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)};PipelineStateMachine.PipelineState.STRATEGY_COMPUTING->{};PipelineStateMachine.PipelineState.EXECUTING->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)};else->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)}};if(success)autoConsecutiveErrors=0 else{autoConsecutiveErrors++;checkAutoErrors()};if(success)executeJs("if(typeof FrameDiffEngine!=='undefined')FrameDiffEngine.onAutoFrameDone()");scheduleNextAutoCapture()}  // V3.50: state-aware FSM (Bug#2)
     // V2.9.180: 全自动执行tap——根据action匹配按钮坐标并发送到ESP32
     private fun executeAutoTap(action: String, decisionData: org.json.JSONObject) {
         try {
@@ -894,7 +894,7 @@ class FloatingService : Service() {
                 Log.w(TAG, "★ Shot Clock timeout! ${(now - handStartTime)}ms since hand start, forcing emergency fold")
                 pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SHOT_CLOCK_TIMEOUT)  // V3.50: 强制fold
                 executeAutoTapFallback("fold")
-                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)  // V3.50: 完成→IDLE
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)  // V3.50: 完成→IDLE
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }
                 lastDecisionTime = now
                 updateAdviceNotification("⏰ Shot Clock", "超时强制弃牌")
@@ -913,6 +913,8 @@ class FloatingService : Service() {
                     Log.d(TAG, "★ 纳什push: 点全押按钮")
                     executeAutoTapFallback("allin")
                     handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                    handler.postDelayed({ pipelineFSM.transition(PipelineStateMachine.PipelineEvent.COOLDOWN_END) }, 1500)  // V3.50: Bug#4
                     return
                 }
                 // V3.16: 翻前raise → 直接点GG加注按钮(默认2.5x min-raise)
@@ -928,6 +930,8 @@ class FloatingService : Service() {
                         executeAutoTapFallback("allin")
                     }
                     handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                    handler.postDelayed({ pipelineFSM.transition(PipelineStateMachine.PipelineEvent.COOLDOWN_END) }, 1500)  // V3.50: Bug#4
                     return
                 }
                 if (sizing > 0 && pot > 0 && GameModeConfig.currentPlatform == GamePlatform.GGPOKER) {
@@ -953,6 +957,8 @@ class FloatingService : Service() {
                                 executeAutoTapFallback("raise")
                                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                                 Log.d(TAG, "★ GG bet confirm: raise button tapped")
+                                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                                handler.postDelayed({ pipelineFSM.transition(PipelineStateMachine.PipelineEvent.COOLDOWN_END) }, 1500)  // V3.50: Bug#4
                             } catch (e: Exception) {
                                 Log.e(TAG, "GG bet confirm error", e)
                             }
@@ -968,6 +974,8 @@ class FloatingService : Service() {
                 Log.w(TAG, "autoTap: 无按钮坐标，回退固定位置")
                 executeAutoTapFallback(action)
                 Log.d(TAG, "executeAutoTap 结果: fallback (no buttons)")
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                handler.postDelayed({ pipelineFSM.transition(PipelineStateMachine.PipelineEvent.COOLDOWN_END) }, 1500)  // V3.50: Bug#4
                 return
             }
             
@@ -1004,15 +1012,20 @@ class FloatingService : Service() {
                 Log.i(TAG, "★ Pipeline: 截图→ESP32点击=${_pipelineEsp32TapTimeMs}ms (本地CV=${_diagLocalCVTimeMs}ms + JS决策=${_pipelineJsDecisionTimeMs}ms)")
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                 Log.d(TAG, "executeAutoTap 结果: 成功 (坐标点击)")
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                handler.postDelayed({ pipelineFSM.transition(PipelineStateMachine.PipelineEvent.COOLDOWN_END) }, 1500)  // V3.50: Bug#4
             } else {
                 Log.w(TAG, "executeAutoTap: 未匹配按钮 $action, 回退固定位置")
                 executeAutoTapFallback(action)
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                 Log.d(TAG, "executeAutoTap 结果: fallback (button not matched)")
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                handler.postDelayed({ pipelineFSM.transition(PipelineStateMachine.PipelineEvent.COOLDOWN_END) }, 1500)  // V3.50: Bug#4
             }
         } catch (e: Exception) {
             Log.e(TAG, "executeAutoTap error", e)
             executeAutoTapFallback(action)
+            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)  // V3.50: Bug#4 BLE执行失败→ERROR_RECOVERY
         }
     }
     // V3.14: 精确金额输入 — 点击输入框+逐个点数字键盘 (GG数字键盘坐标需实测)
@@ -1171,7 +1184,7 @@ class FloatingService : Service() {
         if(!ScreenOptService.isServiceRunning())return;if(!pipelineFSM.canCapture())return  // V3.50: FSM判断是否可截屏
         pipelineFSM.transition(PipelineStateMachine.PipelineEvent.START_CAPTURE)  // V3.50: IDLE→CAPTURING
         hideOverlay()  // V2.9.190: 截屏前隐藏悬浮层
-        ScreenOptService.onScreenshotReady={s->handler.post{if(s){processScreenshotAndAnalyze(isMultiFrame1=true);handler.postDelayed({if(ScreenOptService.isServiceRunning()){ScreenOptService.onScreenshotReady={s2->handler.post{showOverlay()  // V2.9.190: 第二帧截屏后恢复悬浮层
+        ScreenOptService.onScreenshotReady={s->handler.post{if(s){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);processScreenshotAndAnalyze(isMultiFrame1=true);handler.postDelayed({if(ScreenOptService.isServiceRunning()){ScreenOptService.onScreenshotReady={s2->handler.post{showOverlay()  // V2.9.190: 第二帧截屏后恢复悬浮层
 if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);processScreenshotAndAnalyze(isMultiFrame2=true)}else pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)}};ScreenOptService.captureScreen()}},multiFrameDelay)}else{showOverlay();pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)}}}  // V3.50: FSM替代isVisionInProgress
         handler.postDelayed({ScreenOptService.captureScreen()}, 100)  // V2.9.192: 延迟100ms等View渲染
     }
@@ -1665,7 +1678,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                         
                         if (!auto) {
                             // 需要人工确认（如中置信+全押）→ 不执行BLE，回到空闲
-                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)  // V3.50: 需确认→IDLE（等待下一帧）
+                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)  // V3.50: 需确认→IDLE（等待下一帧）
                             updateAdviceNotification("⚠️ 需确认: $action", "$reason (eq=$eq%)")
                             updateBallAdvice("COLOR:CHECK|SIGNAL:ALLIN_NEED|EQ:$eq|REASON:全押需确认")
                             return@post
@@ -2522,7 +2535,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                     lastDecisionTime = System.currentTimeMillis()
                     pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SHOT_CLOCK_TIMEOUT)  // V3.50: 任意状态→EXECUTING(强制fold)
                     executeAutoTapFallback("fold")
-                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)  // V3.50: 执行完毕→IDLE
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)  // V3.50: 执行完毕→IDLE
                     updateAdviceNotification("⏰ Shot Clock", "超时强制弃牌(硬超时)")
                     updateBallAdvice("COLOR:FOLD|SIGNAL:TIMEOUT|REASON:Shot Clock超时")
                     scheduleNextAutoCapture()
@@ -2537,7 +2550,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             lastDecisionTime = tAnalyzeStart
             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SHOT_CLOCK_TIMEOUT)  // V3.50: 强制fold
             executeAutoTapFallback("fold")
-            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)  // V3.50: 完成→IDLE
+            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)  // V3.50: 完成→IDLE
             updateAdviceNotification("⏰ Shot Clock", "超时强制弃牌(预检)")
             updateBallAdvice("COLOR:FOLD|SIGNAL:TIMEOUT|REASON:Shot Clock超时")
             scheduleNextAutoCapture()
@@ -2669,6 +2682,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                     val timeoutRunnable = Runnable {
                         if (!_strategyReceived) {
                             Log.w(TAG, "★ 策略引擎超时8s，标记等待状态（非FOLD）")
+                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_TIMEOUT)  // V3.50: Bug#6 策略超时→ERROR_RECOVERY
                             updateBallAdvice("COLOR:CHECK|SIGNAL:TIMEOUT|EQ:0|REASON:策略计算中")
                             updateAdviceNotification("⏳ 策略计算中", "8s未回调→等待而非FOLD")
                         }
