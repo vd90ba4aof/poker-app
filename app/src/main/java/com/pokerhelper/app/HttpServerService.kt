@@ -233,10 +233,11 @@ class HttpServerService : Service() {
                                         } catch (_: Exception) {}
                                     }
                                     // P1-R4-6: 基础安全检查——禁止包含可疑脚本标签
-                                    if (html != null) {
+                                    val htmlCheck = html
+                                    if (htmlCheck != null) {
                                         val suspicious = listOf("eval(", "document.cookie", "localStorage",
                                             "XMLHttpRequest", "fetch(", "WebSocket", "importScripts")
-                                        if (suspicious.any { html.contains(it) }) {
+                                        if (suspicious.any { htmlCheck.contains(it) }) {
                                             android.util.Log.w(TAG, "热更新内容包含可疑代码，已拒绝")
                                             html = null
                                         }
