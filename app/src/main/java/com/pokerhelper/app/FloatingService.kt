@@ -556,6 +556,12 @@ class FloatingService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        // P1-R4-4: 第一步立刻标记WebView不可用，阻断executeJs和JS回调
+        webViewReady = false
+        try {
+            webView?.stopLoading()
+            webView?.removeJavascriptInterface("AndroidBridge")
+        } catch (_: Exception) {}
         // P0-fix: 清除ScreenOptService回调，防止引用已死FloatingService实例导致NPE/内存泄漏
         try { ScreenOptService.onScreenshotReady = null } catch (_: Exception) {}
         // V2.9.68: 释放WakeLock

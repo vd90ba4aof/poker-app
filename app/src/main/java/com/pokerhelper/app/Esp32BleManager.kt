@@ -59,7 +59,9 @@ class Esp32BleManager(private val context: Context) {
 
     // V2.9.184: BLE命令队列——避免writeCharacteristic失败导致命令丢失
     private val commandQueue = mutableListOf<String>()
-    private var isWriting = false
+    // P0-R4-3: isWriting需要跨线程可见性
+    @Volatile private var isWriting = false
+    private val writeLock = Any()  // P0-R4-3: 写入状态锁
 
     // V2.9.178: BLE数据缓冲——ESP32 status响应120+字节，BLE单包最多20字节
     // 必须拼接多包才能拿到完整数据
@@ -222,6 +224,8 @@ class Esp32BleManager(private val context: Context) {
     // 断开连接
     fun disconnect() {
         try {
+            // P0-R4-3: 重置写入状态，防止disconnect后isWriting残留
+            synchronized(writeLock) { isWriting = false }
             Log.i(TAG, "disconnect: manually disconnecting BLE")
             stopHeartbeatMonitor()  // V1.0.35: 停止心跳监控
             autoReconnectEnabled = false  // V2.9.183: 主动断开时不自动重连

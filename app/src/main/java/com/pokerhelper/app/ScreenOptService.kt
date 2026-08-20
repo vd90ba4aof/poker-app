@@ -25,7 +25,21 @@ class ScreenOptService : AccessibilityService() {
             private set
         
         /** 截图完成回调：参数=true截图成功，false失败需降级 */
+        @Volatile
         var onScreenshotReady: ((Boolean) -> Unit)? = null
+        
+        // P0-R4-2: 回调读写同步锁
+        private val callbackLock = Any()
+        
+        /** 安全设置回调 */
+        fun setScreenshotCallback(cb: ((Boolean) -> Unit)?) {
+            synchronized(callbackLock) { onScreenshotReady = cb }
+        }
+        
+        /** 安全获取回调 */
+        fun getScreenshotCallback(): ((Boolean) -> Unit)? {
+            synchronized(callbackLock) { return onScreenshotReady }
+        }
 
         private var instance: ScreenOptService? = null
 
@@ -50,6 +64,11 @@ class ScreenOptService : AccessibilityService() {
          */
         fun captureScreenSync(timeoutMs: Long = 3000): Boolean {
             val svc = instance ?: return false
+            // P1-R4-7: 防止与自动截屏冲突——如果已有回调在等待，拒绝同步请求
+            if (onScreenshotReady != null) {
+                android.util.Log.w("ScreenOptService", "captureScreenSync: 已有回调等待中，拒绝同步请求")
+                return false
+            }
             val latch = java.util.concurrent.CountDownLatch(1)
             var result = false
             val originalCallback = onScreenshotReady

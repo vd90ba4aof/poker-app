@@ -232,6 +232,15 @@ class HttpServerService : Service() {
                                             html = conn2.getInputStream().bufferedReader(Charsets.UTF_8).readText()
                                         } catch (_: Exception) {}
                                     }
+                                    // P1-R4-6: 基础安全检查——禁止包含可疑脚本标签
+                                    if (html != null) {
+                                        val suspicious = listOf("eval(", "document.cookie", "localStorage",
+                                            "XMLHttpRequest", "fetch(", "WebSocket", "importScripts")
+                                        if (suspicious.any { html.contains(it) }) {
+                                            android.util.Log.w(TAG, "热更新内容包含可疑代码，已拒绝")
+                                            html = null
+                                        }
+                                    }
                                     if (html != null && html.isNotEmpty() && html.contains("poker") && html.length > 1000) {
                                         pokerHelperHtml = html
                                         hotloadSource = "remote"

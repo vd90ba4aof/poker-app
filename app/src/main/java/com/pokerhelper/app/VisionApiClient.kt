@@ -31,6 +31,9 @@ object VisionApiClient {
 
     private const val TAG = "VisionAPI"
     
+    // P0-R4-1: 分析锁——防止并发修改共享状态
+    private val analyzeLock = java.util.concurrent.locks.ReentrantLock()
+    
     // V2.9.183: OkHttp连接池复用——避免每次TCP握手浪费100-200ms
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -168,6 +171,9 @@ object VisionApiClient {
 
     fun analyzeScreenshot(jpegData: ByteArray): VisionResult? {
         if (apiKey.isEmpty()) { lastError = "未设置API Key"; return null }
+        // P0-R4-1: 加锁保护共享状态的复合读写
+        analyzeLock.lock()
+        try {
         return try {
             val t0 = System.currentTimeMillis()
 
@@ -363,6 +369,9 @@ object VisionApiClient {
                 }
             }
             null
+        }
+        } finally {
+            analyzeLock.unlock()
         }
     }
 
@@ -921,11 +930,15 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         }
                         cropCardFromBitmap(screenshotBitmap, xOffset.coerceIn(0f, 1f), baseYPct, cardWidthPct, cardHeightPct)
                     } catch (_: Exception) { null }
-                    val localResult = localSuitRecognize(cardBmp)
-                    val (mergedSuit, localUsed) = mergeSuitResult(card.suit, result.suitUncertain, localResult)
-                    if (localUsed) anyLocalUsed = true
-                    cardBmp?.recycle()
-                    CardInfo(card.rank, mergedSuit)
+                    // P1-R4-5: try-finally保证Bitmap回收
+                    try {
+                        val localResult = localSuitRecognize(cardBmp)
+                        val (mergedSuit, localUsed) = mergeSuitResult(card.suit, result.suitUncertain, localResult)
+                        if (localUsed) anyLocalUsed = true
+                        CardInfo(card.rank, mergedSuit)
+                    } finally {
+                        cardBmp?.recycle()
+                    }
                 } else card
             }
             // 处理公共牌（如果也标记为suit不确定）
@@ -942,11 +955,15 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         val xPct = startXPct + cardIdx * (cardWidthPct + 0.02f)
                         cropCardFromBitmap(screenshotBitmap, xPct.coerceIn(0f, 1f), centerYPct - cardHeightPct / 2, cardWidthPct, cardHeightPct)
                     } catch (_: Exception) { null }
-                    val localResult = localSuitRecognize(cardBmp)
-                    val (mergedSuit, localUsed) = mergeSuitResult(card.suit, result.suitUncertain, localResult)
-                    if (localUsed) anyLocalUsed = true
-                    cardBmp?.recycle()
-                    CardInfo(card.rank, mergedSuit)
+                    // P1-R4-5: try-finally保证Bitmap回收
+                    try {
+                        val localResult = localSuitRecognize(cardBmp)
+                        val (mergedSuit, localUsed) = mergeSuitResult(card.suit, result.suitUncertain, localResult)
+                        if (localUsed) anyLocalUsed = true
+                        CardInfo(card.rank, mergedSuit)
+                    } finally {
+                        cardBmp?.recycle()
+                    }
                 } else card
             }
             if (anyLocalUsed) {
