@@ -169,6 +169,7 @@ object HudLearner {
         )
     }
 
+    @Synchronized
     fun getOpponentProfile(level: String): OpponentProfile {
         val p = prefs ?: return getBaselineProfile(level)
         val handCount = getHandCount(level)
@@ -181,6 +182,7 @@ object HudLearner {
         return profile
     }
 
+    @Synchronized
     fun getHandCount(level: String): Int =
         prefs?.getInt(KEY_PREFIX + level + "_count", 0) ?: 0
 

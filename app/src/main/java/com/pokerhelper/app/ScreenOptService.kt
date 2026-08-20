@@ -61,25 +61,33 @@ class ScreenOptService : AccessibilityService() {
         /**
          * P2-R3-5: 同步截屏方法，不依赖共享回调
          * 供HttpServerService等外部调用，避免回调覆盖
+         * R6-fix: 使用callbackLock同步保护，防止与自动截屏并发冲突
          */
         fun captureScreenSync(timeoutMs: Long = 3000): Boolean {
             val svc = instance ?: return false
-            // P1-R4-7: 防止与自动截屏冲突——如果已有回调在等待，拒绝同步请求
-            if (onScreenshotReady != null) {
-                android.util.Log.w("ScreenOptService", "captureScreenSync: 已有回调等待中，拒绝同步请求")
-                return false
+            // R6-fix: 使用同步方法检查回调，防止check-then-act竞态
+            synchronized(callbackLock) {
+                if (onScreenshotReady != null) {
+                    android.util.Log.w("ScreenOptService", "captureScreenSync: 已有回调等待中，拒绝同步请求")
+                    return false
+                }
             }
             val latch = java.util.concurrent.CountDownLatch(1)
             var result = false
-            val originalCallback = onScreenshotReady
-            onScreenshotReady = { success ->
-                result = success
-                latch.countDown()
+            val originalCallback: ((Boolean) -> Unit)?
+            synchronized(callbackLock) {
+                originalCallback = onScreenshotReady
+                onScreenshotReady = { success ->
+                    result = success
+                    latch.countDown()
+                }
             }
             svc.performCapture()
             latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             // 恢复原始回调
-            onScreenshotReady = originalCallback
+            synchronized(callbackLock) {
+                onScreenshotReady = originalCallback
+            }
             return result
         }
     }

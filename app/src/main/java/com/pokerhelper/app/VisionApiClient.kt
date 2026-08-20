@@ -172,7 +172,12 @@ object VisionApiClient {
     fun analyzeScreenshot(jpegData: ByteArray): VisionResult? {
         if (apiKey.isEmpty()) { lastError = "未设置API Key"; return null }
         // P0-R4-1: 加锁保护共享状态的复合读写
-        analyzeLock.lock()
+        // R6-fix: 使用tryLock超时，防止主线程被无限阻塞导致ANR
+        if (!analyzeLock.tryLock(25, java.util.concurrent.TimeUnit.SECONDS)) {
+            Log.w(TAG, "analyzeLock获取超时(25s)，放弃本次分析")
+            lastError = "分析锁超时"
+            return null
+        }
         try {
         return try {
             val t0 = System.currentTimeMillis()
@@ -370,6 +375,12 @@ object VisionApiClient {
             }
             null
         }
+        } catch (e: Error) {
+            // R6-fix: 捕获StackOverflowError/OutOfMemoryError等Error级异常
+            // 防止深度嵌套JSON解析导致StackOverflowError绕过try-catch(Exception)
+            Log.e(TAG, "analyzeScreenshot Error: ${e.javaClass.simpleName}: ${e.message}")
+            lastError = "内部错误: ${e.javaClass.simpleName}"
+            null
         } finally {
             analyzeLock.unlock()
         }
@@ -556,6 +567,7 @@ ${streetHint}${rankHint}识别:"""
         Log.d(TAG, "sendRequest: 请求开始, url=$apiUrl, model=$modelName, payload=${requestJson.take(80)}...")
         var lastException: Exception? = null
         // V2.9.184: 网络波动重试1次，间隔500ms
+        // R6-fix: 仅重试5xx服务端错误，4xx不重试；增加响应大小限制
         repeat(2) { attempt ->
             try {
                 val body = requestJson.toRequestBody("application/json".toMediaType())
@@ -569,6 +581,10 @@ ${streetHint}${rankHint}识别:"""
                 val elapsed = respTime - reqTime
                 return if (response.isSuccessful) {
                     val respBody = response.body?.string() ?: throw Exception("Empty response body")
+                    // R6-fix: 响应大小限制（10MB），防止恶意API响应导致OOM
+                    if (respBody.length > 10 * 1024 * 1024) {
+                        throw Exception("Response too large: ${respBody.length}B")
+                    }
                     Log.i(TAG, "sendRequest: 响应成功, 耗时=${elapsed}ms, 响应大小=${respBody.length}字节, attempt=${attempt + 1}")
                     respBody
                 } else {
@@ -597,6 +613,11 @@ ${streetHint}${rankHint}识别:"""
     }
 
     private fun parseResponse(responseBody: String): VisionResult? {
+        // R6-fix: 响应大小预检，防止超深嵌套JSON导致StackOverflowError
+        if (responseBody.length > 5 * 1024 * 1024) {
+            Log.w(TAG, "parseResponse: response too large (${responseBody.length}B), skipping")
+            return null
+        }
         val content = JSONObject(responseBody).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
         val jsonStr = extractJson(content) ?: return null
         val data = JSONObject(jsonStr)

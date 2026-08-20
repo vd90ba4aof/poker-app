@@ -208,6 +208,15 @@ class PipelineStateMachine {
         // 优先检查全局事件（SHOT_CLOCK_TIMEOUT / NO_TABLE_DETECTED / RESET）
         val globalTarget = globalTransitions[event]
         if (globalTarget != null) {
+            // R6-fix: SHOT_CLOCK_TIMEOUT在COOLDOWN/IDLE/ERROR_RECOVERY状态不生效
+            // 防止COOLDOWN期间Shot Clock超时触发→EXECUTING→卡死（无实际BLE执行）
+            if (event == PipelineEvent.SHOT_CLOCK_TIMEOUT &&
+                (oldState == PipelineState.COOLDOWN ||
+                 oldState == PipelineState.IDLE ||
+                 oldState == PipelineState.ERROR_RECOVERY)) {
+                Log.d(TAG, "Shot Clock忽略: 当前状态$oldState无需强制fold")
+                return oldState
+            }
             if (oldState == globalTarget) {
                 // 已经在目标状态，无需转换
                 Log.d(TAG, "状态保持: $oldState + $event → $globalTarget (已是目标状态)")

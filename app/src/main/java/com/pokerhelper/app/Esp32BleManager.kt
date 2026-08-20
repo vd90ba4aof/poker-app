@@ -66,23 +66,30 @@ class Esp32BleManager(private val context: Context) {
     // V2.9.178: BLE数据缓冲——ESP32 status响应120+字节，BLE单包最多20字节
     // 必须拼接多包才能拿到完整数据
     private val bleRxBuffer = StringBuilder()
+    // R6-fix: BLE接收缓冲区上限（32KB），防止恶意ESP32持续发送导致OOM
+    private const val BLE_BUFFER_MAX_SIZE = 32 * 1024
     private val bleFlushTimeout = Runnable { flushBleBuffer() }
     
     private fun flushBleBuffer() {
         if (bleRxBuffer.isNotEmpty()) {
             val msg = bleRxBuffer.toString()
             bleRxBuffer.clear()
-            Log.d(TAG, "BLE flush complete msg(${msg.length}): $msg")
+            // R6-fix: 截断超长BLE消息，防止下游处理崩溃
+            val safeMsg = if (msg.length > 4096) {
+                Log.w(TAG, "BLE message truncated (${msg.length}→4096)")
+                msg.take(4096) + "...[truncated]"
+            } else msg
+            Log.d(TAG, "BLE flush complete msg(${safeMsg.length}): ${safeMsg.take(200)}")
             // V1.0.35: pong回复时重置心跳计数
             try {
-                if (msg.startsWith("pong")) {
+                if (safeMsg.startsWith("pong")) {
                     missedHeartbeats = 0
-                    onHeartbeat?.invoke(true, msg)
+                    onHeartbeat?.invoke(true, safeMsg)
                     Log.d(TAG, "Heartbeat pong received, missed reset to 0")
                 }
                 // V2.9.240: ESP32返回的status中包含rssi字段时更新
-                if (msg.startsWith("ok:")) {
-                    val rssiMatch = Regex(""".*rssi[:=]\s*(-?\d+)""").find(msg)
+                if (safeMsg.startsWith("ok:")) {
+                    val rssiMatch = Regex(""".*rssi[:=]\s*(-?\d+)""").find(safeMsg)
                     if (rssiMatch != null) {
                         try {
                             val espRssi = rssiMatch.groupValues[1].toInt()
@@ -97,7 +104,7 @@ class Esp32BleManager(private val context: Context) {
             } catch (e: Exception) {
                 Log.w(TAG, "pong/rssi handling error", e)
             }
-            onCommandResult?.invoke(msg)
+            onCommandResult?.invoke(safeMsg)
         }
     }
 
@@ -543,6 +550,13 @@ class Esp32BleManager(private val context: Context) {
                 // V2.9.179 fix: 不再按\n flush，因为ESP32的status多包响应里自带\n
                 // 第一包到\n就flush的话，后续包全丢了
                 // 改为纯超时 flush，等所有分包的碎片全部拼完
+                
+                // R6-fix: BLE缓冲区上限保护，防止恶意设备持续发送导致OOM
+                if (bleRxBuffer.length + value.length > BLE_BUFFER_MAX_SIZE) {
+                    Log.w(TAG, "BLE buffer overflow (${bleRxBuffer.length}+${value.length} > $BLE_BUFFER_MAX_SIZE), force flushing")
+                    flushBleBuffer()
+                }
+                
                 handler.removeCallbacks(bleFlushTimeout)
                 bleRxBuffer.append(value)
                 handler.postDelayed(bleFlushTimeout, 500)

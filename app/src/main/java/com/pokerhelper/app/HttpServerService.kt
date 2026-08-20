@@ -28,7 +28,18 @@ class HttpServerService : Service() {
         private const val HOTLOAD_URL_FALLBACK = "https://raw.githubusercontent.com/vd90ba4aof/poker-app/main/app/src/main/assets/poker_helper.html"
         private const val HOTLOAD_FILE = "poker_helper_hot.html"
         private const val HOTLOAD_TIMEOUT = 15000 // 15秒超时
+        // R6-fix: POST body大小限制（1MB），防止OOM攻击
+        private const val MAX_POST_BODY_SIZE = 1 * 1024 * 1024
+        // R6-fix: 热更新并发+频率限制
+        private const val HOTLOAD_MIN_INTERVAL_MS = 5000L // 最小间隔5秒
+        private const val HOTLOAD_DOWNLOAD_MAX_SIZE = 2 * 1024 * 1024 // 下载HTML最大2MB
     }
+
+    // R6-fix: 热更新并发信号量（最多1个并发下载）
+    private val hotloadSemaphore = java.util.concurrent.Semaphore(1)
+    // R6-fix: 热更新原子标志，防止并发修改pokerHelperHtml
+    private val hotloadInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var lastHotloadTime = 0L
 
     private var server: NanoHTTPD? = null
     private var pokerHelperHtml: String? = null
@@ -80,6 +91,88 @@ class HttpServerService : Service() {
             }
         }
         return pokerHelperHtml ?: ""
+    }
+
+    // R6-fix: 安全body解析——防止超大POST body导致OOM
+    private fun safeParseBody(session: NanoHTTPD.IHTTPSession): Map<String, String> {
+        // 检查Content-Length头
+        val contentLength = session.headers["content-length"]?.toLongOrNull() ?: 0L
+        if (contentLength > MAX_POST_BODY_SIZE) {
+            throw IllegalStateException("Request body too large: ${contentLength}B (max ${MAX_POST_BODY_SIZE}B)")
+        }
+        val files = HashMap<String, String>()
+        session.parseBody(files)
+        // 二次检查：解析后实际大小
+        val postData = files["postData"] ?: ""
+        if (postData.length > MAX_POST_BODY_SIZE) {
+            throw IllegalStateException("Post data too large: ${postData.length}B")
+        }
+        return files
+    }
+
+    // R6-fix: 增强热更新安全检查——防止黑名单绕过导致RCE
+    private fun containsMaliciousCode(html: String): Boolean {
+        return try {
+            // 1. 去除JS注释和空白后检查（防注释绕过）
+            val normalized = html
+                .replace(Regex("/\\*[\\s\\S]*?\\*/"), "")   // 移除多行注释
+                .replace(Regex("//[^\\n]*"), "")              // 移除单行注释
+                .replace(Regex("\\s+"), "")                   // 移除所有空白
+            // 2. 增强正则黑名单（覆盖字符串拼接、方括号访问、编码绕过等）
+            val patterns = listOf(
+                Regex("eval\\s*\\(", RegexOption.IGNORE_CASE),
+                Regex("Function\\s*\\(", RegexOption.IGNORE_CASE),
+                Regex("setTimeout\\s*\\(\\s*['\"]"),
+                Regex("setInterval\\s*\\(\\s*['\"]"),
+                Regex("document\\.cookie"),
+                Regex("localStorage"),
+                Regex("sessionStorage"),
+                Regex("XMLHttpRequest"),
+                Regex("fetch\\s*\\(", RegexOption.IGNORE_CASE),
+                Regex("WebSocket"),
+                Regex("importScripts"),
+                Regex("atob\\s*\\("),
+                Regex("\\.src\\s*=\\s*['\"]https?://"),
+                Regex("createElement\\s*\\(\\s*['\"]script"),
+                Regex("innerHTML\\s*[+]?="),
+                Regex("javascript\\s*:", RegexOption.IGNORE_CASE),
+                Regex("\\[\\s*['\"]\\w+['\"]\\s*\\+"),       // 方括号+字符串拼接绕过
+                Regex("String\\.fromCharCode"),
+                Regex("new\\s+Function"),
+                Regex("window\\s*\\["),                       // window["xxx"]间接访问
+                Regex("AndroidBridge\\.\\s*(autoDecision|triggerMultiFrame|setAutoSpeed|triggerCapture)")
+            )
+            patterns.any { it.containsMatchIn(normalized) }
+        } catch (_: Exception) {
+            true  // 检查异常时保守拒绝
+        }
+    }
+
+    // R6-fix: 安全读取URL内容——限制下载大小防止内存炸弹
+    private fun safeReadUrl(urlStr: String, timeoutMs: Int): String? {
+        return try {
+            val conn = URL(urlStr).openConnection()
+            conn.connectTimeout = timeoutMs
+            conn.readTimeout = timeoutMs
+            val inputStream = conn.getInputStream()
+            val buffer = ByteArray(8192)
+            val output = java.io.ByteArrayOutputStream()
+            var totalRead = 0
+            var bytesRead: Int
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                totalRead += bytesRead
+                if (totalRead > HOTLOAD_DOWNLOAD_MAX_SIZE) {
+                    Log.w(TAG, "热更新下载超限: ${totalRead}B > ${HOTLOAD_DOWNLOAD_MAX_SIZE}B，终止")
+                    inputStream.close()
+                    return null
+                }
+                output.write(buffer, 0, bytesRead)
+            }
+            inputStream.close()
+            output.toString(Charsets.UTF_8.name())
+        } catch (_: Exception) {
+            null
+        }
     }
 
     override fun onCreate() {
@@ -186,8 +279,7 @@ class HttpServerService : Service() {
                         // V1.2 新增：语音识别结果提交API
                         session.uri == "/api/voice" && session.method == Method.POST -> {
                             try {
-                                val files = HashMap<String, String>()
-                                session.parseBody(files)
+                                val files = safeParseBody(session)
                                 val postData = files["postData"] ?: ""
                                 val result = VoiceInputManager.parseVoiceText(postData)
                                 val json = VoiceInputManager.toJson(result)
@@ -211,54 +303,74 @@ class HttpServerService : Service() {
                         }
                         // v2.9.35: 热更新——从GitHub下载最新poker_helper.html
                         // V2.9.164: 双URL保险——ghfast代理失败时直连GitHub
+                        // R6-fix: 频率限制+并发限制+增强安全检查+下载大小限制
                         session.uri == "/api/hotload" -> {
-                            // P2-R3-7: 异步热更新，避免阻塞NanoHTTPD工作线程
-                            Thread({
-                                try {
-                                    var html: String? = null
-                                    // 先试ghfast代理（国内快）
+                            val now = System.currentTimeMillis()
+                            // R6-fix: 频率限制（5秒最小间隔）
+                            if (now - lastHotloadTime < HOTLOAD_MIN_INTERVAL_MS) {
+                                val retryAfter = (HOTLOAD_MIN_INTERVAL_MS - (now - lastHotloadTime)) / 1000
+                                val json = JSONObject().apply {
+                                    put("ok", false)
+                                    put("error", "too_frequent")
+                                    put("retryAfter", retryAfter)
+                                }.toString()
+                                newFixedLengthResponse(Response.Status.TOO_MANY_REQUESTS, "application/json", json).apply {
+                                    addHeader("Access-Control-Allow-Origin", "*")
+                                    addHeader("Retry-After", retryAfter.toString())
+                                }
+                            } else if (!hotloadSemaphore.tryAcquire()) {
+                                // R6-fix: 并发限制（最多1个并发下载）
+                                val json = JSONObject().apply {
+                                    put("ok", false)
+                                    put("error", "too_many_concurrent")
+                                }.toString()
+                                newFixedLengthResponse(Response.Status.TOO_MANY_REQUESTS, "application/json", json).apply {
+                                    addHeader("Access-Control-Allow-Origin", "*")
+                                }
+                            } else {
+                                lastHotloadTime = now
+                                Thread({
                                     try {
-                                        val conn = URL(HOTLOAD_URL).openConnection()
-                                        conn.connectTimeout = HOTLOAD_TIMEOUT / 2
-                                        conn.readTimeout = HOTLOAD_TIMEOUT / 2
-                                        html = conn.getInputStream().bufferedReader(Charsets.UTF_8).readText()
-                                    } catch (_: Exception) {}
-                                    // ghfast失败→直连GitHub
-                                    if (html == null || html.isEmpty() || !html.contains("poker")) {
-                                        try {
-                                            val conn2 = URL(HOTLOAD_URL_FALLBACK).openConnection()
-                                            conn2.connectTimeout = HOTLOAD_TIMEOUT
-                                            conn2.readTimeout = HOTLOAD_TIMEOUT
-                                            html = conn2.getInputStream().bufferedReader(Charsets.UTF_8).readText()
-                                        } catch (_: Exception) {}
-                                    }
-                                    // P1-R4-6: 基础安全检查——禁止包含可疑脚本标签
-                                    val htmlCheck = html
-                                    if (htmlCheck != null) {
-                                        val suspicious = listOf("eval(", "document.cookie", "localStorage",
-                                            "XMLHttpRequest", "fetch(", "WebSocket", "importScripts")
-                                        if (suspicious.any { htmlCheck.contains(it) }) {
-                                            android.util.Log.w(TAG, "热更新内容包含可疑代码，已拒绝")
-                                            html = null
+                                        // R6-fix: 原子标志防止并发修改
+                                        if (!hotloadInProgress.compareAndSet(false, true)) {
+                                            Log.w(TAG, "热更新已在进行中，跳过本次")
+                                            return@Thread
                                         }
-                                    }
-                                    if (html != null && html.isNotEmpty() && html.contains("poker") && html.length > 1000) {
-                                        pokerHelperHtml = html
-                                        hotloadSource = "remote"
-                                        try { File(filesDir, HOTLOAD_FILE).writeText(html, Charsets.UTF_8) } catch (_: Exception) {}
                                         try {
-                                            getSharedPreferences("poker_prefs", MODE_PRIVATE).edit().putBoolean("hotload_updated", true).apply()
-                                        } catch (_: Exception) {}
-                                    }
-                                } catch (_: Exception) {}
-                            }, "HotloadThread").start()
-                            // 立即返回"已触发"响应
-                            val json = JSONObject().apply {
-                                put("ok", true)
-                                put("status", "downloading")
-                            }.toString()
-                            newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                addHeader("Access-Control-Allow-Origin", "*")
+                                            var html: String? = null
+                                            // R6-fix: 使用safeReadUrl限制下载大小
+                                            html = safeReadUrl(HOTLOAD_URL, HOTLOAD_TIMEOUT / 2)
+                                            // ghfast失败→直连GitHub
+                                            if (html == null || html.isEmpty() || !html.contains("poker")) {
+                                                html = safeReadUrl(HOTLOAD_URL_FALLBACK, HOTLOAD_TIMEOUT)
+                                            }
+                                            // R6-fix: 增强安全检查（替代旧黑名单）
+                                            if (html != null && containsMaliciousCode(html)) {
+                                                Log.w(TAG, "热更新内容包含可疑代码，已拒绝")
+                                                html = null
+                                            }
+                                            if (html != null && html.isNotEmpty() && html.contains("poker") && html.length > 1000) {
+                                                pokerHelperHtml = html
+                                                hotloadSource = "remote"
+                                                try { File(filesDir, HOTLOAD_FILE).writeText(html, Charsets.UTF_8) } catch (_: Exception) {}
+                                                try {
+                                                    getSharedPreferences("poker_prefs", MODE_PRIVATE).edit().putBoolean("hotload_updated", true).apply()
+                                                } catch (_: Exception) {}
+                                            }
+                                        } finally {
+                                            hotloadInProgress.set(false)
+                                        }
+                                    } catch (_: Exception) {}
+                                    finally { hotloadSemaphore.release() }
+                                }, "HotloadThread").start()
+                                // 立即返回"已触发"响应
+                                val json = JSONObject().apply {
+                                    put("ok", true)
+                                    put("status", "downloading")
+                                }.toString()
+                                newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
+                                    addHeader("Access-Control-Allow-Origin", "*")
+                                }
                             }
                         }
                         // v2.9.35: 恢复本地版本
@@ -365,8 +477,7 @@ class HttpServerService : Service() {
                                 }
                                 Method.POST -> {
                                     try {
-                                        val files = HashMap<String, String>()
-                                        session.parseBody(files)
+                                        val files = safeParseBody(session)
                                         val postData = files["postData"] ?: ""
                                         val config = JSONObject(postData)
                                         val provider = config.optString("provider", "")
@@ -400,8 +511,7 @@ class HttpServerService : Service() {
                         // V2.9.47: 导出日志——接收JSON数据，触发Android分享
                         session.uri == "/api/export/history" && session.method == Method.POST -> {
                             try {
-                                val files = HashMap<String, String>()
-                                session.parseBody(files)
+                                val files = safeParseBody(session)
                                 // V2.9.75: NanoHTTPD 2.3.1默认UTF-8解码，直接用即可（旧代码ISO-8859-1→UTF-8转换反而把中文变成?）
                                 val postData = files["postData"] ?: ""
                                 // 保存到应用私有目录（Android 10+兼容，避免Scoped Storage限制）

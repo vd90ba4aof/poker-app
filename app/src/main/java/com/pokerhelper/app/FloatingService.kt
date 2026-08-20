@@ -190,6 +190,9 @@ class FloatingService : Service() {
     private val ERROR_LOG_FILE = "error_logs.txt"
     private val MAX_ERROR_LOGS = 50
     private var isBlinkingError = false
+    // R6-fix: addErrorLog文件写入频率限制（防I/O风暴导致ANR）
+    @Volatile private var lastErrorLogWriteTime = 0L
+    private const val ERROR_LOG_MIN_INTERVAL_MS = 1000L // 最少1秒写一次文件
     
     // V2.9.183: errorLogs文件持久化——防止重启丢失
     private fun loadErrorLogs() {
@@ -208,6 +211,10 @@ class FloatingService : Service() {
             errorLogs.add(entry)
             if (errorLogs.size > MAX_ERROR_LOGS) errorLogs.removeAt(0)
         }
+        // R6-fix: 文件写入频率限制，防止高频错误导致I/O风暴ANR
+        val now = System.currentTimeMillis()
+        if (now - lastErrorLogWriteTime < ERROR_LOG_MIN_INTERVAL_MS) return
+        lastErrorLogWriteTime = now
         try {
             File(filesDir, ERROR_LOG_FILE).appendText(entry + "\n", Charsets.UTF_8)
             // 滚动保留最近200行
@@ -536,6 +543,8 @@ class FloatingService : Service() {
     }
 
     private fun reinitializeComponents() {
+        // R6-fix: 先标记WebView不可用，阻断旧回调的JS调用
+        webViewReady = false
         // P1-R3-3: 先销毁旧WebView，防止内存泄漏和双重回调
         try {
             webView?.let { oldWv ->
@@ -546,8 +555,8 @@ class FloatingService : Service() {
             }
         } catch (_: Exception) {}
         webView = null
-        webViewReady = false
-        pendingJsCalls.clear()
+        // R6-fix: 清空待发送JS队列，防止旧回调触发后执行已失效的JS
+        synchronized(pendingJsCalls) { pendingJsCalls.clear() }
         
         // P1-fix: 先反注册再重新注册，防止重复注册导致IllegalArgumentException
         try { unregisterReceiver(notificationReceiver) } catch (_: Exception) {}
@@ -804,11 +813,13 @@ class FloatingService : Service() {
                 Log.w(TAG, "★ executeJs失败,WebView可能已销毁")
             }
         } else {
-            // P0-fix: JS队列上限，防止WebView永久未就绪时内存无限堆积
-            if (pendingJsCalls.size < _PENDING_JS_MAX) {
-                pendingJsCalls.add(js)
-            } else {
-                Log.w(TAG, "★ pendingJsCalls已满($_PENDING_JS_MAX)，丢弃JS调用")
+            // R6-fix: 原子化的check-then-act，防止竞态突破上限
+            synchronized(pendingJsCalls) {
+                if (pendingJsCalls.size < _PENDING_JS_MAX) {
+                    pendingJsCalls.add(js)
+                } else {
+                    Log.w(TAG, "★ pendingJsCalls已满($_PENDING_JS_MAX)，丢弃JS调用")
+                }
             }
         }
     }
@@ -2531,8 +2542,15 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                 val bmp = android.graphics.BitmapFactory.decodeByteArray(screenshot, 0, screenshot.size)
                 if (bmp != null) {
                     try { CardRecognizer.updateScreenSize(bmp.width, bmp.height) } catch (_: Exception) {}
-                    val sceneResult = sceneRecognizer!!.recognizeScene(bmp)
-                    bmp.recycle()
+                    var sceneResult: LocalSceneRecognizer.SceneResult? = null
+                    try {
+                        sceneResult = sceneRecognizer!!.recognizeScene(bmp)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "本地场景识别异常", e)
+                    } finally {
+                        // R6-fix: 确保Bitmap始终被回收，防止异常路径泄漏
+                        try { bmp.recycle() } catch (_: Exception) {}
+                    }
                     val tLocalEnd = System.currentTimeMillis()
                     val localElapsed = tLocalEnd - tLocalStart
 

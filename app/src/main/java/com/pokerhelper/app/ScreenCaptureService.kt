@@ -13,13 +13,13 @@ class ScreenCaptureService : android.app.Service() {
 
     companion object {
         var isRunning = false
-        var latestScreenshot: ByteArray? = null
+        @Volatile var latestScreenshot: ByteArray? = null
             internal set
         var captureCount: Int = 0
             internal set
-        var lastCaptureTime: Long = 0
+        @Volatile var lastCaptureTime: Long = 0
             internal set
-        var lastError: String = ""
+        @Volatile var lastError: String = ""
             internal set
         var lastChipStatus: String = ""
         // V3.42: 截图真实尺寸（Android 15显示缩放时截图≠屏幕尺寸）
