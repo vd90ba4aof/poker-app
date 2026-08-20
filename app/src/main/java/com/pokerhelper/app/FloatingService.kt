@@ -134,7 +134,12 @@ class FloatingService : Service() {
     private val FAST_PATH_MIN_CONFIDENCE = 0.85f
     private var screenWidth = 1080
     private var screenHeight = 2344
-    private var isVisionInProgress = false
+    // V3.50: Pipeline状态机 — 统一管理截屏→识别→策略→执行的全流程状态
+    // 替代原有的 isVisionInProgress 标志位，消除竞态条件和幽灵状态
+    private val pipelineFSM = PipelineStateMachine()
+    // isVisionInProgress 保留为兼容别名，实际逻辑全部走 pipelineFSM
+    // 读取：pipelineFSM.isPipelineActive()
+    // 设置：pipelineFSM.transition(event)
     private var autoConsecutiveErrors = 0
     private val AUTO_MAX_ERRORS = 3
     // V2.9.206: Shot Clock保护——记录上次决策时间，超时强制行动
@@ -822,11 +827,11 @@ class FloatingService : Service() {
             }
         }
     }
-    private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; isVisionInProgress=false; autoCaptureInterval=4000L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture(); try { bleManager?.startHeartbeatMonitor() } catch (_: Exception) {} }  // V1.0.35: 同步启动心跳
-    private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; handStartTime=0; isVisionInProgress=false; executeJs("if(typeof disableAutoExec==='function')disableAutoExec()"); try { bleManager?.stopHeartbeatMonitor() } catch (_: Exception) {} }  // V1.0.35: 同步停止心跳
+    private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; pipelineFSM.reset(); autoCaptureInterval=4000L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture(); try { bleManager?.startHeartbeatMonitor() } catch (_: Exception) {} }  // V1.0.35: 同步启动心跳 | V3.50: pipelineFSM.reset()替代isVisionInProgress=false
+    private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; handStartTime=0; pipelineFSM.reset(); executeJs("if(typeof disableAutoExec==='function')disableAutoExec()"); try { bleManager?.stopHeartbeatMonitor() } catch (_: Exception) {} }  // V1.0.35: 同步停止心跳 | V3.50: pipelineFSM.reset()替代isVisionInProgress=false
     private fun scheduleNextAutoCapture() {
         if(!autoCaptureEnabled)return; autoCaptureRunnable?.let{handler.removeCallbacks(it)}
-        val r=Runnable{if(!autoCaptureEnabled)return@Runnable;if(isVisionInProgress){scheduleNextAutoCapture();return@Runnable};val pm=getSystemService(Context.POWER_SERVICE)as PowerManager;if(!pm.isScreenOn){scheduleNextAutoCapture();return@Runnable};autoCaptureTrigger()}
+        val r=Runnable{if(!autoCaptureEnabled)return@Runnable;if(pipelineFSM.isPipelineActive()){scheduleNextAutoCapture();return@Runnable};val pm=getSystemService(Context.POWER_SERVICE)as PowerManager;if(!pm.isScreenOn){scheduleNextAutoCapture();return@Runnable};autoCaptureTrigger()}
         autoCaptureRunnable=r
         // V3.0: AntiDetection截屏间隔抖动（±15%随机+深夜降速50%）
         val jittered = try { AntiDetection.getSuggestedInterval(autoCaptureInterval) } catch (e: Exception) { autoCaptureInterval }
@@ -843,12 +848,12 @@ class FloatingService : Service() {
             }
             checkAutoErrors();scheduleNextAutoCapture();return
         }
-        isVisionInProgress=true
+        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.START_CAPTURE)  // V3.50: IDLE→CAPTURING（进入截屏态）
         hideOverlay()  // V2.9.190: 截屏前隐藏悬浮层
         ScreenOptService.onScreenshotReady={s->handler.post{
             showOverlay()  // V2.9.190: 截屏后恢复悬浮层
             if(s)processScreenshotAndAnalyze(isAutoCapture=true)else{
-                isVisionInProgress=false;autoConsecutiveErrors++
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL);autoConsecutiveErrors++  // V3.50: CAPTURING→ERROR_RECOVERY
                 // V3.44: 截屏回调失败也记录
                 if (autoConsecutiveErrors % 5 == 0) {
                     addErrorLog("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())} 自动截屏回调失败×${autoConsecutiveErrors}: ${ScreenCaptureService.lastError}")
@@ -872,7 +877,7 @@ class FloatingService : Service() {
             floatingBall?.visibility = android.view.View.VISIBLE
         } catch (_: Exception) {}
     }
-    fun onAutoCaptureVisionDone(success:Boolean){isVisionInProgress=false;if(success)autoConsecutiveErrors=0 else{autoConsecutiveErrors++;checkAutoErrors()};if(success)executeJs("if(typeof FrameDiffEngine!=='undefined')FrameDiffEngine.onAutoFrameDone()");scheduleNextAutoCapture()}
+    fun onAutoCaptureVisionDone(success:Boolean){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE);if(success)autoConsecutiveErrors=0 else{autoConsecutiveErrors++;checkAutoErrors()};if(success)executeJs("if(typeof FrameDiffEngine!=='undefined')FrameDiffEngine.onAutoFrameDone()");scheduleNextAutoCapture()}  // V3.50: pipelineFSM替代isVisionInProgress
     // V2.9.180: 全自动执行tap——根据action匹配按钮坐标并发送到ESP32
     private fun executeAutoTap(action: String, decisionData: org.json.JSONObject) {
         try {
@@ -887,7 +892,9 @@ class FloatingService : Service() {
             val now = System.currentTimeMillis()
             if (handStartTime > 0 && (now - handStartTime) > SHOT_CLOCK_TIMEOUT) {
                 Log.w(TAG, "★ Shot Clock timeout! ${(now - handStartTime)}ms since hand start, forcing emergency fold")
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SHOT_CLOCK_TIMEOUT)  // V3.50: 强制fold
                 executeAutoTapFallback("fold")
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)  // V3.50: 完成→IDLE
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }
                 lastDecisionTime = now
                 updateAdviceNotification("⏰ Shot Clock", "超时强制弃牌")
@@ -1161,11 +1168,11 @@ class FloatingService : Service() {
 
     private fun checkAutoErrors(){if(autoConsecutiveErrors>=AUTO_MAX_ERRORS){stopAutoCapture();updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:自动暂停");updateAdviceNotification("⚠️ 自动模式暂停","连续${AUTO_MAX_ERRORS}次错误")}}
     fun triggerMultiFrameCapture(){
-        if(!ScreenOptService.isServiceRunning())return;if(isVisionInProgress)return
-        isVisionInProgress=true
+        if(!ScreenOptService.isServiceRunning())return;if(!pipelineFSM.canCapture())return  // V3.50: FSM判断是否可截屏
+        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.START_CAPTURE)  // V3.50: IDLE→CAPTURING
         hideOverlay()  // V2.9.190: 截屏前隐藏悬浮层
         ScreenOptService.onScreenshotReady={s->handler.post{if(s){processScreenshotAndAnalyze(isMultiFrame1=true);handler.postDelayed({if(ScreenOptService.isServiceRunning()){ScreenOptService.onScreenshotReady={s2->handler.post{showOverlay()  // V2.9.190: 第二帧截屏后恢复悬浮层
-if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}else isVisionInProgress=false}};ScreenOptService.captureScreen()}},multiFrameDelay)}else{showOverlay();isVisionInProgress=false}}}
+if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);processScreenshotAndAnalyze(isMultiFrame2=true)}else pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)}};ScreenOptService.captureScreen()}},multiFrameDelay)}else{showOverlay();pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)}}}  // V3.50: FSM替代isVisionInProgress
         handler.postDelayed({ScreenOptService.captureScreen()}, 100)  // V2.9.192: 延迟100ms等View渲染
     }
     fun setAutoCaptureSpeed(ms:Long){autoCaptureInterval=ms.coerceIn(1500L,10000L);if(autoCaptureEnabled)scheduleNextAutoCapture()}
@@ -1175,8 +1182,9 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
      */
     private fun triggerCapture() {
         // P2-fix: 防止手动截屏与自动截屏/多帧截屏同时触发导致回调被覆盖
-        if (isVisionInProgress) {
-            Log.w(TAG, "★ triggerCapture被忽略: 上一次识别尚未完成")
+        // V3.50: 用状态机判断pipeline是否活跃
+        if (!pipelineFSM.canCapture()) {
+            Log.w(TAG, "★ triggerCapture被忽略: 上一次识别尚未完成 (state=${pipelineFSM.getCurrentState()})")
             return
         }
         Log.d(TAG, "★ triggerCapture开始: webViewReady=$webViewReady, stealth=$isStealthMode, screenOpt=${ScreenOptService.isServiceRunning()}, apiKey=${VisionApiClient.apiKey.takeLast(4)}")
@@ -1192,16 +1200,19 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
         updateAdviceNotification("1/4 截屏中", "无障碍=${ScreenOptService.isServiceRunning()}")
 
         if (ScreenOptService.isServiceRunning()) {
+            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.START_CAPTURE)  // V3.50: IDLE→CAPTURING
             hideOverlay()  // V2.9.190: 截屏前隐藏悬浮层
             ScreenOptService.onScreenshotReady = { success ->
                 handler.post {
                     showOverlay()  // V2.9.190: 截屏后恢复悬浮层
                     if (success) {
-                        Log.d(TAG, "★ 截屏成功，进入processScreenshotAndAnalyze")
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK)  // V3.50: CAPTURING→RECOGNIZING_LOCAL
+                        Log.d(TAG, "★ 截屏成功，进入processScreenshotAndAnalyze (state=${pipelineFSM.getCurrentState()})")
                         manualErrorCount = 0  // V2.9.184: 重置手动截屏错误计数
                         updateAdviceNotification("2/4 截屏成功", "正在调用API识别...")
                         processScreenshotAndAnalyze()
                     } else {
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)  // V3.50: CAPTURING→ERROR_RECOVERY
                         Log.e(TAG, "★ 截屏失败: ${ScreenCaptureService.lastError}")
                         manualErrorCount++  // V2.9.184: 手动截屏失败计数
                         val errMsg = if (manualErrorCount >= 5) "⚠️ 连续${manualErrorCount}次失败，请检查无障碍" else "❌ 截图失败，请重试"
@@ -1640,7 +1651,10 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         val confidence = data.optString("confidence", "medium")
                         val reason = data.optString("reason", "")
                         val eq = data.optInt("eq", 0)
-                        Log.d(TAG, "★ autoDecision收到决策: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq% json=${jsonData.take(200)}")
+                        Log.d(TAG, "★ autoDecision收到决策: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq% json=${jsonData.take(200)} | state=${pipelineFSM.getCurrentState()}")
+                        
+                        // V3.50: 策略引擎回调完成 → 进入执行阶段
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)  // STRATEGY_COMPUTING→EXECUTING
                         
                         // V2.9.503: pipeline耗时——JS决策完成时刻
                         if (_diagStartTime > 0) {
@@ -1650,7 +1664,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         }
                         
                         if (!auto) {
-                            // 需要人工确认（如中置信+全押）
+                            // 需要人工确认（如中置信+全押）→ 不执行BLE，回到空闲
+                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)  // V3.50: 需确认→IDLE（等待下一帧）
                             updateAdviceNotification("⚠️ 需确认: $action", "$reason (eq=$eq%)")
                             updateBallAdvice("COLOR:CHECK|SIGNAL:ALLIN_NEED|EQ:$eq|REASON:全押需确认")
                             return@post
@@ -2406,7 +2421,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
 
                     if (sceneResult != null && sceneRecognizer!!.isValidResult(sceneResult)) {
                         // ✅ 本地识别成功 → 直接驱动策略引擎
-                        Log.i(TAG, "★ 本地场景识别成功: ${localElapsed}ms | hand=${sceneResult.holeCards.map{"${it.rank}${it.suit}"}} board=${sceneResult.communityCards.map{"${it.rank}${it.suit}"}} street=${sceneResult.street} pot=${sceneResult.potSize} toCall=${sceneResult.toCall} D=${sceneResult.dButtonPosition}")
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.LOCAL_RECOG_OK)  // V3.50: RECOGNIZING_LOCAL→STRATEGY_COMPUTING
+                        Log.i(TAG, "★ 本地场景识别成功: ${localElapsed}ms | hand=${sceneResult.holeCards.map{"${it.rank}${it.suit}"}} board=${sceneResult.communityCards.map{"${it.rank}${it.suit}"}} street=${sceneResult.street} pot=${sceneResult.potSize} toCall=${sceneResult.toCall} D=${sceneResult.dButtonPosition} | state=${pipelineFSM.getCurrentState()}")
 
                         // 更新场景缓存（供fallback和下一帧使用）
                         cachedPotSize = sceneResult.potSize
@@ -2479,11 +2495,13 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
 
                         return  // 跳过API主通道
                     } else {
-                        Log.w(TAG, "本地场景识别结果无效(hand=${sceneResult?.holeCards?.size} pot=${sceneResult?.potSize}), 降级到API")
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.LOCAL_RECOG_FAIL)  // V3.50: RECOGNIZING_LOCAL→RECOGNIZING_API
+                        Log.w(TAG, "本地场景识别结果无效(hand=${sceneResult?.holeCards?.size} pot=${sceneResult?.potSize}), 降级到API | state=${pipelineFSM.getCurrentState()}")
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "本地场景识别异常, 降级到API", e)
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.LOCAL_RECOG_FAIL)  // V3.50: RECOGNIZING_LOCAL→RECOGNIZING_API
+                Log.e(TAG, "本地场景识别异常, 降级到API | state=${pipelineFSM.getCurrentState()}", e)
             }
         }
         // 有API Key → 调用视觉模型识别牌面（本地CV已锁牌时只补充场景信息）
@@ -2502,8 +2520,9 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     Log.w(TAG, "★ Shot Clock HARD TIMEOUT! ${(System.currentTimeMillis() - handStartTime)}ms, forcing fold")
                     handStartTime = 0
                     lastDecisionTime = System.currentTimeMillis()
-                    isVisionInProgress = false
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SHOT_CLOCK_TIMEOUT)  // V3.50: 任意状态→EXECUTING(强制fold)
                     executeAutoTapFallback("fold")
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)  // V3.50: 执行完毕→IDLE
                     updateAdviceNotification("⏰ Shot Clock", "超时强制弃牌(硬超时)")
                     updateBallAdvice("COLOR:FOLD|SIGNAL:TIMEOUT|REASON:Shot Clock超时")
                     scheduleNextAutoCapture()
@@ -2516,10 +2535,11 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
             Log.w(TAG, "★ Shot Clock pre-check: ${(tAnalyzeStart - handStartTime)}ms, skip VLM and force fold")
             handStartTime = 0
             lastDecisionTime = tAnalyzeStart
+            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SHOT_CLOCK_TIMEOUT)  // V3.50: 强制fold
             executeAutoTapFallback("fold")
+            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)  // V3.50: 完成→IDLE
             updateAdviceNotification("⏰ Shot Clock", "超时强制弃牌(预检)")
             updateBallAdvice("COLOR:FOLD|SIGNAL:TIMEOUT|REASON:Shot Clock超时")
-            isVisionInProgress = false
             scheduleNextAutoCapture()
             return
         }
@@ -2565,7 +2585,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     val isNoTable = modelSaysNoTable || noTableSignals >= 2
                     Log.d(TAG, "★ NO_TABLE检测: isPokerTable=${result.isPokerTable} noHole=$noHoleCards noD=$noDButton noBtn=$noPokerButtons signals=$noTableSignals result=$isNoTable")
                     if (isNoTable) {
-                        Log.w(TAG, "★ NO_TABLE判定: 不在牌桌(signals=$noTableSignals), dButton=${result.dButtonPosition}, buttons=${result.buttons}")
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.NO_TABLE_DETECTED)  // V3.50: 任意状态→IDLE
+                        Log.w(TAG, "★ NO_TABLE判定: 不在牌桌(signals=$noTableSignals), dButton=${result.dButtonPosition}, buttons=${result.buttons} | state=${pipelineFSM.getCurrentState()}")
                         // V2.9.207: NO_TABLE时重置handStartTime和场景缓存，避免累积超时和使用过期数据
                         handStartTime = 0
                         _shotClockRunnable?.let { handler.removeCallbacks(it) }
@@ -2693,9 +2714,9 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                         executeJs("(function(){try{if(typeof onVisionResult==='function'){onVisionResult($taggedJson);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.confirmVisionReceived){AndroidBridge.confirmVisionReceived()}}else{console.log('[V2.9.125] onVisionResult不存在,尝试重载HTML');if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:策略引擎未加载');}setTimeout(function(){location.reload();},1000);}}catch(e){console.log('[V2.9.125] onVisionResult异常:'+e.message);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:JS异常:'+e.message.substring(0,30));}}})()")
                         tvAction?.alpha = 1.0f
                         Log.d(TAG, "★ onVisionResult已调用")
-                        // V3.43: 关键修复 — API结果已发给JS，无论JS是否回调都重置isVisionInProgress
-                        // (之前依赖JS的autoCaptureVisionComplete回调,但HTML只在verify帧调它→普通帧永远卡死)
-                        isVisionInProgress = false
+                        // V3.50: API结果已发给JS → 进入策略计算状态
+                        // (之前用isVisionInProgress=false标记完成,现在用FSM精确追踪到STRATEGY_COMPUTING)
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.API_RECOG_OK)  // V3.50: RECOGNIZING_API→STRATEGY_COMPUTING
                         autoConsecutiveErrors = 0
                         // V2.9.70: 正常识别→停止闪烁
                         isBlinkingError = false
@@ -2739,8 +2760,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                     } // V2.9.111: end of NO_TABLE else (正常牌桌才执行策略)
                 } else {
                     handler.post {
-                        // V3.43: API失败也重置isVisionInProgress（防卡死）
-                        isVisionInProgress = false
+                        // V3.50: API失败→进入错误恢复
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.API_RECOG_FAIL)  // RECOGNIZING_API→ERROR_RECOVERY
                         // V3.44: API失败→自动重试防卡死（与lxpk对齐）
                         autoConsecutiveErrors++
                         checkAutoErrors()
@@ -2760,8 +2781,8 @@ if(s2){isVisionInProgress=false;processScreenshotAndAnalyze(isMultiFrame2=true)}
                 }
             } catch (e: Exception) {
                 handler.post {
-                    // V3.43: 异常也重置isVisionInProgress（防卡死）
-                    isVisionInProgress = false
+                    // V3.50: 异常→进入错误恢复
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.API_RECOG_FAIL)  // 任意识别状态→ERROR_RECOVERY
                     tvAction?.alpha = 1.0f
                     tvStatus?.text = "❌ API错误"
                     executeJs("document.body.classList.remove('api-processing')")
