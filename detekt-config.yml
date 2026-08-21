@@ -1,0 +1,76 @@
+# V2.9.506: Detekt 静态分析配置
+# 针对青云扑克项目定制 — 只开启对项目最有价值的规则
+
+build:
+  maxIssues: 999  # 只报告不阻断构建
+  excludeCorrectable: false
+
+complexity:
+  active: true
+  LongMethod:
+    active: true
+    threshold: 120  # 超过120行算过长
+  ComplexCondition:
+    active: true
+    threshold: 5
+  TooManyFunctions:
+    active: false  # 项目大文件多，不限制
+  NestedBlockDepth:
+    active: true
+    threshold: 5
+  LongParameterList:
+    active: false  # Android 回调参数多，关闭
+
+empty-blocks:
+  active: true
+  EmptyCatchBlock:
+    active: true
+    allowedExceptionNameRegex: "_|(ignore|expected).*"
+  EmptyFunctionBlock:
+    active: true
+    ignoreOverridden: true
+
+exceptions:
+  active: true
+  TooGenericExceptionCaught:
+    active: false  # 项目需要大量 try-catch (Exception) 做容错
+  SwallowedException:
+    active: false
+  ThrowingExceptionsWithoutMessageOrCause:
+    active: true
+
+naming:
+  active: true
+  FunctionNaming:
+    active: false  # JS bridge 方法用驼峰
+  TopLevelPropertyNaming:
+    active: false
+
+performance:
+  active: true
+  SpreadOperator:
+    active: false  # 项目常用
+  ForEachOnRange:
+    active: true
+
+potential-bugs:
+  active: true
+  UnsafeCast:
+    active: true
+  UnsafeCallOnNullableType:
+    active: true
+  CastToNullableType:
+    active: true
+
+style:
+  active: true
+  MagicNumber:
+    active: false  # 扑克项目数值常量多
+  ReturnCount:
+    active: false
+  NewLineAtEndOfFile:
+    active: false
+  WildcardImport:
+    active: true
+  UnusedImports:
+    active: true

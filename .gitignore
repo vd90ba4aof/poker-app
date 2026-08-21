@@ -1,0 +1,59 @@
+# Ignore Gradle files
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Ignore Android files
+*.apk
+*.ap_
+*.dex
+*.class
+
+# Ignore local config
+local.properties
+
+# === 清理项 2026-08-18 ===
+.gradle_local/
+gradle-local/
+gradle-*.zip
+jdk-*/
+jdk*.tar.gz
+*-debug*.zip
+*-latest*.zip
+poker-v*.zip
+lxpk_*.kt
+lxpk_*.js
+lxpk_compare/
+check_qingyun_*.js
+fix_dead_code.py
+upgrade_engine_*.py
+temp_all_js.js
+*_report.md
+ISSUES_*.md
+*.bak_fix*
+codeact/
+yolo-training/best.onnx
+yolo-training/onnx_pkg/
+
+# Archived files (local only)
+archived/
+
+# Test outputs (local only)
+test_output/
+yolo_result.json
+
+# Local gh state
+.local/
+
+# Annotated images (local only)
+annotated_*.jpg
+annotated_*.png
+
+# Debug/verification screenshots (local only)
+debug_*.png
+verification_output/
+
+# Backup files
+*.bak
+*.bak_*
+app/src/main/assets/poker_helper_v*_backup.html
