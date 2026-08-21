@@ -1061,7 +1061,7 @@ class FloatingService : Service() {
                 _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
                 _pipelineLastAction = action
                 try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, action) } catch (_: Exception) {}
-                Log.i(TAG, "★ Pipeline: 截图→ESP32点击=${_pipelineEsp32TapTimeMs}ms (本地CV=${_diagLocalCVTimeMs}ms + JS决策=${_pipelineJsDecisionTimeMs}ms)")
+                Log.i(TAG, "★ Pipeline: 截图→ESP32点击=${_pipelineEsp32TapTimeMs}ms (JS决策=${_pipelineJsDecisionTimeMs}ms)")
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                 Log.d(TAG, "executeAutoTap 结果: 成功 (坐标点击)")
                 startBleExecWithAckTimeout()  // P0-fix#3: 等ESP32 ACK或2s乐观超时
@@ -1759,7 +1759,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                         
                         // V2.9.503: pipeline耗时——JS决策完成时刻
                         if (_diagStartTime > 0) {
-                            _pipelineJsDecisionTimeMs = System.currentTimeMillis() - _diagStartTime - _diagLocalCVTimeMs
+                            _pipelineJsDecisionTimeMs = System.currentTimeMillis() - _diagStartTime
                             _pipelineLastAction = action
                             Log.d(TAG, "★ Pipeline: JS决策耗时=${_pipelineJsDecisionTimeMs}ms (总=${System.currentTimeMillis()-_diagStartTime}ms)")
                         }

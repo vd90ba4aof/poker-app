@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 /**
@@ -1196,22 +1197,22 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var commResult: Pair<List<CardInfo>, String>? = null
                 var potResult: Long? = null
                 
-                kotlinx.coroutines.runBlocking {
-                    kotlinx.coroutines.coroutineScope {
+                runBlocking {
+                    coroutineScope {
                         val handJob = if (handBase64 != null) {
-                            kotlinx.coroutines.async(Dispatchers.IO) {
+                            async(Dispatchers.IO) {
                                 recognizeHandCards(handBase64)
                             }
                         } else null
                         
                         val commJob = if (commBase64 != null) {
-                            kotlinx.coroutines.async(Dispatchers.IO) {
+                            async(Dispatchers.IO) {
                                 recognizeCommunityCards(commBase64)
                             }
                         } else null
                         
                         val potJob = if (potBase64 != null) {
-                            kotlinx.coroutines.async(Dispatchers.IO) {
+                            async(Dispatchers.IO) {
                                 recognizePotAmount(potBase64)
                             }
                         } else null
@@ -1231,7 +1232,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     isPokerTable = true,
                     holeCards = handResult?.first ?: emptyList(),
                     communityCards = commResult?.first ?: emptyList(),
-                    potSize = potResult ?: 0,
+                    potSize = (potResult ?: 0L).toInt(),
                     playerChips = 0,
                     totalPlayers = 6,
                     activePlayers = 2,
@@ -1440,26 +1441,6 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             Log.e(TAG, "解析底池响应失败: ${e.message}")
             null
         }
-    }
-    
-    /**
-     * 从响应中提取JSON
-     */
-    private fun extractJson(response: String): String? {
-        // 尝试直接解析
-        try {
-            JSONObject(response)
-            return response
-        } catch (_: Exception) {}
-        
-        try {
-            JSONArray(response)
-            return response
-        } catch (_: Exception) {}
-        
-        // 尝试从响应中提取JSON
-        val jsonMatch = Regex("[\\[{][\\s\\S]*[\\]}]").find(response)
-        return jsonMatch?.value
     }
     
     /**
