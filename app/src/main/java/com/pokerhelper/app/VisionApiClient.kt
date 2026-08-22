@@ -1266,30 +1266,32 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 Log.d(TAG, "⏱ 并发API: ${t3 - t2}ms (牌面=${boardResult != null}, 操作区=${actionResult != null})")
 
                 // 10. 更新缓存（用预计算的hash，bitmap此时已recycle）
-                if (boardResult != null) {
-                    if (needHandApi && boardResult.handCards.size == 2 && handHash != null) {
-                        RegionCropper.updateHandCacheWithHash(handHash, boardResult.handCards)
-                        holeCards = boardResult.handCards
+                // 用局部val避免var被闭包捕获导致smart cast失败
+                val board = boardResult
+                if (board != null) {
+                    if (needHandApi && board.handCards.size == 2 && handHash != null) {
+                        RegionCropper.updateHandCacheWithHash(handHash, board.handCards)
+                        holeCards = board.handCards
                     }
                     for ((i, idx) in newCommIndices.withIndex()) {
-                        if (i < boardResult.commCards.size && i < newCommHashes.size) {
-                            RegionCropper.updateCommCacheWithHash(idx, newCommHashes[i], boardResult.commCards[i])
+                        if (i < board.commCards.size && i < newCommHashes.size) {
+                            RegionCropper.updateCommCacheWithHash(idx, newCommHashes[i], board.commCards[i])
                         }
                     }
-                    if (needPotApi && boardResult.potAmount > 0 && potHash != null) {
-                        RegionCropper.updatePotCacheWithHash(potHash, boardResult.potAmount)
-                        potValue = boardResult.potAmount
+                    if (needPotApi && board.potAmount > 0 && potHash != null) {
+                        RegionCropper.updatePotCacheWithHash(potHash, board.potAmount)
+                        potValue = board.potAmount
                     }
                 }
 
                 // 11. 获取最终牌面数据
-                val finalHoleCards = holeCards ?: boardResult?.handCards ?: emptyList()
+                val finalHoleCards = holeCards ?: board?.handCards ?: emptyList()
                 val finalCommCards = if (newCommIndices.isEmpty() && !needHandApi) {
                     RegionCropper.getCachedCommunityCards()
                 } else {
-                    mergeCommCards(newCommIndices, boardResult?.commCards ?: emptyList())
+                    mergeCommCards(newCommIndices, board?.commCards ?: emptyList())
                 }
-                val finalPot = (potValue ?: boardResult?.potAmount ?: 0L).toInt()
+                val finalPot = (potValue ?: board?.potAmount ?: 0L).toInt()
 
                 // 12. 构建结果
                 val action = actionResult
