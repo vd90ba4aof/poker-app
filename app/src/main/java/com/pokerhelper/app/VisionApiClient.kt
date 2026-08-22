@@ -1458,20 +1458,20 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             when {
                 // 弃牌 — 左
                 b.contains("弃牌") || b.contains("fold", ignoreCase = true) -> {
-                    positions.add(ButtonPosition(b, 0.181, 0.960))
+                    positions.add(ButtonPosition(b, 0.181, 0.974))
                 }
                 // 让牌/过牌 — 中
                 b.contains("让牌") || b.contains("过牌") || b.equals("check", ignoreCase = true) -> {
-                    positions.add(ButtonPosition(b, 0.500, 0.960))
+                    positions.add(ButtonPosition(b, 0.500, 0.974))
                 }
                 // 跟注 — 中
                 b.contains("跟注") || b.contains("call", ignoreCase = true) -> {
-                    positions.add(ButtonPosition(b, 0.500, 0.960))
+                    positions.add(ButtonPosition(b, 0.500, 0.974))
                 }
                 // 加注/下注 — 右
                 (b.contains("加注") || b.contains("下注") || b.contains("bet", ignoreCase = true) ||
                      b.contains("raise", ignoreCase = true)) && !b.contains("%") -> {
-                    positions.add(ButtonPosition(b, 0.819, 0.960))
+                    positions.add(ButtonPosition(b, 0.819, 0.974))
                     rightSlotUsed = true
                 }
                 // 全下/全押
@@ -1494,10 +1494,10 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // 其他按钮（Insurance/Cashout等）— 放到右侧
                 else -> {
                     if (!rightSlotUsed) {
-                        positions.add(ButtonPosition(b, 0.819, 0.960))
+                        positions.add(ButtonPosition(b, 0.819, 0.974))
                         rightSlotUsed = true
                     } else {
-                        positions.add(ButtonPosition(b, 0.500, 0.960))
+                        positions.add(ButtonPosition(b, 0.500, 0.974))
                     }
                 }
             }

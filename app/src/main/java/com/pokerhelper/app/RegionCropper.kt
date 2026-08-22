@@ -24,22 +24,22 @@ object RegionCropper {
 
     data class RegionRect(val x1: Int, val y1: Int, val x2: Int, val y2: Int)
 
-    // ===== 手牌区域（标注实测：左下角）=====
-    // 从annotated_coords.jpg实测：手牌约在 x=45-310, y=1730-1935
-    private val HAND_0 = RegionRect(45, 1735, 170, 1935)
-    private val HAND_1 = RegionRect(150, 1735, 310, 1935)
+    // ===== 手牌区域（基于Screenshot_2026-08-14干净截图实测）=====
+    // 2张手牌在底部偏左，重叠式扇出，直接裁整体区域
+    private val HAND_0 = RegionRect(35, 1745, 175, 1945)
+    private val HAND_1 = RegionRect(165, 1745, 325, 1945)
 
-    // ===== 公共牌区域（5张，标注实测）=====
-    // 从annotated_coords.jpg实测：y≈1060-1330
-    private val COMM_0 = RegionRect(162, 1060, 310, 1330)
-    private val COMM_1 = RegionRect(318, 1060, 466, 1330)
-    private val COMM_2 = RegionRect(474, 1060, 622, 1330)
-    private val COMM_3 = RegionRect(630, 1060, 778, 1330)
-    private val COMM_4 = RegionRect(786, 1060, 934, 1330)
+    // ===== 公共牌区域（5张，基于Screenshot_2026-08-14干净截图实测）=====
+    // 每张宽约130px，间距约20px，y≈1068-1272
+    private val COMM_0 = RegionRect(166, 1068, 310, 1272)
+    private val COMM_1 = RegionRect(316, 1068, 460, 1272)
+    private val COMM_2 = RegionRect(466, 1068, 610, 1272)
+    private val COMM_3 = RegionRect(616, 1068, 760, 1272)
+    private val COMM_4 = RegionRect(766, 1068, 910, 1272)
 
-    // ===== 底池金额区域（公共牌正下方）=====
-    // 标注实测：底池数字在公共牌下方 y≈1335-1395
-    private val POT_AMOUNT = RegionRect(380, 1335, 700, 1400)
+    // ===== 底池金额区域（公共牌正下方，含"底池"标签+数字）=====
+    // 实测：y≈1240-1310
+    private val POT_AMOUNT = RegionRect(380, 1240, 700, 1310)
 
     // ===== 操作区（底部按钮+筹码+预设）=====
     // 包含：主操作按钮（y≈2140-2340）、预设按钮（x≈730-1060, y≈1640-2130）、
