@@ -305,6 +305,9 @@ class FloatingService : Service() {
         // V2.9.503: 初始化诊断日志器（获取Context以使用应用私有目录）
         DiagnosticLogger.init(this)
 
+        // V2.9.518: 初始化本地CV识别引擎
+        VisionApiClient.initContext(this)
+
         val notification = createNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)

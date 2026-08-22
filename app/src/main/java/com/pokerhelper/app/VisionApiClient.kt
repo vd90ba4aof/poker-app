@@ -32,7 +32,23 @@ import kotlinx.coroutines.withContext
 object VisionApiClient {
 
     private const val TAG = "VisionAPI"
-    
+
+    // V2.9.518: Application context for LocalCardRecognizer
+    @Volatile
+    private lateinit var appContext: Context
+
+    fun initContext(context: Context) {
+        if (!::appContext.isInitialized) {
+            appContext = context.applicationContext
+            // 预加载本地CV模板
+            try { LocalCardRecognizer.getInstance(appContext) } catch (_: Exception) {}
+        }
+    }
+
+    private val context: Context
+        get() = if (::appContext.isInitialized) appContext
+                else throw IllegalStateException("VisionApiClient.initContext() not called")
+
     // P0-R4-1: 分析锁——防止并发修改共享状态
     private val analyzeLock = java.util.concurrent.locks.ReentrantLock()
     
@@ -1179,34 +1195,63 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
 
                 RegionCropper.init(screenWidth, screenHeight)
 
+                // ===== V2.9.518: 本地CV牌面识别（毫秒级）=====
+                val localRecognizer = LocalCardRecognizer.getInstance(context)
+                var localHoleCards: List<CardInfo>? = null
+                var localCommCards: List<CardInfo>? = null
+
+                try {
+                    val tLocal = System.currentTimeMillis()
+                    val (localHands, localComms) = localRecognizer.recognizeAllCards(screenshotBmp)
+                    if (localHands.size == 2) {
+                        localHoleCards = localHands.map { CardInfo(it.rank, it.suit) }
+                    }
+                    // 公共牌：本地CV能稳定识别0-5张，空列表=翻前无公共牌也是有效结果
+                    localCommCards = localComms.map { CardInfo(it.rank, it.suit) }
+                    val minCommConf = if (localComms.isNotEmpty()) localComms.minOf { it.confidence } else 1.0f
+                    Log.d(TAG, "🔍 本地CV: ${System.currentTimeMillis() - tLocal}ms | " +
+                            "hand=${localHands.map { "${it.rank}${it.suit}(${it.confidence})" }} | " +
+                            "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }} minConf=$minCommConf")
+                } catch (e: Exception) {
+                    Log.w(TAG, "本地CV失败，将使用VLM: ${e.message}")
+                }
+
+                // 本地CV置信度阈值（任一张低于阈值则VLM兜底）
+                val LOCAL_CONFIDENCE_THRESHOLD = 0.75f
+                val localHandOk = localHoleCards != null && localHoleCards!!.size == 2
+                // 公共牌：手牌识别成功时信任本地结果（含空列表=翻前）
+                val localCommOk = localHoleCards != null
+
                 // 2. 裁剪操作区（每帧必识别）
                 val actionBmp = RegionCropper.cropActionArea(screenshotBmp)
                 val actionBase64 = actionBmp?.let { bitmapToBase64(it, quality = 80) }
 
-                // 3. 裁剪牌面
+                // 3. 裁剪牌面（本地CV已识别手牌/公共牌，仅VLM兜底时需要）
+                val needHandApi = !localHandOk
+                val needBoardApi = needHandApi || !localCommOk
+
                 val (handStitch, handBitmaps) = RegionCropper.cropHandCards(screenshotBmp)
                 val (boardMerged, commBitmaps, potBmp) = RegionCropper.cropBoardArea(screenshotBmp)
 
                 val t1 = System.currentTimeMillis()
                 Log.d(TAG, "⏱ 区域裁剪: ${t1 - t0}ms")
 
-                // 4. 手牌缓存检查
-                var holeCards: List<CardInfo>? = RegionCropper.checkHandCache(handStitch)
-                var needHandApi = holeCards == null
-                val handHash = if (needHandApi && handStitch != null) RegionCropper.bitmapHash(handStitch) else null
-                if (needHandApi) {
-                    Log.d(TAG, "♠ 手牌缓存未命中，需API识别 (hash=${handHash?.take(8)})")
+                // 4. 手牌缓存检查（本地CV成功时跳过）
+                var holeCards: List<CardInfo>? = if (localHandOk) localHoleCards else RegionCropper.checkHandCache(handStitch)
+                var needHandApiFinal = holeCards == null
+                val handHash = if (needHandApiFinal && handStitch != null) RegionCropper.bitmapHash(handStitch) else null
+                if (needHandApiFinal) {
+                    Log.d(TAG, "♠ 手牌需API识别 (本地CV=${if (localHandOk) "OK" else "失败"})")
                 }
 
-                // 5. 新手牌检测：手牌hash变化 → 清空公共牌/底池缓存
-                //    注意：第一帧prevHandHash为null，不清缓存（正常启动）
-                if (needHandApi && RegionCropper.isNewHand(handHash)) {
+                // 5. 新手牌检测
+                if (needHandApiFinal && RegionCropper.isNewHand(handHash)) {
                     RegionCropper.clearBoardCache()
                     Log.d(TAG, "🆕 新手牌检测到，公共牌/底池缓存已清空")
                 }
 
-                // 6. 公共牌增量检查：找出新出现的牌格
-                val newCommIndices = RegionCropper.findNewCommCards(commBitmaps)
+                // 6. 公共牌增量检查（本地CV成功时直接使用本地结果）
+                val newCommIndices = if (localCommOk) emptyList() else RegionCropper.findNewCommCards(commBitmaps)
                 val newCommHashes = newCommIndices.map { idx ->
                     RegionCropper.bitmapHash(commBitmaps.getOrNull(idx))
                 }
@@ -1216,11 +1261,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var needPotApi = potValue == null
                 val potHash = if (needPotApi && potBmp != null) RegionCropper.bitmapHash(potBmp) else null
 
-                // 7. 构建牌面API图
-                // 需要识别什么就拼什么：新手牌+新公共牌+底池
+                // 7.5 构建牌面API图（仅在本地CV失败时）
                 val boardParts = mutableListOf<Bitmap>()
-                if (needHandApi && handStitch != null) boardParts.add(handStitch)
-                // 新出现的公共牌
+                if (needHandApiFinal && handStitch != null) boardParts.add(handStitch)
                 val newCommBitmaps = newCommIndices.mapNotNull { idx -> commBitmaps.getOrNull(idx) }
                 if (newCommBitmaps.isNotEmpty()) {
                     val newCommStitch = stitchBitmapsHorizontally(newCommBitmaps, gap = 6)
@@ -1234,7 +1277,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val boardBase64 = boardApiBitmap?.let { bitmapToBase64(it, quality = 75) }
 
                 val t2 = System.currentTimeMillis()
-                Log.d(TAG, "⏱ 缓存检查+编码: ${t2 - t1}ms (手API=$needHandApi, 新公共牌=${newCommIndices.size}张, 底池API=$needPotApi)")
+                Log.d(TAG, "⏱ 缓存+编码: ${t2 - t1}ms (本地CV hand=$localHandOk comm=$localCommOk, 手API=$needHandApiFinal, 新公共牌=${newCommIndices.size}张, 底池API=$needPotApi)")
 
                 // 8. 释放中间bitmap（保留screenshotBmp直到不需要）
                 // boardApiBitmap在多部件拼接时是新建bitmap，需回收；单部件时与boardParts元素同一对象，isRecycled检查保证安全
@@ -1246,14 +1289,14 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 RegionCropper.recycleBitmaps(handStitch)
                 screenshotBmp.recycle()
 
-                // 9. 并发API调用
+                // 9. 并发API调用（牌面仅本地CV失败时才调API）
                 var boardResult: BoardRecognitionResult? = null
                 var actionResult: ActionAreaResult? = null
 
                 runBlocking {
                     coroutineScope {
-                        val boardJob = if (boardBase64 != null) {
-                            async(Dispatchers.IO) { recognizeBoardArea(boardBase64, needHandApi, newCommIndices.size, needPotApi) }
+                        val boardJob = if (boardBase64 != null && needBoardApi) {
+                            async(Dispatchers.IO) { recognizeBoardArea(boardBase64, needHandApiFinal, newCommIndices.size, needPotApi) }
                         } else null
                         val actionJob = if (actionBase64 != null) {
                             async(Dispatchers.IO) { recognizeActionArea(actionBase64) }
@@ -1265,13 +1308,12 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 }
 
                 val t3 = System.currentTimeMillis()
-                Log.d(TAG, "⏱ 并发API: ${t3 - t2}ms (牌面=${boardResult != null}, 操作区=${actionResult != null})")
+                Log.d(TAG, "⏱ 并发API: ${t3 - t2}ms (牌面=${boardResult != null}, 操作区=${actionResult != null}, 本地CV=hand:$localHandOk/comm:$localCommOk)")
 
-                // 10. 更新缓存（用预计算的hash，bitmap此时已recycle）
-                // 用局部val避免var被闭包捕获导致smart cast失败
+                // 10. 更新缓存
                 val board = boardResult
                 if (board != null) {
-                    if (needHandApi && board.handCards.size == 2 && handHash != null) {
+                    if (needHandApiFinal && board.handCards.size == 2 && handHash != null) {
                         RegionCropper.updateHandCacheWithHash(handHash, board.handCards)
                         holeCards = board.handCards
                     }
@@ -1286,12 +1328,17 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     }
                 }
 
-                // 11. 获取最终牌面数据
-                val finalHoleCards = holeCards ?: board?.handCards ?: emptyList()
-                val finalCommCards = if (newCommIndices.isEmpty() && !needHandApi) {
-                    RegionCropper.getCachedCommunityCards()
-                } else {
-                    mergeCommCards(newCommIndices, board?.commCards ?: emptyList())
+                // 11. 获取最终牌面数据（本地CV优先）
+                val finalHoleCards = when {
+                    localHandOk -> localHoleCards!!
+                    holeCards != null -> holeCards!!
+                    board != null -> board.handCards
+                    else -> emptyList()
+                }
+                val finalCommCards = when {
+                    localCommOk -> localCommCards!!
+                    newCommIndices.isEmpty() && !needHandApiFinal -> RegionCropper.getCachedCommunityCards()
+                    else -> mergeCommCards(newCommIndices, board?.commCards ?: emptyList())
                 }
                 val finalPot = (potValue ?: board?.potAmount ?: 0L).toInt()
 
