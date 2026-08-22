@@ -34,8 +34,8 @@ object RegionCropper {
     private val COMM_0 = RegionRect(160, 1060, 340, 1330)
     private val COMM_1 = RegionRect(342, 1060, 510, 1330)
     private val COMM_2 = RegionRect(512, 1060, 680, 1330)
-    private val COMM_3 = RegionRect(682, 1060, 850, 1330)
-    private val COMM_4 = RegionRect(852, 1060, 1020, 1330)
+    private val COMM_3 = RegionRect(692, 1060, 862, 1330)
+    private val COMM_4 = RegionRect(864, 1060, 1034, 1330)
 
     // ===== 底池金额区域（公共牌正下方）=====
     // 标注实测：底池数字在公共牌下方 y≈1335-1395
