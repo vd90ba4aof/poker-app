@@ -385,6 +385,7 @@ body.speed-mode .rec-label{font-size:10px}
 <button class="clr" style="background:#1a3a2c" id="exportBtn" onclick="exportLog()">📤导出日志</button>
 <button class="clr" style="background:#1a2a3a" id="statsBtn" onclick="showStats()">📊统计</button>
 <button class="clr" style="background:#3a2a1a" id="reviewBtn" onclick="openReview()">📊复盘</button>
+<button class="clr" style="background:#2a1a3a" id="selfLearnBtn" onclick="openSelfLearn()">🧠学习</button>
 <div class="cam-mini"><button class="cam-mini-btn" id="camMiniBtn" onclick="toggleCamModal()">📷</button></div>
 <div class="modal" id="modal">
   <div class="mt" id="mTitle">选牌</div>
@@ -397,6 +398,12 @@ body.speed-mode .rec-label{font-size:10px}
   <div class="mt" style="background:linear-gradient(135deg,#1a237e,#0d47a1);color:#fff">📊 手牌复盘</div>
   <div id="reviewContent" style="padding:6px 0;color:#fff"></div>
   <button class="m-cl" onclick="closeReview()">关闭</button>
+</div>
+<!-- V2.9.516: SelfLearner自我学习面板 -->
+<div class="modal" id="selfLearnModal" style="display:none;z-index:9999;background:rgba(0,0,0,0.9);padding:10px;max-height:95vh;overflow-y:auto">
+  <div class="mt" style="background:linear-gradient(135deg,#4a148c,#6a1b9a);color:#fff">🧠 青云自我学习</div>
+  <div id="selfLearnContent" style="padding:6px 0;color:#fff"></div>
+  <button class="m-cl" onclick="closeSelfLearn()">关闭</button>
 </div>
 <!-- V2.9.131: 换桌建议弹窗 -->
 <div class="modal" id="tableChangeModal" style="display:none;z-index:9999;background:rgba(0,0,0,0.85);padding:10px;max-height:95vh;overflow-y:auto">
@@ -1292,7 +1299,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.516',
+  CURRENT_VERSION:'2.9.517',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2706,7 +2713,7 @@ var HandStateMachine=(function(){
 // 升级自 V2.9.215
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
-'use strict';var APP_VERSION='2.9.516';
+'use strict';var APP_VERSION='2.9.517';
 
 // ====== 第一部分: GTO翻前频率表 (5-Max专用) ======
 var _RFI={
@@ -9929,6 +9936,28 @@ function bridgeAdvice(r){
         oppStats:G.opp||''
       };
       AndroidBridge.logDecision(JSON.stringify(_decData));
+      // V2.9.516: SelfLearner自我学习——只记自己的决策，不记对手
+      try{
+        if(AndroidBridge.logSelfDecision){
+          var _slHandId=G._handLockKey||_newHandKey||('h'+Date.now());
+          AndroidBridge.logSelfDecision(JSON.stringify({
+            hand_id:_slHandId,
+            hole_cards:_holeCards,
+            position:G.pos||'',
+            street:G.phase==='pre'?'preflop':'postflop',
+            community_cards:_commCards,
+            pot:G.pot||0,
+            to_call:G.bet||0,
+            action:r.a||'fold',
+            sizing:r.v||0,
+            eq:r.eq||0,
+            h_class:r.hClass?r.hClass.name:'UNKNOWN',
+            confidence:r.confidence||'medium',
+            reason:(r.r||'').substring(0,100),
+            bb:window._lastVisionBB||G._lockedBB||200
+          }));
+        }
+      }catch(_slErr){}
     }}catch(_logErr){console.log('[logDecision] err:'+_logErr.message);}
   }catch(e){
     // V2.9.133: bridgeAdvice 失败也调 notifyCrash
@@ -10091,6 +10120,79 @@ function openReview(){
 function closeReview(){
   var modal=document.getElementById('reviewModal');
   if(modal){modal.classList.remove('on');modal.style.display='none';}
+}
+// V2.9.516: SelfLearner自我学习面板
+function openSelfLearn(){
+  var modal=document.getElementById('selfLearnModal');
+  if(modal){modal.style.display='block';modal.classList.add('on');}
+  renderSelfLearn();
+}
+function closeSelfLearn(){
+  var modal=document.getElementById('selfLearnModal');
+  if(modal){modal.classList.remove('on');modal.style.display='none';}
+}
+function renderSelfLearn(){
+  var box=document.getElementById('selfLearnContent');
+  if(!box)return;
+  if(typeof AndroidBridge==='undefined'||!AndroidBridge.getSelfLearnData){
+    box.innerHTML='<div style="color:#ff6b6b;text-align:center;padding:20px">SelfLearner未就绪</div>';
+    return;
+  }
+  var raw;
+  try{raw=AndroidBridge.getSelfLearnData(30);}catch(e){raw='{}';}
+  var d;
+  try{d=JSON.parse(raw);}catch(e){d={};}
+  var total=d.total_hands||0;
+  var totalBb=d.total_bb||0;
+  var bbColor=totalBb>=0?'#4caf50':'#ff6b6b';
+  var h='<div style="padding:8px;background:rgba(255,255,255,.05);border-radius:8px;margin-bottom:8px">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center">';
+  h+='<div><div style="font-size:18px;font-weight:bold;color:#fff">'+total+' 手牌</div>';
+  h+='<div style="font-size:11px;color:#888">累计样本</div></div>';
+  h+='<div style="text-align:right"><div style="font-size:22px;font-weight:bold;color:'+bbColor+'">'+(totalBb>=0?'+':'')+totalBb+' BB</div>';
+  h+='<div style="font-size:11px;color:#888">总盈亏</div></div>';
+  h+='</div></div>';
+
+  // Leak检测
+  var leaks=d.leaks||[];
+  if(leaks.length>0){
+    h+='<div style="margin-top:8px;font-size:12px;font-weight:bold;color:#ffab40;margin-bottom:6px">⚠️ Leak检测</div>';
+    h+='<div style="font-size:10px;color:#888;margin-bottom:6px">样本≥30手、平均BB<-1.5的维度会被标红</div>';
+    for(var i=0;i<leaks.length;i++){
+      var l=leaks[i];
+      var lc=l.is_leak?'#ff6b6b':'#4caf50';
+      h+='<div style="display:flex;justify-content:space-between;padding:4px 8px;margin-bottom:3px;background:rgba(255,255,255,.04);border-radius:4px;border-left:3px solid '+lc+'">';
+      h+='<span style="font-size:11px;color:#ccc">'+l.dimension+': <b style="color:#fff">'+l.key+'</b></span>';
+      h+='<span style="font-size:11px"><b style="color:'+lc+'">'+l.avg_bb+'BB</b> <span style="color:#666">('+l.count+'手)</span></span>';
+      h+='</div>';
+    }
+  }else if(total>=10){
+    h+='<div style="margin-top:8px;padding:8px;background:rgba(76,175,80,.1);border-radius:6px;color:#4caf50;font-size:11px">✅ 暂无明显Leak（继续积累样本）</div>';
+  }
+
+  // 最近手牌
+  var recent=d.recent||[];
+  if(recent.length>0){
+    h+='<div style="margin-top:12px;font-size:12px;font-weight:bold;color:#fff;margin-bottom:6px">📋 最近30手</div>';
+    for(var j=0;j<Math.min(recent.length,30);j++){
+      var r=recent[j];
+      var rc=r.result_bb>=0?'#4caf50':'#ff6b6b';
+      var sign=r.result_bb>=0?'+':'';
+      var cards=r.hole_cards||'';
+      h+='<div style="display:flex;justify-content:space-between;padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">';
+      h+='<span style="color:#888;width:55px">'+r.time+'</span>';
+      h+='<span style="color:#e0e0e0;width:50px;font-weight:bold">'+cards+'</span>';
+      h+='<span style="color:#666;width:35px">'+(r.position||'-')+'</span>';
+      h+='<span style="color:'+rc+';font-weight:bold;width:45px;text-align:right">'+sign+r.result_bb+'BB</span>';
+      h+='<span style="color:#555;width:40px;text-align:right">'+(r.result_type||'')+'</span>';
+      h+='</div>';
+    }
+  }else{
+    h+='<div style="margin-top:16px;text-align:center;color:#666;font-size:11px;padding:20px">还没有手牌数据，打几手后再来查看</div>';
+  }
+
+  h+='<div style="text-align:center;margin-top:12px"><button style="padding:6px 16px;border:1px solid #ff4757;border-radius:8px;background:transparent;color:#ff4757;font-size:10px;cursor:pointer" onclick="if(confirm(\'确定清空学习数据？不可恢复\')){AndroidBridge.resetSelfLearn();renderSelfLearn();}">🗑️ 清空学习数据</button></div>';
+  box.innerHTML=h;
 }
 function rM(){
   var labels={h0:'手牌1',h1:'手牌2',c0:'翻牌1',c1:'翻牌2',c2:'翻牌3',c3:'转牌',c4:'河牌'};
@@ -10773,6 +10875,7 @@ function onVisionResult(data){
       var _newHandId=(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'');
       ActionLine.startHand(_newHandId);
       // V2.9.83: 新一手牌(rank变了)→重置锁定
+      var _prevHandIdForLearn=G._handLockKey||'';
       if(_isNewHand){
         G._handLockKey='';
       }
@@ -10788,6 +10891,13 @@ function onVisionResult(data){
           if(Math.abs(_bbR)>=0.5){
             SessionStats.setResult(_bbR);
             console.log('[V2.9.143盈亏] 新一手: 筹码'+G._prevRawChips+'→'+_newHandChips+' Δ='+_delta+' = '+_bbR+'BB');
+            // V2.9.516: SelfLearner——通知上一手结果
+            try{
+              if(_prevHandIdForLearn && AndroidBridge.selfHandResult){
+                var _rt=_delta>0?'win':(_delta<0?'loss':'break_even');
+                AndroidBridge.selfHandResult(_prevHandIdForLearn,_bbR,_delta,_rt);
+              }
+            }catch(_slrErr){}
           }
         }
       }
@@ -11301,6 +11411,14 @@ function onVisionResult(data){
         if(Math.abs(_bbResult)>=0.5){
           SessionStats.setResult(_bbResult);
           console.log('[V2.9.143盈亏] 筹码'+_prevChips+'→'+_curChips+' Δ='+_chipDelta+' = '+_bbResult+'BB');
+          // V2.9.516: SelfLearner——摊牌时记录精确结果
+          try{
+            var _slHid=G._handLockKey||'';
+            if(_slHid && AndroidBridge.selfHandResult){
+              var _slRt=_chipDelta>0?'win':(_chipDelta<0?'loss':'break_even');
+              AndroidBridge.selfHandResult(_slHid,_bbResult,_chipDelta,_slRt);
+            }
+          }catch(_slErr2){}
         }
       }
     }

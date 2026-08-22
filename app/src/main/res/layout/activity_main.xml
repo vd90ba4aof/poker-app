@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.516 · 并发V2+按钮识别+缓存增量"
+        android:text="V2.9.517 · 并发V2+按钮识别+缓存增量+自我学习"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

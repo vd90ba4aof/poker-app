@@ -1617,6 +1617,14 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             Log.e(TAG, "HudLearner初始化失败: ${e.message}", e)
         }
 
+        // V2.9.516: SelfLearner自我学习初始化（SQLite，后台IO）
+        try {
+            SelfLearner.init(this)
+            Log.d(TAG, "★ SelfLearner初始化完成")
+        } catch (e: Exception) {
+            Log.e(TAG, "SelfLearner初始化失败: ${e.message}", e)
+        }
+
         // ★ 关键：addJavascriptInterface必须在loadUrl之前注册 ★
         wv.addJavascriptInterface(object : Any() {
             @JavascriptInterface
@@ -1821,6 +1829,60 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                 } catch (e: Exception) {
                     Log.e(TAG, "logDecision error: ${e.message}", e)
                 }
+            }
+            // V2.9.516: SelfLearner — 记录自己的决策（每条街道一条，只记自己不记对手）
+            @JavascriptInterface
+            fun logSelfDecision(jsonData: String) {
+                try {
+                    val d = org.json.JSONObject(jsonData)
+                    SelfLearner.recordDecision(
+                        handId = d.optString("hand_id", ""),
+                        holeCards = d.optString("hole_cards", ""),
+                        position = d.optString("position", ""),
+                        street = d.optString("street", ""),
+                        communityCards = d.optString("community_cards", ""),
+                        pot = d.optInt("pot", 0),
+                        toCall = d.optInt("to_call", 0),
+                        action = d.optString("action", "fold"),
+                        sizing = d.optInt("sizing", 0),
+                        eq = d.optInt("eq", 0),
+                        hClass = d.optString("h_class", "UNKNOWN"),
+                        confidence = d.optString("confidence", "medium"),
+                        reason = d.optString("reason", ""),
+                        bb = d.optInt("bb", 200)
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "logSelfDecision error: ${e.message}")
+                }
+            }
+            // V2.9.516: SelfLearner — 一手牌结果（赢/输BB数，由JS筹码差检测触发）
+            @JavascriptInterface
+            fun selfHandResult(handId: String, resultBb: Float, netChips: Long, resultType: String) {
+                try {
+                    SelfLearner.handResult(handId, resultBb, netChips, resultType)
+                } catch (e: Exception) {
+                    Log.e(TAG, "selfHandResult error: ${e.message}")
+                }
+            }
+            // V2.9.516: SelfLearner — 获取复盘数据（最近N手+Leak检测+汇总）
+            @JavascriptInterface
+            fun getSelfLearnData(limit: Int): String {
+                return try {
+                    val result = org.json.JSONObject()
+                    result.put("total_hands", SelfLearner.getTotalHands())
+                    result.put("total_bb", Math.round(SelfLearner.getTotalBb() * 10f) / 10f)
+                    result.put("recent", SelfLearner.getRecentHands(limit))
+                    result.put("leaks", SelfLearner.detectLeaks())
+                    result.toString()
+                } catch (e: Exception) {
+                    Log.e(TAG, "getSelfLearnData error: ${e.message}")
+                    "{}"
+                }
+            }
+            // V2.9.516: SelfLearner — 清空学习数据
+            @JavascriptInterface
+            fun resetSelfLearn() {
+                try { SelfLearner.reset() } catch (_: Exception) {}
             }
             // V2.9.300: 接收JS端对手统计数据并持久化到HudLearner
             @JavascriptInterface
