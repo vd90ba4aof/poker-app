@@ -3,57 +3,68 @@ package com.pokerhelper.app
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.util.Log
+import java.security.MessageDigest
 
 /**
- * V2.9.515: 区域裁剪与拼接工具
- * 基于标注v3坐标（1080x2344基准），支持按屏幕尺寸自动缩放
- * 
- * 核心方案：
- * 1. 裁剪手牌(2张)、公共牌(5张)、底池区域
- * 2. 拼接为hand_stitch和community_stitch
- * 3. 3路并发API调用（手牌/公共牌/底池）
- * 4. 整合结果
+ * V2.9.516: 区域裁剪与拼接工具
+ * 基于GG扑克竖屏截图（1080x2344基准），支持按屏幕尺寸自动缩放
+ *
+ * 核心方案（V2: 识别第一，按钮必识别）：
+ * 1. 裁剪牌面区域（手牌+公共牌+底池），拼接成一张图
+ * 2. 裁剪操作区（底部按钮+筹码+预设），单独识别
+ * 3. 牌面支持hash缓存——手牌一手不变，公共牌增量识别
+ * 4. 操作区每帧必识别——判断是否轮到自己行动
  */
 object RegionCropper {
     private const val TAG = "RegionCropper"
-    
+
     // 基准分辨率
     private const val BASE_WIDTH = 1080
     private const val BASE_HEIGHT = 2344
-    
-    // 标注v3坐标（1080x2344基准）
+
     data class RegionRect(val x1: Int, val y1: Int, val x2: Int, val y2: Int)
-    
-    // 手牌区域
-    private val HAND_0 = RegionRect(30, 1700, 175, 1910)
-    private val HAND_1 = RegionRect(130, 1730, 290, 1950)
-    
-    // 公共牌区域（每张133px宽，间距17px）
-    private val COMM_0 = RegionRect(172, 1058, 305, 1275)
-    private val COMM_1 = RegionRect(322, 1058, 455, 1275)
-    private val COMM_2 = RegionRect(472, 1058, 605, 1275)
-    private val COMM_3 = RegionRect(622, 1058, 755, 1275)
-    private val COMM_4 = RegionRect(772, 1058, 905, 1275)
-    
-    // 底池金额区域
-    private val POT_AMOUNT = RegionRect(440, 1065, 650, 1115)
-    
+
+    // ===== 手牌区域（标注实测：左下角）=====
+    // 从annotated_coords.jpg实测：手牌约在 x=45-310, y=1730-1935
+    private val HAND_0 = RegionRect(45, 1735, 170, 1935)
+    private val HAND_1 = RegionRect(150, 1735, 310, 1935)
+
+    // ===== 公共牌区域（5张，标注实测）=====
+    // 从annotated_coords.jpg实测：y≈1060-1330
+    private val COMM_0 = RegionRect(160, 1060, 340, 1330)
+    private val COMM_1 = RegionRect(342, 1060, 510, 1330)
+    private val COMM_2 = RegionRect(512, 1060, 680, 1330)
+    private val COMM_3 = RegionRect(682, 1060, 850, 1330)
+    private val COMM_4 = RegionRect(852, 1060, 1020, 1330)
+
+    // ===== 底池金额区域（公共牌正下方）=====
+    // 标注实测：底池数字在公共牌下方 y≈1335-1395
+    private val POT_AMOUNT = RegionRect(380, 1335, 700, 1400)
+
+    // ===== 操作区（底部按钮+筹码+预设）=====
+    // 包含：主操作按钮（y≈2140-2340）、预设按钮（x≈730-1060, y≈1640-2130）、
+    //       我的筹码（x≈45-310, y≈1935-2020）、底部玩家信息
+    private val ACTION_AREA = RegionRect(0, 1600, 1080, 2344)
+
     // 缩放比例
     private var scaleX: Float = 1.0f
     private var scaleY: Float = 1.0f
-    
-    /**
-     * 初始化缩放比例（根据实际屏幕尺寸）
-     */
+
+    // ===== 缓存：牌面区域hash =====
+    @Volatile private var cachedHandHash: String? = null
+    @Volatile private var cachedHandCards: List<VisionApiClient.CardInfo>? = null
+    @Volatile private var cachedCommHashes: Array<String?> = arrayOfNulls(5)
+    @Volatile private var cachedCommCards: Array<VisionApiClient.CardInfo?> = arrayOfNulls(5)
+    @Volatile private var cachedPotHash: String? = null
+    @Volatile private var cachedPotValue: Long = 0L
+    @Volatile private var handCacheValid: Boolean = false
+
     fun init(screenWidth: Int, screenHeight: Int) {
         scaleX = screenWidth.toFloat() / BASE_WIDTH
         scaleY = screenHeight.toFloat() / BASE_HEIGHT
         Log.d(TAG, "缩放初始化: ${screenWidth}x${screenHeight}, scaleX=$scaleX, scaleY=$scaleY")
     }
-    
-    /**
-     * 缩放坐标
-     */
+
     private fun RegionRect.scaled(): RegionRect {
         return RegionRect(
             (x1 * scaleX).toInt(),
@@ -62,10 +73,7 @@ object RegionCropper {
             (y2 * scaleY).toInt()
         )
     }
-    
-    /**
-     * 裁剪区域
-     */
+
     private fun cropRegion(bitmap: Bitmap, region: RegionRect): Bitmap? {
         val r = region.scaled()
         val x = r.x1.coerceIn(0, bitmap.width - 1)
@@ -79,19 +87,14 @@ object RegionCropper {
             null
         }
     }
-    
-    /**
-     * 拼接多张图片为横向长图
-     * @param bitmaps 图片列表
-     * @param gap 图片间距（像素）
-     */
-    private fun stitchHorizontally(bitmaps: List<Bitmap>, gap: Int = 10): Bitmap? {
+
+    private fun stitchHorizontally(bitmaps: List<Bitmap>, gap: Int = 8): Bitmap? {
         if (bitmaps.isEmpty()) return null
         if (bitmaps.size == 1) return bitmaps[0]
-        
+
         val totalWidth = bitmaps.sumOf { it.width } + gap * (bitmaps.size - 1)
         val maxHeight = bitmaps.maxOf { it.height }
-        
+
         return try {
             val result = Bitmap.createBitmap(totalWidth, maxHeight, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(result)
@@ -106,41 +109,305 @@ object RegionCropper {
             null
         }
     }
-    
+
+    private fun stitchVertically(bitmaps: List<Bitmap>, gap: Int = 8): Bitmap? {
+        if (bitmaps.isEmpty()) return null
+        if (bitmaps.size == 1) return bitmaps[0]
+
+        val totalHeight = bitmaps.sumOf { it.height } + gap * (bitmaps.size - 1)
+        val maxWidth = bitmaps.maxOf { it.width }
+
+        return try {
+            val result = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(result)
+            var offsetY = 0
+            for (bmp in bitmaps) {
+                canvas.drawBitmap(bmp, 0f, offsetY.toFloat(), null)
+                offsetY += bmp.height + gap
+            }
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "垂直拼接失败", e)
+            null
+        }
+    }
+
     /**
-     * 裁剪手牌区域（2张）
-     * @return Pair(hand_stitch, listOf(hand_0, hand_1))
+     * 计算Bitmap内容的MD5 hash（用于缓存判断）
+     * 采样像素而非全量，提高速度
+     */
+    fun bitmapHash(bitmap: Bitmap?): String {
+        if (bitmap == null || bitmap.width == 0 || bitmap.height == 0) return "null"
+        return try {
+            val w = bitmap.width
+            val h = bitmap.height
+            // 采样步长：大图每5个像素采一个，小图全采
+            val step = maxOf(1, minOf(w, h) / 32)
+            val sb = StringBuilder()
+            for (y in 0 until h step step) {
+                for (x in 0 until w step step) {
+                    sb.append(bitmap.getPixel(x, y))
+                }
+            }
+            val md = MessageDigest.getInstance("MD5")
+            val digest = md.digest(sb.toString().toByteArray())
+            digest.joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) {
+            "error_${System.currentTimeMillis()}"
+        }
+    }
+
+    // ===== 牌面裁剪 =====
+
+    /**
+     * 裁剪手牌（2张），返回拼接图和单张列表
      */
     fun cropHandCards(bitmap: Bitmap): Pair<Bitmap?, List<Bitmap?>> {
         val hand0 = cropRegion(bitmap, HAND_0)
         val hand1 = cropRegion(bitmap, HAND_1)
         val validCards = listOfNotNull(hand0, hand1)
-        val stitch = if (validCards.isNotEmpty()) stitchHorizontally(validCards, gap = 15) else null
+        val stitch = if (validCards.isNotEmpty()) stitchHorizontally(validCards, gap = 10) else null
         return Pair(stitch, listOf(hand0, hand1))
     }
-    
+
     /**
-     * 裁剪公共牌区域（5张）
-     * @return Pair(community_stitch, listOf(comm_0..comm_4))
+     * 裁剪全部公共牌区域（5格），返回拼接图和单张列表
      */
     fun cropCommunityCards(bitmap: Bitmap): Pair<Bitmap?, List<Bitmap?>> {
-        val comm0 = cropRegion(bitmap, COMM_0)
-        val comm1 = cropRegion(bitmap, COMM_1)
-        val comm2 = cropRegion(bitmap, COMM_2)
-        val comm3 = cropRegion(bitmap, COMM_3)
-        val comm4 = cropRegion(bitmap, COMM_4)
-        val validCards = listOfNotNull(comm0, comm1, comm2, comm3, comm4)
-        val stitch = if (validCards.isNotEmpty()) stitchHorizontally(validCards, gap = 8) else null
-        return Pair(stitch, listOf(comm0, comm1, comm2, comm3, comm4))
+        val cards = (0 until 5).map { cropRegion(bitmap, getCommRegion(it)) }
+        val validCards = cards.filterNotNull()
+        val stitch = if (validCards.isNotEmpty()) stitchHorizontally(validCards, gap = 6) else null
+        return Pair(stitch, cards)
     }
-    
+
     /**
      * 裁剪底池金额区域
      */
     fun cropPotAmount(bitmap: Bitmap): Bitmap? {
         return cropRegion(bitmap, POT_AMOUNT)
     }
-    
+
+    /**
+     * 裁剪操作区（底部条带，包含按钮/筹码/预设）
+     */
+    fun cropActionArea(bitmap: Bitmap): Bitmap? {
+        return cropRegion(bitmap, ACTION_AREA)
+    }
+
+    /**
+     * 裁剪牌面合并图：公共牌 + 底池
+     * 手牌单独处理（因为要缓存）
+     * @return Triple(牌面合并图, 各公共牌格bitmap列表, 底池bitmap)
+     */
+    fun cropBoardArea(bitmap: Bitmap): Triple<Bitmap?, List<Bitmap?>, Bitmap?> {
+        val commCards = (0 until 5).map { cropRegion(bitmap, getCommRegion(it)) }
+        val potBmp = cropRegion(bitmap, POT_AMOUNT)
+
+        // 拼接：公共牌横排 + 下方底池
+        val validComm = commCards.filterNotNull()
+        val commStitch = if (validComm.isNotEmpty()) stitchHorizontally(validComm, gap = 6) else null
+
+        val parts = mutableListOf<Bitmap>()
+        commStitch?.let { parts.add(it) }
+        potBmp?.let { parts.add(it) }
+        val merged = if (parts.size >= 2) stitchVertically(parts, gap = 10) else parts.firstOrNull()
+
+        return Triple(merged, commCards, potBmp)
+    }
+
+    private fun getCommRegion(index: Int): RegionRect = when (index) {
+        0 -> COMM_0; 1 -> COMM_1; 2 -> COMM_2; 3 -> COMM_3; 4 -> COMM_4
+        else -> COMM_0
+    }
+
+    // ===== 缓存逻辑 =====
+
+    /**
+     * 检查手牌缓存是否命中
+     * @return 缓存的手牌列表，未命中返回null
+     */
+    fun checkHandCache(handStitch: Bitmap?): List<VisionApiClient.CardInfo>? {
+        if (handStitch == null) return null
+        val hash = bitmapHash(handStitch)
+        // 始终更新prevHandHash为本帧hash（在被updateHandCache覆盖前先读取旧的cachedHandHash）
+        if (handCacheValid && hash == cachedHandHash && cachedHandCards != null) {
+            // 缓存命中：prevHandHash和cachedHandHash一致
+            Log.d(TAG, "♠ 手牌缓存命中: ${cachedHandCards?.map { "${it.rank}${it.suit}" }}")
+            return cachedHandCards
+        }
+        // 缓存未命中：prevHandHash保存旧值，等updateHandCacheWithHash时比较
+        return null
+    }
+
+    /**
+     * 判断是否是新手牌（上一帧的手牌hash与当前缓存不同）
+     * 在checkHandCache未命中后、调用updateHandCacheWithHash之前调用。
+     * @param currentHash 当前帧手牌hash（由调用方预计算）
+     */
+    fun isNewHand(currentHash: String?): Boolean {
+        if (currentHash == null) return false
+        val old = cachedHandHash
+        return old != null && old != currentHash
+    }
+
+    /**
+     * 更新手牌缓存
+     */
+    fun updateHandCache(handStitch: Bitmap?, cards: List<VisionApiClient.CardInfo>) {
+        if (handStitch != null && cards.size == 2) {
+            cachedHandHash = bitmapHash(handStitch)
+            cachedHandCards = cards
+            handCacheValid = true
+            Log.d(TAG, "♠ 手牌缓存已更新: ${cards.map { "${it.rank}${it.suit}" }}")
+        }
+    }
+
+    /**
+     * 用预计算的hash更新手牌缓存（bitmap已recycle时使用）
+     */
+    fun updateHandCacheWithHash(hash: String, cards: List<VisionApiClient.CardInfo>) {
+        if (cards.size == 2) {
+            cachedHandHash = hash
+            cachedHandCards = cards
+            handCacheValid = true
+            Log.d(TAG, "♠ 手牌缓存已更新(hash): ${cards.map { "${it.rank}${it.suit}" }}")
+        }
+    }
+
+    /**
+     * 检查哪些公共牌格是新出现的（需要识别）
+     * @return 需要识别的格子索引列表
+     */
+    fun findNewCommCards(commBitmaps: List<Bitmap?>): List<Int> {
+        val newIndices = mutableListOf<Int>()
+        for (i in commBitmaps.indices) {
+            val bmp = commBitmaps[i] ?: continue
+            val hash = bitmapHash(bmp)
+            // 检测是否是"有牌"的格子：非空区域像素方差大
+            val hasContent = detectCardPresence(bmp)
+            if (hasContent) {
+                if (cachedCommHashes[i] != hash) {
+                    newIndices.add(i)
+                }
+            } else {
+                // 空格子，清除缓存
+                if (cachedCommHashes[i] != null) {
+                    cachedCommHashes[i] = null
+                    cachedCommCards[i] = null
+                }
+            }
+        }
+        return newIndices
+    }
+
+    /**
+     * 检测格子里是否有牌（简单的像素方差判断）
+     */
+    private fun detectCardPresence(bmp: Bitmap): Boolean {
+        return try {
+            if (bmp.width < 10 || bmp.height < 10) return false
+            var nonWhite = 0
+            var sampled = 0
+            val step = maxOf(1, minOf(bmp.width, bmp.height) / 20)
+            for (y in 0 until bmp.height step step) {
+                for (x in 0 until bmp.width step step) {
+                    val p = bmp.getPixel(x, y)
+                    val r = (p shr 16) and 0xFF
+                    val g = (p shr 8) and 0xFF
+                    val b = p and 0xFF
+                    // 非白色/非纯绿色桌面背景
+                    if (!(r > 200 && g > 200 && b > 200) &&
+                        !(r in 0..60 && g in 80..180 && b in 30..100)) {
+                        nonWhite++
+                    }
+                    sampled++
+                }
+            }
+            val ratio = nonWhite.toFloat() / maxOf(1, sampled)
+            ratio > 0.05f  // 超过5%非背景像素 = 有牌
+        } catch (_: Exception) { false }
+    }
+
+    /**
+     * 获取当前缓存的公共牌（仅返回有牌的）
+     */
+    fun getCachedCommunityCards(): List<VisionApiClient.CardInfo> {
+        return cachedCommCards.filterNotNull()
+    }
+
+    /**
+     * 获取当前缓存的公共牌5格数组（含null，按位置0-4）
+     */
+    fun getCachedCommunitySlots(): Array<VisionApiClient.CardInfo?> {
+        return cachedCommCards.clone()
+    }
+
+    /**
+     * 更新某格公共牌缓存
+     */
+    fun updateCommCache(index: Int, bmp: Bitmap?, card: VisionApiClient.CardInfo?) {
+        if (index in 0 until 5) {
+            if (bmp != null && card != null) {
+                cachedCommHashes[index] = bitmapHash(bmp)
+                cachedCommCards[index] = card
+            } else {
+                cachedCommHashes[index] = null
+                cachedCommCards[index] = null
+            }
+        }
+    }
+
+    /**
+     * 用预计算hash更新公共牌格缓存
+     */
+    fun updateCommCacheWithHash(index: Int, hash: String, card: VisionApiClient.CardInfo) {
+        if (index in 0 until 5) {
+            cachedCommHashes[index] = hash
+            cachedCommCards[index] = card
+        }
+    }
+
+    /**
+     * 检查底池缓存
+     */
+    fun checkPotCache(potBmp: Bitmap?): Long? {
+        if (potBmp == null) return null
+        val hash = bitmapHash(potBmp)
+        return if (hash == cachedPotHash) {
+            cachedPotValue
+        } else null
+    }
+
+    fun updatePotCache(potBmp: Bitmap?, value: Long) {
+        if (potBmp != null) {
+            cachedPotHash = bitmapHash(potBmp)
+            cachedPotValue = value
+        }
+    }
+
+    /**
+     * 用预计算hash更新底池缓存
+     */
+    fun updatePotCacheWithHash(hash: String, value: Long) {
+        cachedPotHash = hash
+        cachedPotValue = value
+    }
+
+    /**
+     * 清空所有牌面缓存（新手牌开始时调用）
+     */
+    fun clearBoardCache() {
+        // 注意：不清cachedHandHash/HandCards，手牌缓存仍有效
+        // 只清空公共牌和底池缓存（新的一手牌，公共牌重新发）
+        for (i in 0 until 5) {
+            cachedCommHashes[i] = null
+            cachedCommCards[i] = null
+        }
+        cachedPotHash = null
+        cachedPotValue = 0L
+        Log.d(TAG, "公共牌/底池缓存已清空（新手牌）")
+    }
+
     /**
      * 释放Bitmap资源
      */

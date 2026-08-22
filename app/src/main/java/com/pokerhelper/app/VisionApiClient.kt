@@ -3,6 +3,7 @@ package com.pokerhelper.app
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.util.Base64
 import android.util.Log
 import okhttp3.*
@@ -1134,16 +1135,25 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
     }
 
     // ========================================
-    // V2.9.515: 并发区域识别方案
+    // V2.9.516: 并发区域识别 V2 — 识别第一，按钮必识别
+    // 2路并发：牌面（手牌+公共牌+底池，智能缓存）+ 操作区（按钮+筹码+D位置）
     // ========================================
 
+    // 操作区识别结果
+    private data class ActionAreaResult(
+        val buttons: List<String>,
+        val buttonPositions: List<ButtonPosition>,
+        val toCall: Int,
+        val myChips: Int,
+        val dButtonSeat: Int,        // D按钮在哪个座位 0-5, -1=未检测到
+        val activePlayers: Int,
+        val isInsurance: Boolean,
+        val rawResponse: String
+    )
+
     /**
-     * 并发区域识别 — 核心方法
-     * 裁剪手牌/公共牌/底池区域，3路并发API调用，整合结果
-     * @param jpegData 原始截图JPEG数据
-     * @param screenWidth 屏幕宽度（用于坐标缩放）
-     * @param screenHeight 屏幕高度（用于坐标缩放）
-     * @return 整合后的VisionResult，失败返回null
+     * 并发区域识别 V2 — 核心方法
+     * 2路并发：牌面（缓存优化）+ 操作区（每帧必识别）
      */
     fun analyzeScreenshotConcurrent(
         jpegData: ByteArray,
@@ -1159,197 +1169,409 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
         try {
             return try {
                 val t0 = System.currentTimeMillis()
-                
+
                 // 1. 解码截图
                 val screenshotBmp = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
                 if (screenshotBmp == null) {
                     lastError = "截图解码失败"
                     return null
                 }
-                
-                // 2. 初始化RegionCropper缩放
+
                 RegionCropper.init(screenWidth, screenHeight)
-                
-                // 3. 裁剪区域
-                val (handStitch, handCards) = RegionCropper.cropHandCards(screenshotBmp)
-                val (commStitch, commCards) = RegionCropper.cropCommunityCards(screenshotBmp)
-                val potBmp = RegionCropper.cropPotAmount(screenshotBmp)
-                
+
+                // 2. 裁剪操作区（每帧必识别）
+                val actionBmp = RegionCropper.cropActionArea(screenshotBmp)
+                val actionBase64 = actionBmp?.let { bitmapToBase64(it, quality = 80) }
+
+                // 3. 裁剪牌面
+                val (handStitch, handBitmaps) = RegionCropper.cropHandCards(screenshotBmp)
+                val (boardMerged, commBitmaps, potBmp) = RegionCropper.cropBoardArea(screenshotBmp)
+
                 val t1 = System.currentTimeMillis()
                 Log.d(TAG, "⏱ 区域裁剪: ${t1 - t0}ms")
-                
-                // 4. 转换为Base64
-                val handBase64 = handStitch?.let { bitmapToBase64(it) }
-                val commBase64 = commStitch?.let { bitmapToBase64(it) }
-                val potBase64 = potBmp?.let { bitmapToBase64(it) }
-                
-                // 释放裁剪的Bitmap
-                RegionCropper.recycleBitmaps(handStitch, commStitch, potBmp)
-                handCards.forEach { RegionCropper.recycleBitmaps(it) }
-                commCards.forEach { RegionCropper.recycleBitmaps(it) }
-                screenshotBmp.recycle()
-                
+
+                // 4. 手牌缓存检查
+                var holeCards: List<CardInfo>? = RegionCropper.checkHandCache(handStitch)
+                var needHandApi = holeCards == null
+                val handHash = if (needHandApi && handStitch != null) RegionCropper.bitmapHash(handStitch) else null
+                if (needHandApi) {
+                    Log.d(TAG, "♠ 手牌缓存未命中，需API识别 (hash=${handHash?.take(8)})")
+                }
+
+                // 5. 新手牌检测：手牌hash变化 → 清空公共牌/底池缓存
+                //    注意：第一帧prevHandHash为null，不清缓存（正常启动）
+                if (needHandApi && RegionCropper.isNewHand(handHash)) {
+                    RegionCropper.clearBoardCache()
+                    Log.d(TAG, "🆕 新手牌检测到，公共牌/底池缓存已清空")
+                }
+
+                // 6. 公共牌增量检查：找出新出现的牌格
+                val newCommIndices = RegionCropper.findNewCommCards(commBitmaps)
+                val newCommHashes = newCommIndices.map { idx ->
+                    RegionCropper.bitmapHash(commBitmaps.getOrNull(idx))
+                }
+
+                // 7. 底池缓存检查
+                var potValue = RegionCropper.checkPotCache(potBmp)
+                var needPotApi = potValue == null
+                val potHash = if (needPotApi && potBmp != null) RegionCropper.bitmapHash(potBmp) else null
+
+                // 7. 构建牌面API图
+                // 需要识别什么就拼什么：新手牌+新公共牌+底池
+                val boardParts = mutableListOf<Bitmap>()
+                if (needHandApi && handStitch != null) boardParts.add(handStitch)
+                // 新出现的公共牌
+                val newCommBitmaps = newCommIndices.mapNotNull { idx -> commBitmaps.getOrNull(idx) }
+                if (newCommBitmaps.isNotEmpty()) {
+                    val newCommStitch = stitchBitmapsHorizontally(newCommBitmaps, gap = 6)
+                    if (newCommStitch != null) boardParts.add(newCommStitch)
+                }
+                if (needPotApi && potBmp != null) boardParts.add(potBmp)
+
+                val boardApiBitmap = if (boardParts.size > 1) {
+                    stitchBitmapsVertically(boardParts, gap = 8)
+                } else boardParts.firstOrNull()
+                val boardBase64 = boardApiBitmap?.let { bitmapToBase64(it, quality = 75) }
+
                 val t2 = System.currentTimeMillis()
-                Log.d(TAG, "⏱ Base64编码: ${t2 - t1}ms")
-                
-                // 5. 并发API调用
-                var handResult: Pair<List<CardInfo>, String>? = null  // (cards, rawResponse)
-                var commResult: Pair<List<CardInfo>, String>? = null
-                var potResult: Long? = null
-                
+                Log.d(TAG, "⏱ 缓存检查+编码: ${t2 - t1}ms (手API=$needHandApi, 新公共牌=${newCommIndices.size}张, 底池API=$needPotApi)")
+
+                // 8. 释放中间bitmap（保留screenshotBmp直到不需要）
+                RegionCropper.recycleBitmaps(*boardParts.toTypedArray())
+                RegionCropper.recycleBitmaps(actionBmp, boardMerged, potBmp)
+                handBitmaps.forEach { RegionCropper.recycleBitmaps(it) }
+                commBitmaps.forEach { RegionCropper.recycleBitmaps(it) }
+                RegionCropper.recycleBitmaps(handStitch)
+                screenshotBmp.recycle()
+
+                // 9. 并发API调用
+                var boardResult: BoardRecognitionResult? = null
+                var actionResult: ActionAreaResult? = null
+
                 runBlocking {
                     coroutineScope {
-                        val handJob = if (handBase64 != null) {
-                            async(Dispatchers.IO) {
-                                recognizeHandCards(handBase64)
-                            }
+                        val boardJob = if (boardBase64 != null) {
+                            async(Dispatchers.IO) { recognizeBoardArea(boardBase64, needHandApi, newCommIndices.size, needPotApi) }
                         } else null
-                        
-                        val commJob = if (commBase64 != null) {
-                            async(Dispatchers.IO) {
-                                recognizeCommunityCards(commBase64)
-                            }
+                        val actionJob = if (actionBase64 != null) {
+                            async(Dispatchers.IO) { recognizeActionArea(actionBase64) }
                         } else null
-                        
-                        val potJob = if (potBase64 != null) {
-                            async(Dispatchers.IO) {
-                                recognizePotAmount(potBase64)
-                            }
-                        } else null
-                        
-                        // 等待所有结果
-                        handResult = handJob?.await()
-                        commResult = commJob?.await()
-                        potResult = potJob?.await()
+
+                        boardResult = boardJob?.await()
+                        actionResult = actionJob?.await()
                     }
                 }
-                
+
                 val t3 = System.currentTimeMillis()
-                Log.d(TAG, "⏱ 并发API: ${t3 - t2}ms (手牌=${handResult?.first?.size ?: 0}张, 公共牌=${commResult?.first?.size ?: 0}张, 底池=$potResult)")
-                
-                // 6. 整合结果
+                Log.d(TAG, "⏱ 并发API: ${t3 - t2}ms (牌面=${boardResult != null}, 操作区=${actionResult != null})")
+
+                // 10. 更新缓存（用预计算的hash，bitmap此时已recycle）
+                if (boardResult != null) {
+                    if (needHandApi && boardResult.handCards.size == 2 && handHash != null) {
+                        RegionCropper.updateHandCacheWithHash(handHash, boardResult.handCards)
+                        holeCards = boardResult.handCards
+                    }
+                    for ((i, idx) in newCommIndices.withIndex()) {
+                        if (i < boardResult.commCards.size && i < newCommHashes.size) {
+                            RegionCropper.updateCommCacheWithHash(idx, newCommHashes[i], boardResult.commCards[i])
+                        }
+                    }
+                    if (needPotApi && boardResult.potAmount > 0 && potHash != null) {
+                        RegionCropper.updatePotCacheWithHash(potHash, boardResult.potAmount)
+                        potValue = boardResult.potAmount
+                    }
+                }
+
+                // 11. 获取最终牌面数据
+                val finalHoleCards = holeCards ?: boardResult?.handCards ?: emptyList()
+                val finalCommCards = if (newCommIndices.isEmpty() && !needHandApi) {
+                    RegionCropper.getCachedCommunityCards()
+                } else {
+                    mergeCommCards(newCommIndices, boardResult?.commCards ?: emptyList())
+                }
+                val finalPot = (potValue ?: boardResult?.potAmount ?: 0L).toInt()
+
+                // 12. 构建结果
+                val action = actionResult
                 val result = VisionResult(
-                    isPokerTable = true,
-                    holeCards = handResult?.first ?: emptyList(),
-                    communityCards = commResult?.first ?: emptyList(),
-                    potSize = (potResult ?: 0L).toInt(),
-                    playerChips = 0,
+                    isPokerTable = finalHoleCards.size == 2,
+                    holeCards = finalHoleCards,
+                    communityCards = finalCommCards,
+                    potSize = finalPot,
+                    playerChips = action?.myChips ?: 0,
                     totalPlayers = 6,
-                    activePlayers = 2,
+                    activePlayers = action?.activePlayers ?: 2,
                     myPosition = "",
-                    street = determineStreet(commResult?.first ?: emptyList()),
-                    toCall = 0,
+                    street = determineStreet(finalCommCards),
+                    toCall = action?.toCall ?: 0,
                     minRaise = 0,
-                    buttons = emptyList(),
+                    buttons = action?.buttons ?: emptyList(),
                     blindSB = 0,
                     blindBB = 0,
                     ante = 0,
                     players = emptyList(),
-                    dButtonPosition = "",
-                    rawResponse = "CONCURRENT: hand=${handResult?.second} | comm=${commResult?.second} | pot=$potResult",
+                    dButtonPosition = mapDSeatToPosition(action?.dButtonSeat ?: -1),
+                    rawResponse = "V2: board=${boardResult?.rawResponse?.take(100)} | action=${action?.rawResponse?.take(100)}",
                     showdownCards = emptyList(),
                     oppHud = emptyList(),
-                    buttonPositions = emptyList(),
+                    buttonPositions = action?.buttonPositions ?: emptyList(),
                     suitUncertain = false,
                     isStraddle = false,
                     isBombPot = false,
-                    isInsurance = false,
+                    isInsurance = action?.isInsurance ?: false,
                     isPKO = false,
                     gameMode = "cash",
                     detectedPlatform = "GGPOKER",
                     localSuitUsed = false
                 )
-                
+
+                // 同步锁定状态
+                if (finalHoleCards.size == 2) {
+                    holeCardsLocked = finalHoleCards
+                    streetLocked = result.street
+                }
+                if (result.dButtonPosition.isNotEmpty() && result.dButtonPosition != "not_found") {
+                    applyDButtonInsurance(result.dButtonPosition, finalHoleCards)
+                }
+
                 val t4 = System.currentTimeMillis()
-                Log.i(TAG, "⏱ 并发识别完成: 总耗时=${t4 - t0}ms (裁剪=${t1-t0}ms + 编码=${t2-t1}ms + API=${t3-t2}ms)")
-                
+                Log.i(TAG, "⏱ V2识别完成: ${t4 - t0}ms | 手牌=${finalHoleCards.map { "${it.rank}${it.suit}" }} 公共牌=${finalCommCards.size}张 底池=$finalPot 按钮=[${action?.buttons?.joinToString(",")}] toCall=${action?.toCall} chips=${action?.myChips} D=${result.dButtonPosition}")
+
                 lastResult = result
                 lastResultTime = System.currentTimeMillis()
                 lastError = ""
-                
                 result
             } catch (e: Exception) {
-                lastError = "并发识别异常: ${e.message}"
-                Log.e(TAG, "analyzeScreenshotConcurrent failed: ${e.message}", e)
+                lastError = "V2识别异常: ${e.message}"
+                Log.e(TAG, "analyzeScreenshotConcurrent V2 failed", e)
                 null
             }
         } finally {
             analyzeLock.unlock()
         }
     }
-    
+
+    // 牌面API识别结果
+    private data class BoardRecognitionResult(
+        val handCards: List<CardInfo>,
+        val commCards: List<CardInfo>,
+        val potAmount: Long,
+        val rawResponse: String
+    )
+
     /**
-     * 识别手牌（2张）
+     * 识别牌面区域（手牌+新公共牌+底池，根据需要组合）
      */
-    private suspend fun recognizeHandCards(base64Image: String): Pair<List<CardInfo>, String>? {
+    private suspend fun recognizeBoardArea(
+        base64Image: String,
+        hasHand: Boolean,
+        newCommCount: Int,
+        hasPot: Boolean
+    ): BoardRecognitionResult? {
         return withContext(Dispatchers.IO) {
             try {
-                val prompt = """识别这2张手牌。只输出JSON数组，格式：[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}]
-花色：s=♠黑 h=♥红心 d=♦方块 c=♣梅花。
-示例：[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}]
-识别："""
-                val requestJson = buildSimpleRequest(base64Image, prompt)
-                val rawResponse = sendRequest(requestJson)
-                val cards = parseHandCardsResponse(rawResponse)
-                Log.d(TAG, "手牌识别: $cards")
-                Pair(cards, rawResponse)
+                val sb = StringBuilder("识别扑克牌面，输出JSON。\n")
+                if (hasHand) sb.append("上方是2张手牌，输出hand_cards数组。\n")
+                if (newCommCount > 0) sb.append("中间是${newCommCount}张新出现的公共牌，按从左到右顺序输出community_cards数组。\n")
+                if (hasPot) sb.append("下方是底池金额数字，输出pot数字（去掉逗号）。\n")
+                sb.append("""格式：{"hand_cards":[{"rank":"A","suit":"s"}],"community_cards":[{"rank":"Q","suit":"d"}],"pot":13271}
+花色：s=♠ h=♥ d=♦ c=♣。rank: A,K,Q,J,10,9-2。
+只输出JSON：""")
+
+                val requestJson = buildSimpleRequest(base64Image, sb.toString(), maxTokens = 300)
+                val raw = sendRequest(requestJson)
+                val jsonStr = extractJson(raw) ?: return@withContext null
+                val json = JSONObject(jsonStr)
+
+                val handCards = parseCards(json.optJSONArray("hand_cards"))
+                val commCards = parseCards(json.optJSONArray("community_cards"))
+                val pot = json.optLong("pot", 0)
+
+                BoardRecognitionResult(handCards, commCards, pot, raw)
             } catch (e: Exception) {
-                Log.e(TAG, "手牌识别失败: ${e.message}", e)
+                Log.e(TAG, "牌面识别失败: ${e.message}")
                 null
             }
         }
     }
-    
+
     /**
-     * 识别公共牌（最多5张）
+     * 识别操作区（按钮+筹码+D位置+活跃玩家）
      */
-    private suspend fun recognizeCommunityCards(base64Image: String): Pair<List<CardInfo>, String>? {
+    private suspend fun recognizeActionArea(base64Image: String): ActionAreaResult? {
         return withContext(Dispatchers.IO) {
             try {
-                val prompt = """识别这1-5张公共牌。只输出JSON数组，格式：[{"rank":"Q","suit":"d"},...]
-花色：s=♠黑 h=♥红心 d=♦方块 c=♣梅花。
-示例：[{"rank":"Q","suit":"d"},{"rank":"J","suit":"d"},{"rank":"10","suit":"d"}]
-识别："""
-                val requestJson = buildSimpleRequest(base64Image, prompt)
-                val rawResponse = sendRequest(requestJson)
-                val cards = parseCommunityCardsResponse(rawResponse)
-                Log.d(TAG, "公共牌识别: $cards")
-                Pair(cards, rawResponse)
+                val prompt = """这是德州扑克手机游戏底部操作区截图。识别并输出JSON：
+{"buttons":["按钮文字"],"to_call":数字,"my_chips":数字,"d_seat":0-5或-1,"active_players":数字,"is_insurance":布尔}
+- buttons: 底部所有可见操作按钮的文字，如"弃牌","跟注 500","加注","让牌","全下"。必须完整识别按钮上的文字和数字。
+- to_call: 需要跟注的金额（从"跟注 XXX"按钮文字中提取数字），如果是"让牌"则0。
+- my_chips: 自己的剩余筹码数字（左下角头像旁边）。
+- d_seat: Dealer(D按钮)在哪个座位。自己=0，正上方=1，右上=2，右下=3，左下对面=4，左上=5。没看到D按钮输出-1。
+- active_players: 还在牌局中的玩家数量（数头像/座位）。
+- is_insurance: 是否出现Insurance或Cashout按钮。
+只输出JSON："""
+
+                val requestJson = buildSimpleRequest(base64Image, prompt, maxTokens = 350)
+                val raw = sendRequest(requestJson)
+                val jsonStr = extractJson(raw) ?: return@withContext null
+                val json = JSONObject(jsonStr)
+
+                val buttonsArr = json.optJSONArray("buttons")
+                val buttons = mutableListOf<String>()
+                if (buttonsArr != null) {
+                    for (i in 0 until buttonsArr.length()) {
+                        buttons.add(buttonsArr.getString(i))
+                    }
+                }
+
+                val toCall = json.optInt("to_call", 0)
+                val myChips = json.optInt("my_chips", 0)
+                val dSeat = json.optInt("d_seat", -1)
+                val activePlayers = json.optInt("active_players", 2)
+                val isInsurance = json.optBoolean("is_insurance", false)
+
+                // 映射按钮文字到固定坐标（GG竖屏布局）
+                val buttonPositions = mapButtonsToPositions(buttons)
+
+                ActionAreaResult(buttons, buttonPositions, toCall, myChips, dSeat, activePlayers, isInsurance, raw)
             } catch (e: Exception) {
-                Log.e(TAG, "公共牌识别失败: ${e.message}", e)
+                Log.e(TAG, "操作区识别失败: ${e.message}")
                 null
             }
         }
     }
-    
+
     /**
-     * 识别底池金额
+     * 将按钮文字映射到GG竖屏固定坐标
+     * 坐标基于GameModeConfig实测：fold=18.1%, check/call=50%, raise=81.9%, y=96.0%
      */
-    private suspend fun recognizePotAmount(base64Image: String): Long? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val prompt = """识别底池金额数字。只输出数字，如：13271
-如果看到逗号分隔（如13,271），去掉逗号输出纯数字。
-识别："""
-                val requestJson = buildSimpleRequest(base64Image, prompt)
-                val rawResponse = sendRequest(requestJson)
-                val amount = parsePotResponse(rawResponse)
-                Log.d(TAG, "底池识别: $amount")
-                amount
-            } catch (e: Exception) {
-                Log.e(TAG, "底池识别失败: ${e.message}", e)
-                null
+    private fun mapButtonsToPositions(buttons: List<String>): List<ButtonPosition> {
+        val positions = mutableListOf<ButtonPosition>()
+        var rightSlotUsed = false
+
+        for (btn in buttons) {
+            val b = btn.trim()
+            when {
+                // 弃牌 — 左
+                b.contains("弃牌") || b.contains("fold", ignoreCase = true) -> {
+                    positions.add(ButtonPosition(b, 0.181, 0.960))
+                }
+                // 让牌/过牌 — 中
+                b.contains("让牌") || b.contains("过牌") || b.equals("check", ignoreCase = true) -> {
+                    positions.add(ButtonPosition(b, 0.500, 0.960))
+                }
+                // 跟注 — 中
+                b.contains("跟注") || b.contains("call", ignoreCase = true) -> {
+                    positions.add(ButtonPosition(b, 0.500, 0.960))
+                }
+                // 加注/下注 — 右
+                (b.contains("加注") || b.contains("下注") || b.contains("bet", ignoreCase = true) ||
+                     b.contains("raise", ignoreCase = true)) && !b.contains("%") -> {
+                    positions.add(ButtonPosition(b, 0.819, 0.960))
+                    rightSlotUsed = true
+                }
+                // 全下/全押
+                b.contains("全下") || b.contains("全押") || b.contains("all in", ignoreCase = true) -> {
+                    positions.add(ButtonPosition(b, 0.819, 0.751))
+                }
+                // 下注预设按钮 — 右侧竖排，从上到下
+                b.contains("100%") || b.contains("100％") -> {
+                    positions.add(ButtonPosition(b, 0.819, 0.751))
+                }
+                b.contains("75%") || b.contains("75％") -> {
+                    positions.add(ButtonPosition(b, 0.819, 0.821))
+                }
+                b.contains("50%") || b.contains("50％") -> {
+                    positions.add(ButtonPosition(b, 0.819, 0.890))
+                }
+                b.contains("33%") || b.contains("33％") -> {
+                    positions.add(ButtonPosition(b, 0.819, 0.937))
+                }
+                // 其他按钮（Insurance/Cashout等）— 放到右侧
+                else -> {
+                    if (!rightSlotUsed) {
+                        positions.add(ButtonPosition(b, 0.819, 0.960))
+                        rightSlotUsed = true
+                    } else {
+                        positions.add(ButtonPosition(b, 0.500, 0.960))
+                    }
+                }
             }
         }
+        return positions
     }
-    
+
     /**
-     * 构建简单请求（用于区域识别）
+     * D按钮座位号映射到位置字符串（与旧逻辑兼容）
      */
-    private fun buildSimpleRequest(base64Image: String, prompt: String): String {
+    private fun mapDSeatToPosition(seat: Int): String {
+        return when (seat) {
+            0 -> "self"
+            1 -> "top"
+            2 -> "right-top"
+            3 -> "right-bottom"
+            4 -> "bottom"
+            5 -> "left"
+            else -> ""
+        }
+    }
+
+    /**
+     * 合并缓存的公共牌和新识别的公共牌
+     * 缓存数组按格位0-4存储，新识别结果按newIndices顺序对应
+     */
+    private fun mergeCommCards(newIndices: List<Int>, newCards: List<CardInfo>): List<CardInfo> {
+        val merged = RegionCropper.getCachedCommunitySlots()
+        for ((i, idx) in newIndices.withIndex()) {
+            if (i < newCards.size && idx in merged.indices) {
+                merged[idx] = newCards[i]
+            }
+        }
+        return merged.filterNotNull()
+    }
+
+    private fun stitchBitmapsHorizontally(bitmaps: List<Bitmap>, gap: Int = 8): Bitmap? {
+        if (bitmaps.isEmpty()) return null
+        if (bitmaps.size == 1) return bitmaps[0]
+        val totalWidth = bitmaps.sumOf { it.width } + gap * (bitmaps.size - 1)
+        val maxHeight = bitmaps.maxOf { it.height }
+        return try {
+            val result = Bitmap.createBitmap(totalWidth, maxHeight, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(result)
+            var offsetX = 0
+            for (bmp in bitmaps) {
+                canvas.drawBitmap(bmp, offsetX.toFloat(), 0f, null)
+                offsetX += bmp.width + gap
+            }
+            result
+        } catch (e: Exception) { null }
+    }
+
+    private fun stitchBitmapsVertically(bitmaps: List<Bitmap>, gap: Int = 8): Bitmap? {
+        if (bitmaps.isEmpty()) return null
+        if (bitmaps.size == 1) return bitmaps[0]
+        val totalHeight = bitmaps.sumOf { it.height } + gap * (bitmaps.size - 1)
+        val maxWidth = bitmaps.maxOf { it.width }
+        return try {
+            val result = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(result)
+            var offsetY = 0
+            for (bmp in bitmaps) {
+                canvas.drawBitmap(bmp, 0f, offsetY.toFloat(), null)
+                offsetY += bmp.height + gap
+            }
+            result
+        } catch (e: Exception) { null }
+    }
+
+    // ========================================
+    // 通用工具
+    // ========================================
+
+    private fun buildSimpleRequest(base64Image: String, prompt: String, maxTokens: Int = 200): String {
         return JSONObject().apply {
             put("model", modelName)
-            put("max_tokens", 200)  // 区域识别不需要太多输出
+            put("max_tokens", maxTokens)
             put("temperature", 0.0)
             put("response_format", JSONObject().put("type", "json_object"))
             put("messages", JSONArray().apply { put(JSONObject().apply {
@@ -1360,99 +1582,21 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             }) })
         }.toString()
     }
-    
-    /**
-     * Bitmap转Base64
-     */
-    private fun bitmapToBase64(bitmap: Bitmap): String {
+
+    private fun bitmapToBase64(bitmap: Bitmap, quality: Int = 80): String {
         val outputStream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
         val bytes = outputStream.toByteArray()
         return Base64.encodeToString(bytes, Base64.NO_WRAP)
     }
-    
-    /**
-     * 解析手牌响应
-     */
-    private fun parseHandCardsResponse(response: String): List<CardInfo> {
-        return try {
-            // 尝试提取JSON部分
-            val jsonStr = extractJson(response)
-            if (jsonStr != null) {
-                val jsonArray = JSONArray(jsonStr)
-                val cards = mutableListOf<CardInfo>()
-                for (i in 0 until jsonArray.length().coerceAtMost(2)) {
-                    val obj = jsonArray.getJSONObject(i)
-                    val rank = obj.optString("rank", "")
-                    val suit = obj.optString("suit", "")
-                    if (rank.isNotEmpty() && suit.isNotEmpty()) {
-                        cards.add(CardInfo(rank, suit))
-                    }
-                }
-                return cards
-            }
-            emptyList()
-        } catch (e: Exception) {
-            Log.e(TAG, "解析手牌响应失败: ${e.message}")
-            emptyList()
-        }
-    }
-    
-    /**
-     * 解析公共牌响应
-     */
-    private fun parseCommunityCardsResponse(response: String): List<CardInfo> {
-        return try {
-            val jsonStr = extractJson(response)
-            if (jsonStr != null) {
-                val jsonArray = JSONArray(jsonStr)
-                val cards = mutableListOf<CardInfo>()
-                for (i in 0 until jsonArray.length().coerceAtMost(5)) {
-                    val obj = jsonArray.getJSONObject(i)
-                    val rank = obj.optString("rank", "")
-                    val suit = obj.optString("suit", "")
-                    if (rank.isNotEmpty() && suit.isNotEmpty()) {
-                        cards.add(CardInfo(rank, suit))
-                    }
-                }
-                return cards
-            }
-            emptyList()
-        } catch (e: Exception) {
-            Log.e(TAG, "解析公共牌响应失败: ${e.message}")
-            emptyList()
-        }
-    }
-    
-    /**
-     * 解析底池响应
-     */
-    private fun parsePotResponse(response: String): Long? {
-        return try {
-            val jsonStr = extractJson(response)
-            if (jsonStr != null) {
-                val json = JSONObject(jsonStr)
-                return json.optLong("pot", 0)
-            }
-            // 尝试直接提取数字
-            val match = Regex("\\d+").find(response)
-            match?.value?.toLongOrNull()
-        } catch (e: Exception) {
-            Log.e(TAG, "解析底池响应失败: ${e.message}")
-            null
-        }
-    }
-    
-    /**
-     * 根据公共牌数量确定street
-     */
+
     private fun determineStreet(communityCards: List<CardInfo>): String {
         return when (communityCards.size) {
             0 -> "preflop"
             3 -> "flop"
             4 -> "turn"
             5 -> "river"
-            else -> "unknown"
+            else -> "preflop"  // 容错：1-2张异常情况按preflop处理
         }
     }
 }
