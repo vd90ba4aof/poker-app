@@ -1237,6 +1237,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 Log.d(TAG, "⏱ 缓存检查+编码: ${t2 - t1}ms (手API=$needHandApi, 新公共牌=${newCommIndices.size}张, 底池API=$needPotApi)")
 
                 // 8. 释放中间bitmap（保留screenshotBmp直到不需要）
+                // boardApiBitmap在多部件拼接时是新建bitmap，需回收；单部件时与boardParts元素同一对象，isRecycled检查保证安全
+                RegionCropper.recycleBitmaps(boardApiBitmap)
                 RegionCropper.recycleBitmaps(*boardParts.toTypedArray())
                 RegionCropper.recycleBitmaps(actionBmp, boardMerged, potBmp)
                 handBitmaps.forEach { RegionCropper.recycleBitmaps(it) }
