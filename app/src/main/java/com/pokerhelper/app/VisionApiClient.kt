@@ -42,6 +42,7 @@ object VisionApiClient {
             appContext = context.applicationContext
             // 预加载本地CV模板
             try { LocalCardRecognizer.getInstance(appContext) } catch (_: Exception) {}
+            try { LocalActionRecognizer.getInstance(appContext) } catch (_: Exception) {}
         }
     }
 
@@ -1226,6 +1227,39 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val actionBmp = RegionCropper.cropActionArea(screenshotBmp)
                 val actionBase64 = actionBmp?.let { bitmapToBase64(it, quality = 80) }
 
+                // V2.9.519: 本地CV操作区识别（毫秒级，成功则跳过VLM操作区API）
+                var localAction: ActionAreaResult? = null
+                try {
+                    val tLA = System.currentTimeMillis()
+                    val lar = LocalActionRecognizer.getInstance(context).recognizeAction(screenshotBmp)
+                    if (lar != null && lar.minRaise != null) {
+                        val buttons = mutableListOf<String>()
+                        buttons.add("弃牌")
+                        if (lar.facingBet && lar.callAmount != null) {
+                            buttons.add("跟注 ${lar.callAmount}")
+                        } else {
+                            buttons.add("让牌")
+                        }
+                        buttons.add("加注 ${lar.minRaise}")
+                        val positions = mapButtonsToPositions(buttons)
+                        localAction = ActionAreaResult(
+                            buttons = buttons,
+                            buttonPositions = positions,
+                            toCall = lar.callAmount ?: 0,
+                            myChips = 0,
+                            dButtonSeat = -1,
+                            activePlayers = 2,
+                            isInsurance = false,
+                            rawResponse = "local: fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} p=${lar.presets} c=%.2f".format(lar.confidence)
+                        )
+                        Log.d(TAG, "🔍 本地CV操作区: ${System.currentTimeMillis() - tLA}ms | " +
+                                "fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} " +
+                                "presets=${lar.presets} conf=%.2f".format(lar.confidence))
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "本地CV操作区失败，VLM兜底: ${e.message}")
+                }
+
                 // 3. 裁剪牌面（本地CV已识别手牌/公共牌，仅VLM兜底时需要）
                 val needHandApi = !localHandOk
                 val needBoardApi = needHandApi || !localCommOk
@@ -1298,7 +1332,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         val boardJob = if (boardBase64 != null && needBoardApi) {
                             async(Dispatchers.IO) { recognizeBoardArea(boardBase64, needHandApiFinal, newCommIndices.size, needPotApi) }
                         } else null
-                        val actionJob = if (actionBase64 != null) {
+                        val actionJob = if (actionBase64 != null && localAction == null) {
                             async(Dispatchers.IO) { recognizeActionArea(actionBase64) }
                         } else null
 
@@ -1342,8 +1376,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 }
                 val finalPot = (potValue ?: board?.potAmount ?: 0L).toInt()
 
-                // 12. 构建结果
-                val action = actionResult
+                // 12. 构建结果（本地CV操作区优先）
+                val action = localAction ?: actionResult
                 val result = VisionResult(
                     isPokerTable = finalHoleCards.size == 2,
                     holeCards = finalHoleCards,
@@ -1355,7 +1389,11 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     myPosition = "",
                     street = determineStreet(finalCommCards),
                     toCall = action?.toCall ?: 0,
-                    minRaise = 0,
+                    minRaise = action?.let { a ->
+                        // 从"加注 XXX"按钮文本提取数字
+                        a.buttons.firstOrNull { it.contains("加注") }
+                            ?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
+                    } ?: 0,
                     buttons = action?.buttons ?: emptyList(),
                     blindSB = 0,
                     blindBB = 0,
