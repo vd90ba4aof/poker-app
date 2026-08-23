@@ -992,17 +992,77 @@ if brace_failures:
 else:
     check(f"花括号平衡: 所有 {len(kt_files) + len(java_files)} 个 Kotlin/Java 文件", True)
 
-# 同时检查圆括号和方括号平衡（简化版，不做位置追踪）
+# 同时检查圆括号和方括号平衡——先剥离字符串/注释，避免正则模板里的 \( \[ 被误计
+def strip_strings_and_comments(code):
+    """移除 Kotlin/Java 源码中的字符串、字符字面量和注释，返回只剩代码骨架的字符串。
+    支持：// 行注释、/* */ 块注释、"..." 普通字符串、\"\"\"...\"\"\" 三重引号字符串、'...' 字符字面量。
+    """
+    out = []
+    i, n = 0, len(code)
+    while i < n:
+        c = code[i]
+        nxt = code[i + 1] if i + 1 < n else ''
+        nxt2 = code[i + 2] if i + 2 < n else ''
+        # 行注释
+        if c == '/' and nxt == '/':
+            while i < n and code[i] != '\n':
+                i += 1
+            continue
+        # 块注释
+        if c == '/' and nxt == '*':
+            i += 2
+            while i < n - 1 and not (code[i] == '*' and code[i + 1] == '/'):
+                i += 1
+            i += 2
+            continue
+        # 三重引号字符串
+        if c == '"' and nxt == '"' and nxt2 == '"':
+            i += 3
+            while i < n - 2 and not (code[i] == '"' and code[i + 1] == '"' and code[i + 2] == '"'):
+                i += 1
+            i += 3
+            out.append('""')  # 占位，保持字符串外括号位置不受影响
+            continue
+        # 普通字符串
+        if c == '"':
+            i += 1
+            while i < n:
+                if code[i] == '\\':
+                    i += 2
+                    continue
+                if code[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            out.append('""')
+            continue
+        # 字符字面量
+        if c == "'":
+            i += 1
+            while i < n:
+                if code[i] == '\\':
+                    i += 2
+                    continue
+                if code[i] == "'":
+                    i += 1
+                    break
+                i += 1
+            out.append("''")
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
 paren_failures = []
 for fpath in kt_files + java_files:
     rel = os.path.relpath(fpath, REPO)
     with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
         content = f.read()
-    # 移除注释和字符串后计数（简化：直接计数，允许小幅偏差因字符串中含括号）
-    opens = content.count('(') - content.count(')')
-    sq_opens = content.count('[') - content.count(']')
-    # 允许字符串导致的±2偏差，只报严重不平衡
-    if abs(opens) > 3 or abs(sq_opens) > 3:
+    skeleton = strip_strings_and_comments(content)
+    opens = skeleton.count('(') - skeleton.count(')')
+    sq_opens = skeleton.count('[') - skeleton.count(']')
+    if opens != 0 or sq_opens != 0:
         paren_failures.append((rel, opens, sq_opens))
 
 if paren_failures:
