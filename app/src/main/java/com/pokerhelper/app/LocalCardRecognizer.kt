@@ -64,6 +64,10 @@ class LocalCardRecognizer private constructor(private val context: Context) {
     @Volatile
     private var loaded = false
 
+    // V2.9.521: 诊断信息——最近一次识别各步失败原因
+    @Volatile var lastDiag: String = ""
+        private set
+
     fun loadTemplates() {
         if (loaded) return
         try {
@@ -470,7 +474,23 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             screenshot.getPixels(pixels, 0, cw, x1, y1, cw, ch)
 
             // Check card exists
-            if (!hasCard(pixels, cw, ch, 0, 0, cw, ch)) return null
+            if (!hasCard(pixels, cw, ch, 0, 0, cw, ch)) {
+                // V2.9.521: 诊断——统计实际像素分布
+                var white=0; var red=0; var black=0; var other=0
+                for (py in 0 until ch) for (px in 0 until cw) {
+                    val p = pixels[py*cw+px]
+                    when {
+                        isWhite(p) -> white++
+                        isRed(p) -> red++
+                        isBlack(p) -> black++
+                        else -> other++
+                    }
+                }
+                val total = cw*ch
+                Log.w(TAG, "🔍 Hand$handIndex: hasCard=false region=${x1},${y1}-${x2},${y2} size=${cw}x${ch} " +
+                        "white=$white(${white*100/total}%) red=$red black=$black other=$other")
+                return null
+            }
 
             // Detect color from top-left area
             val isRed = detectColor(pixels, cw, 0, 0, cw / 2, ch / 3)
@@ -497,7 +517,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             }
 
             if (rankComp == null || suitComp == null) {
-                Log.d(TAG, "Hand$handIndex: could not find rank/suit components (${components.size} found)")
+                Log.w(TAG, "🔍 Hand$handIndex: rank=${rankComp?.size} suit=${suitComp?.size} " +
+                        "components=${components.size} isRed=$isRed " +
+                        "top5=[${components.sortedByDescending { it.size }.take(5).map { "s=${it.size} cy=${(it.cy/ch).let { "%.2f".format(it) }}" }}]")
                 return null
             }
 
@@ -511,7 +533,11 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 handSuitTemplates.filterKeys { it in BLACK_SUITS }
             val (bestSuit, suitScore) = match(suitBinary, candidateSuits)
 
-            if (bestRank == null || bestSuit == null) return null
+            if (bestRank == null || bestSuit == null) {
+                Log.w(TAG, "🔍 Hand$handIndex: match失败 rank=$bestRank(${"%.2f".format(rankScore)}) suit=$bestSuit(${"%.2f".format(suitScore)}) " +
+                        "rankBinary=${rankBinary.first.count{it}}px suitBinary=${suitBinary.first.count{it}}px")
+                return null
+            }
             CardResult(bestRank, bestSuit, (rankScore + suitScore) / 2, rankScore, suitScore)
         } catch (e: Exception) {
             Log.w(TAG, "Hand card $handIndex failed: ${e.message}")
@@ -523,17 +549,37 @@ class LocalCardRecognizer private constructor(private val context: Context) {
     fun recognizeAllCards(screenshot: Bitmap): Pair<List<CardResult>, List<CardResult>> {
         val holeCards = ArrayList<CardResult>()
         val communityCards = ArrayList<CardResult>()
+        val diag = StringBuilder()
+
+        diag.append("bitmap=${screenshot.width}x${screenshot.height};")
+        Log.d(TAG, "🔍 本地CV开始: bitmap=${screenshot.width}x${screenshot.height}")
 
         // 手牌
         for (i in 0..1) {
-            recognizeHandCard(screenshot, i)?.let { holeCards.add(it) }
+            val result = recognizeHandCard(screenshot, i)
+            if (result != null) {
+                holeCards.add(result)
+                diag.append("H$i=OK(${result.rank}${result.suit},c=%.2f);".format(result.confidence))
+                Log.d(TAG, "🔍 Hand$i: 成功 ${result.rank}${result.suit} conf=${result.confidence}")
+            } else {
+                diag.append("H$i=FAIL;")
+                Log.w(TAG, "🔍 Hand$i: 失败(null)")
+            }
         }
 
         // 公共牌
         for (i in 0..4) {
-            recognizeCommunityCard(screenshot, i)?.let { communityCards.add(it) }
+            val result = recognizeCommunityCard(screenshot, i)
+            if (result != null) {
+                communityCards.add(result)
+                diag.append("C$i=OK(${result.rank}${result.suit});")
+                Log.d(TAG, "🔍 Comm$i: 成功 ${result.rank}${result.suit} conf=${result.confidence}")
+            }
         }
 
+        diag.append("hand=${holeCards.size}/2,comm=${communityCards.size}/5")
+        lastDiag = diag.toString()
+        Log.d(TAG, "🔍 本地CV完成: hand=${holeCards.size}/2 comm=${communityCards.size}/5 diag=$lastDiag")
         return Pair(holeCards, communityCards)
     }
 

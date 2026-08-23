@@ -316,6 +316,7 @@ object DiagnosticLogger {
         val localHandCards: String,
         val localCommunityCards: String,
         val localStreet: String?,
+        val localDiag: String = "",
         
         // 本地CV锁定的信息
         val streetLocked: String?,
@@ -459,7 +460,8 @@ object DiagnosticLogger {
         errorMessage: String?,
         strategySent: Boolean,
         rawResponse: String? = null,
-        errorCategory: ErrorCategory = ErrorCategory.UNKNOWN
+        errorCategory: ErrorCategory = ErrorCategory.UNKNOWN,
+        localDiag: String = ""
     ) {
         val now = System.currentTimeMillis()
         val timeStr = timeFormat.format(Date(now))
@@ -493,6 +495,7 @@ object DiagnosticLogger {
             localHandCards = localHandCards.joinToString(",") { "${it.rank}${it.suit}" },
             localCommunityCards = localCommunityCards.joinToString(",") { "${it.rank}${it.suit}" },
             localStreet = localStreet,
+            localDiag = localDiag,
             streetLocked = streetLocked,
             holeCardsLocked = holeCardsLocked,
             vlmTimeMs = vlmTimeMs,
@@ -783,6 +786,7 @@ object DiagnosticLogger {
                 put("handCards", log.localHandCards)
                 put("communityCards", log.localCommunityCards)
                 put("street", log.localStreet ?: JSONObject.NULL)
+                put("diag", log.localDiag)
             }
             put("localCV", localCV)
             
