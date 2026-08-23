@@ -26,7 +26,8 @@ object RegionCropper {
 
     // ===== 手牌区域（基于Screenshot_2026-08-14干净截图实测）=====
     // 2张手牌在底部偏左，重叠式扇出，直接裁整体区域
-    private val HAND_0 = RegionRect(35, 1745, 175, 1945)
+    // V2.9.523: H0坐标修正（原35起裁入了卡片左侧黑边，导致rank+suit连通成巨型组件）
+    private val HAND_0 = RegionRect(55, 1745, 195, 1945)
     private val HAND_1 = RegionRect(165, 1745, 325, 1945)
 
     // ===== 公共牌区域（5张，基于Screenshot_2026-08-14干净截图实测）=====

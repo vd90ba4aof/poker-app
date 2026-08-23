@@ -465,9 +465,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
             val x1: Int; val y1: Int; val x2: Int; val y2: Int
             if (handIndex == 0) {
-                x1 = (35 * scaleX).toInt().coerceIn(0, sw - 1)
+                x1 = (55 * scaleX).toInt().coerceIn(0, sw - 1)
                 y1 = (1745 * scaleY).toInt().coerceIn(0, sh - 1)
-                x2 = (175 * scaleX).toInt().coerceIn(x1 + 1, sw)
+                x2 = (195 * scaleX).toInt().coerceIn(x1 + 1, sw)
                 y2 = (1945 * scaleY).toInt().coerceIn(y1 + 1, sh)
             } else {
                 x1 = (165 * scaleX).toInt().coerceIn(0, sw - 1)
@@ -500,8 +500,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 return failReason("hasCard=false w=${white*100/total}% r=$red b=$black o=$other")
             }
 
-            // Detect color from top-left area
-            val isRed = detectColor(pixels, cw, 0, 0, cw / 2, ch / 3)
+            // Detect color from top-left area (skip top 12px card border/shadow)
+            val colorY1 = (12 * scaleY).toInt().coerceAtMost(ch / 4)
+            val isRed = detectColor(pixels, cw, 0, colorY1, cw / 2, ch / 3)
 
             // Find connected components
             val (components, labels) = findComponents(pixels, cw, ch, isRed)
