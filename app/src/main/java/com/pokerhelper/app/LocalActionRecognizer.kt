@@ -236,7 +236,7 @@ class LocalActionRecognizer private constructor(private val context: Context) {
      * 1. 合并水平gap<=1的组件（JPEG断裂）
      * 2. 吸收小碎片到最近的垂直对齐邻居
      * 3. 列投影山谷分割超宽块
-     * 4. 尺寸过滤 + 填洞 + 紧bbox
+     * 4. 尺寸过滤 + 紧bbox（V2.9.525: 去掉fillHoles）
      */
     private fun segmentDigits(mask: BooleanArray, w: Int, h: Int): List<Triple<BooleanArray, Int, Int>> {
         // 统计内容像素（mask中true=黄色内容）
@@ -247,6 +247,10 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         var comps = findComponents(mask, w, h)
         if (comps.isEmpty()) return emptyList()
         comps = comps.sortedBy { it.x1 }
+
+        // V2.9.525: 过滤逗号和碎片（逗号area<100, h<20；数字area>280, h>=34）
+        comps = comps.filter { it.area >= 100 && it.h >= 20 }
+        if (comps.isEmpty()) return emptyList()
 
         val maxH = comps.maxOf { it.h }
 
@@ -394,7 +398,7 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             }
         }
 
-        // Step 4: 提取 + 填洞 + 紧bbox + 尺寸过滤
+        // Step 4: 提取 + 紧bbox + 尺寸过滤（V2.9.525: 去掉fillHoles，它会把0/6/8/9的正常空心填实）
         val result = ArrayList<Triple<BooleanArray, Int, Int>>()
         for (c in resultComps) {
             if (c.w < DIGIT_MIN_W) continue
@@ -407,8 +411,6 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                     d[y * rw + x] = mask[(c.y1 + y) * w + (c.x1 + x)]
                 }
             }
-            // 填洞（flood-fill背景，剩余的hole设为true）
-            fillHoles(d, rw, rh)
 
             // 紧bbox
             var minX = rw; var maxX = -1; var minY = rh; var maxY = -1
