@@ -1200,6 +1200,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val localRecognizer = LocalCardRecognizer.getInstance(context)
                 var localHoleCards: List<CardInfo>? = null
                 var localCommCards: List<CardInfo>? = null
+                // 本地CV置信度阈值（任一张低于阈值则VLM兜底）
+                val LOCAL_CONFIDENCE_THRESHOLD = 0.75f
 
                 try {
                     val tLocal = System.currentTimeMillis()
@@ -1210,18 +1212,26 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     // 公共牌：本地CV能稳定识别0-5张，空列表=翻前无公共牌也是有效结果
                     localCommCards = localComms.map { CardInfo(it.rank, it.suit) }
                     val minCommConf = if (localComms.isNotEmpty()) localComms.minOf { it.confidence } else 1.0f
-                    Log.d(TAG, "🔍 本地CV: ${System.currentTimeMillis() - tLocal}ms | " +
-                            "hand=${localHands.map { "${it.rank}${it.suit}(${it.confidence})" }} | " +
-                            "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }} minConf=$minCommConf")
+                    val minHandConf = if (localHands.isNotEmpty()) localHands.minOf { it.confidence } else 1.0f
+                    val minCardConf = minOf(minHandConf, minCommConf)
+                    // 置信度低于阈值则丢弃本地结果，VLM兜底
+                    if (minCardConf < LOCAL_CONFIDENCE_THRESHOLD) {
+                        Log.w(TAG, "🔍 本地CV置信度不足(min=%.2f<%.2f)，VLM兜底".format(minCardConf, LOCAL_CONFIDENCE_THRESHOLD))
+                        localHoleCards = null
+                        localCommCards = null
+                    } else {
+                        Log.d(TAG, "🔍 本地CV: ${System.currentTimeMillis() - tLocal}ms | " +
+                                "hand=${localHands.map { "${it.rank}${it.suit}(${it.confidence})" }} | " +
+                                "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }} minConf=$minCardConf")
+                    }
                 } catch (e: Exception) {
                     Log.w(TAG, "本地CV失败，将使用VLM: ${e.message}")
                 }
 
-                // 本地CV置信度阈值（任一张低于阈值则VLM兜底）
-                val LOCAL_CONFIDENCE_THRESHOLD = 0.75f
+                // 本地CV置信度阈值（定义在上方）
                 val localHandOk = localHoleCards != null && localHoleCards!!.size == 2
-                // 公共牌：手牌识别成功时信任本地结果（含空列表=翻前）
-                val localCommOk = localHoleCards != null
+                // 公共牌：手牌识别成功且置信度足够时信任本地结果（含空列表=翻前）
+                val localCommOk = localHandOk
 
                 // 2. 裁剪操作区（每帧必识别）
                 val actionBmp = RegionCropper.cropActionArea(screenshotBmp)
@@ -1232,7 +1242,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 try {
                     val tLA = System.currentTimeMillis()
                     val lar = LocalActionRecognizer.getInstance(context).recognizeAction(screenshotBmp)
-                    if (lar != null && lar.minRaise != null) {
+                    if (lar != null && lar.minRaise != null && lar.confidence >= LOCAL_CONFIDENCE_THRESHOLD) {
                         val buttons = mutableListOf<String>()
                         buttons.add("弃牌")
                         if (lar.facingBet && lar.callAmount != null) {
@@ -1255,6 +1265,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         Log.d(TAG, "🔍 本地CV操作区: ${System.currentTimeMillis() - tLA}ms | " +
                                 "fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} " +
                                 "presets=${lar.presets} conf=%.2f".format(lar.confidence))
+                    } else if (lar != null) {
+                        Log.w(TAG, "🔍 本地CV操作区置信度不足(conf=%.2f<%.2f)，VLM兜底".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD))
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "本地CV操作区失败，VLM兜底: ${e.message}")

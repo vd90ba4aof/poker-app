@@ -136,12 +136,17 @@ class LocalActionRecognizer private constructor(private val context: Context) {
 
     /** 提取区域内黄色像素的二值mask，true=黄色内容 */
     private fun yellowMask(pixels: IntArray, w: Int, h: Int, x1: Int, y1: Int, x2: Int, y2: Int): BooleanArray {
-        val rw = x2 - x1
-        val rh = y2 - y1
+        // clamp到像素数组边界，防止缩放后越界
+        val cx1 = x1.coerceIn(0, w - 1)
+        val cx2 = x2.coerceIn(cx1 + 1, w)
+        val cy1 = y1.coerceIn(0, h - 1)
+        val cy2 = y2.coerceIn(cy1 + 1, h)
+        val rw = cx2 - cx1
+        val rh = cy2 - cy1
         val mask = BooleanArray(rw * rh)
         for (y in 0 until rh) {
             for (x in 0 until rw) {
-                mask[y * rw + x] = isYellow(pixels[(y1 + y) * w + (x1 + x)])
+                mask[y * rw + x] = isYellow(pixels[(cy1 + y) * w + (cx1 + x)])
             }
         }
         return mask
@@ -710,10 +715,14 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             val pixels = IntArray(opW * opH)
             screenshot.getPixels(pixels, 0, opW, opX1, opY1, opW, opH)
 
-            // 判断是否面对下注：中间按钮黄色像素数
+            // 判断是否面对下注：中间按钮黄色像素数（坐标clamp防止缩放越界）
             var yellowCount = 0
-            for (y in (btnY1 - opY1) until (btnY2 - opY1)) {
-                for (x in (btn2X1 - opX1) until (btn2X2 - opX1)) {
+            val yLo = (btnY1 - opY1).coerceIn(0, opH - 1)
+            val yHi = (btnY2 - opY1).coerceIn(0, opH)
+            val xLo = (btn2X1 - opX1).coerceIn(0, opW - 1)
+            val xHi = (btn2X2 - opX1).coerceIn(0, opW)
+            for (y in yLo until yHi) {
+                for (x in xLo until xHi) {
                     if (isYellow(pixels[y * opW + x])) yellowCount++
                 }
             }

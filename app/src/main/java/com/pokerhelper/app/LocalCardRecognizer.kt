@@ -118,7 +118,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
     // ========== 像素工具 ==========
 
     private fun getPixel(arr: IntArray, w: Int, x: Int, y: Int): Int {
-        return arr[y * w + x]
+        if (x < 0 || y < 0 || x >= w) return 0
+        val idx = y * w + x
+        return if (idx in arr.indices) arr[idx] else 0
     }
 
     private fun isRed(pixel: Int): Boolean {
@@ -276,10 +278,10 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val scaleY = h / 2344f
 
             val baseX = intArrayOf(166, 316, 466, 616, 766)
-            val x1 = (baseX[cardIndex] * scaleX).toInt()
-            val y1 = (1068 * scaleY).toInt()
-            val x2 = ((baseX[cardIndex] + 144) * scaleX).toInt()
-            val y2 = (1272 * scaleY).toInt()
+            val x1 = (baseX[cardIndex] * scaleX).toInt().coerceIn(0, w - 1)
+            val y1 = (1068 * scaleY).toInt().coerceIn(0, h - 1)
+            val x2 = ((baseX[cardIndex] + 144) * scaleX).toInt().coerceIn(x1 + 1, w)
+            val y2 = (1272 * scaleY).toInt().coerceIn(y1 + 1, h)
 
             val cw = x2 - x1
             val ch = y2 - y1
@@ -449,15 +451,15 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
             val x1: Int; val y1: Int; val x2: Int; val y2: Int
             if (handIndex == 0) {
-                x1 = (35 * scaleX).toInt()
-                y1 = (1745 * scaleY).toInt()
-                x2 = (175 * scaleX).toInt()
-                y2 = (1945 * scaleY).toInt()
+                x1 = (35 * scaleX).toInt().coerceIn(0, sw - 1)
+                y1 = (1745 * scaleY).toInt().coerceIn(0, sh - 1)
+                x2 = (175 * scaleX).toInt().coerceIn(x1 + 1, sw)
+                y2 = (1945 * scaleY).toInt().coerceIn(y1 + 1, sh)
             } else {
-                x1 = (165 * scaleX).toInt()
-                y1 = (1745 * scaleY).toInt()
-                x2 = (325 * scaleX).toInt()
-                y2 = (1945 * scaleY).toInt()
+                x1 = (165 * scaleX).toInt().coerceIn(0, sw - 1)
+                y1 = (1745 * scaleY).toInt().coerceIn(0, sh - 1)
+                x2 = (325 * scaleX).toInt().coerceIn(x1 + 1, sw)
+                y2 = (1945 * scaleY).toInt().coerceIn(y1 + 1, sh)
             }
 
             val cw = x2 - x1
