@@ -235,7 +235,10 @@ class LocalActionRecognizer private constructor(private val context: Context) {
      * 4. 尺寸过滤 + 填洞 + 紧bbox
      */
     private fun segmentDigits(mask: BooleanArray, w: Int, h: Int): List<Triple<BooleanArray, Int, Int>> {
-        if (mask.count { it } < 30) return emptyList()
+        // 统计内容像素（mask中true=黄色内容）
+        var contentPx = 0
+        for (v in mask) if (v) contentPx++
+        if (contentPx < 30) return emptyList()
 
         var comps = findComponents(mask, w, h)
         if (comps.isEmpty()) return emptyList()
@@ -425,7 +428,10 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             for (y in 0 until th) {
                 System.arraycopy(d, (minY + y) * rw + minX, trimmed, y * tw, tw)
             }
-            if (trimmed.count { it } < DIGIT_MIN_AREA) continue
+            // 统计内容像素数（BooleanArray无count{}扩展，手写循环）
+            var contentPx = 0
+            for (v in trimmed) if (v) contentPx++
+            if (contentPx < DIGIT_MIN_AREA) continue
             result.add(Triple(trimmed, tw, th))
         }
         return result
