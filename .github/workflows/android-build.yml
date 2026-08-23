@@ -33,7 +33,7 @@ jobs:
       
     - name: Rename APK with version
       run: |
-        VERSION=$(grep "versionName" app/build.gradle | head -1 | sed 's/.*"//;s/".*//')
+        VERSION=$(grep "versionName" app/build.gradle | head -1 | sed 's/.*versionName *"//;s/".*//')
         cp app/build/outputs/apk/debug/app-debug.apk "poker-app-v${VERSION}.apk"
         echo "APK_NAME=poker-app-v${VERSION}.apk" >> $GITHUB_ENV
         echo "VERSION=${VERSION}" >> $GITHUB_ENV
