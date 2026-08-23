@@ -242,7 +242,7 @@ class LocalActionRecognizer private constructor(private val context: Context) {
 
         var comps = findComponents(mask, w, h)
         if (comps.isEmpty()) return emptyList()
-        comps.sortBy { it.x1 }
+        comps = comps.sortedBy { it.x1 }
 
         val maxH = comps.maxOf { it.h }
 
