@@ -86,6 +86,10 @@ class LocalActionRecognizer private constructor(private val context: Context) {
     @Volatile
     private var loaded = false
 
+    // V2.9.524: 操作区诊断信息
+    @Volatile var lastDiag: String = ""
+        private set
+
     fun loadTemplates() {
         if (loaded) return
         try {
@@ -689,14 +693,17 @@ class LocalActionRecognizer private constructor(private val context: Context) {
      */
     fun recognizeAction(screenshot: Bitmap): ActionResult? {
         if (!loaded) {
+            lastDiag = "templates_not_loaded(${digitTemplates.size}/10)"
             Log.w(TAG, "Templates not loaded, skipping")
             return null
         }
+        val diagSb = StringBuilder()
         return try {
             val sw = screenshot.width
             val sh = screenshot.height
             val sx = sw / 1080f
             val sy = sh / 2344f
+            diagSb.append("scr=${sw}x${sh};")
 
             val btnY1 = (BTN_Y1 * sy).toInt()
             val btnY2 = (BTN_Y2 * sy).toInt()
@@ -709,19 +716,22 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             val preX1 = (PRESET_X1 * sx).toInt()
             val preX2 = (PRESET_X2 * sx).toInt()
 
-            // 裁剪整个操作区（从预设顶部到按钮底部）以减少getPixels调用
             val opY1 = preY1
             val opY2 = btnY2
             val opX1 = minOf(preX1, btn2X1)
             val opX2 = maxOf(preX2, btn3X2)
             val opW = opX2 - opX1
             val opH = opY2 - opY1
-            if (opW <= 0 || opH <= 0) return null
+            if (opW <= 0 || opH <= 0) {
+                lastDiag = "${diagSb}region_invalid ${opW}x${opH}"
+                return null
+            }
+            diagSb.append("op=${opW}x${opH};")
 
             val pixels = IntArray(opW * opH)
             screenshot.getPixels(pixels, 0, opW, opX1, opY1, opW, opH)
 
-            // 判断是否面对下注：中间按钮黄色像素数（坐标clamp防止缩放越界）
+            // BTN2 yellow count
             var yellowCount = 0
             val yLo = (btnY1 - opY1).coerceIn(0, opH - 1)
             val yHi = (btnY2 - opY1).coerceIn(0, opH)
@@ -733,9 +743,22 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                 }
             }
             val facingBet = yellowCount > 100
+            diagSb.append("btn2Y=$yellowCount,fb=${if(facingBet)1 else 0};")
+
+            // BTN3 yellow count
+            var btn3Yellow = 0
+            val x3Lo = (btn3X1 - opX1).coerceIn(0, opW - 1)
+            val x3Hi = (btn3X2 - opX1).coerceIn(0, opW)
+            for (y in yLo until yHi) {
+                for (x in x3Lo until x3Hi) {
+                    if (isYellow(pixels[y * opW + x])) btn3Yellow++
+                }
+            }
+            diagSb.append("btn3Y=$btn3Yellow;")
 
             var callAmount: Int? = null
             var minConf = 1.0f
+            var callDiag = "skip"
 
             if (facingBet) {
                 val (call, conf) = recognizeNumber(
@@ -744,17 +767,19 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                     btn2X2 - opX1, btnY2 - opY1
                 )
                 callAmount = call
+                callDiag = if (call != null) "${call}(c=%.2f)".format(conf) else "null(c=%.2f)".format(conf)
                 if (call != null && conf < minConf) minConf = conf
             }
+            diagSb.append("call=$callDiag;")
 
             val (minRaise, mrConf) = recognizeNumber(
                 pixels, opW, opH,
                 btn3X1 - opX1, btnY1 - opY1,
                 btn3X2 - opX1, btnY2 - opY1
             )
+            diagSb.append("mr=${if(minRaise!=null) "${minRaise}(c=%.2f)".format(mrConf) else "null(c=%.2f)".format(mrConf)};")
             if (minRaise != null && mrConf < minConf) minConf = mrConf
 
-            // 预设金额行
             val presets = ArrayList<Int>()
             val rows = findAmountRows(
                 pixels, opW, opH,
@@ -768,15 +793,21 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                 )
                 if (amt != null) presets.add(amt)
             }
+            diagSb.append("presets=${presets.size}:${presets.joinToString(",")};")
+            diagSb.append("conf=%.2f".format(if (minConf >= 1.0f) 1.0f else minConf))
 
-            ActionResult(
+            val result = ActionResult(
                 facingBet = facingBet,
                 callAmount = callAmount,
                 minRaise = minRaise,
                 presets = presets,
                 confidence = if (minConf >= 1.0f) 1.0f else minConf
             )
+            lastDiag = diagSb.toString()
+            Log.d(TAG, "🔍 Action diag: $lastDiag")
+            result
         } catch (e: Exception) {
+            lastDiag = "${diagSb}exception:${e.message}"
             Log.w(TAG, "recognizeAction failed: ${e.message}")
             null
         }

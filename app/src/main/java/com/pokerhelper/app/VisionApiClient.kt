@@ -1284,9 +1284,12 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
 
                 // V2.9.519: 本地CV操作区识别（毫秒级，成功则跳过VLM操作区API）
                 var localAction: ActionAreaResult? = null
+                var actionDiag = "skipped"
                 try {
                     val tLA = System.currentTimeMillis()
-                    val lar = LocalActionRecognizer.getInstance(context).recognizeAction(screenshotBmp)
+                    val larInstance = LocalActionRecognizer.getInstance(context)
+                    val lar = larInstance.recognizeAction(screenshotBmp)
+                    actionDiag = larInstance.lastDiag
                     if (lar != null && lar.minRaise != null && lar.confidence >= LOCAL_CONFIDENCE_THRESHOLD) {
                         val buttons = mutableListOf<String>()
                         buttons.add("弃牌")
@@ -1307,15 +1310,22 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                             isInsurance = false,
                             rawResponse = "local: fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} p=${lar.presets} c=%.2f".format(lar.confidence)
                         )
+                        actionDiag += ";USED"
                         Log.d(TAG, "🔍 本地CV操作区: ${System.currentTimeMillis() - tLA}ms | " +
                                 "fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} " +
                                 "presets=${lar.presets} conf=%.2f".format(lar.confidence))
                     } else if (lar != null) {
+                        actionDiag += ";LOW_CONF(%.2f<%s)".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD)
                         Log.w(TAG, "🔍 本地CV操作区置信度不足(conf=%.2f<%.2f)，VLM兜底".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD))
+                    } else {
+                        actionDiag += ";NULL_RESULT"
                     }
                 } catch (e: Exception) {
+                    actionDiag = "exception:${e.message}"
                     Log.w(TAG, "本地CV操作区失败，VLM兜底: ${e.message}")
                 }
+                // V2.9.524: 将操作区诊断追加到手牌diag
+                lastLocalDiag = "${lastLocalDiag}|ACT:$actionDiag"
 
                 // 3. 裁剪牌面（本地CV已识别手牌/公共牌，仅VLM兜底时需要）
                 val needHandApi = !localHandOk
