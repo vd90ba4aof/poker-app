@@ -2615,13 +2615,13 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                 Log.d(TAG, "⏱ analyzeSnapshot: ${tAnalyzeEnd-tAnalyzeStart}ms")
                 Log.d(TAG, "★ VisionAPI result=${if(result!=null)"成功" else "null"}, lastError=${VisionApiClient.lastError}")
                 
-                // V2.9.167: 记录诊断日志（V2.9.515: 本地CV已废弃，参数留空）
+                // V2.9.520: 修复上报硬编码，传入VisionApiClient本地CV真实数据
                 DiagnosticLogger.logRecognition(
-                    localCVEnabled = false,
-                    localCVTimeMs = 0L,
-                    localHandCards = emptyList(),
-                    localCommunityCards = emptyList(),
-                    localStreet = null,
+                    localCVEnabled = VisionApiClient.lastLocalCVEnabled,
+                    localCVTimeMs = VisionApiClient.lastLocalCVTimeMs,
+                    localHandCards = VisionApiClient.lastLocalHandCards,
+                    localCommunityCards = VisionApiClient.lastLocalCommCards,
+                    localStreet = VisionApiClient.streetLocked,
                     streetLocked = VisionApiClient.streetLocked,
                     holeCardsLocked = VisionApiClient.holeCardsLocked != null,
                     vlmTimeMs = tAnalyzeEnd - tAnalyzeStart,

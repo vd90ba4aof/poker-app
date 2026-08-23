@@ -65,8 +65,8 @@ object VisionApiClient {
     // V2.9.108: prompt格式开关——true=单行紧凑(快), false=原格式(稳)
     var useCompactPrompt = true
 
-    // V2.9.515: 本地CV已废弃，纯云端VLM方案
-    var useLocalRecognition: Boolean = false
+    // V2.9.520: 本地CV已恢复启用（V2.9.515曾废弃，V2.9.518重新启用）
+    var useLocalRecognition: Boolean = true
     
     var apiProvider = "siliconflow"
     var apiKey = ""
@@ -78,6 +78,16 @@ object VisionApiClient {
     @Volatile var lastResult: VisionResult? = null
         private set
     @Volatile var lastResultTime: Long = 0
+        private set
+
+    // V2.9.520: 本地CV结果缓存（供DiagnosticLogger上报真实数据）
+    @Volatile var lastLocalCVEnabled: Boolean = true
+        private set
+    @Volatile var lastLocalCVTimeMs: Long = 0
+        private set
+    @Volatile var lastLocalHandCards: List<CardInfo> = emptyList()
+        private set
+    @Volatile var lastLocalCommCards: List<CardInfo> = emptyList()
         private set
 
     // V2.9.230: 断网兜底模式标志位——当API调用失败时是否启用本地识别兜底
@@ -1206,6 +1216,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 try {
                     val tLocal = System.currentTimeMillis()
                     val (localHands, localComms) = localRecognizer.recognizeAllCards(screenshotBmp)
+                    val localCVElapsed = System.currentTimeMillis() - tLocal
+                    lastLocalCVTimeMs = localCVElapsed
                     if (localHands.size == 2) {
                         localHoleCards = localHands.map { CardInfo(it.rank, it.suit) }
                     }
@@ -1220,13 +1232,19 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         localHoleCards = null
                         localCommCards = null
                     } else {
-                        Log.d(TAG, "🔍 本地CV: ${System.currentTimeMillis() - tLocal}ms | " +
+                        Log.d(TAG, "🔍 本地CV: ${localCVElapsed}ms | " +
                                 "hand=${localHands.map { "${it.rank}${it.suit}(${it.confidence})" }} | " +
                                 "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }} minConf=$minCardConf")
                     }
                 } catch (e: Exception) {
+                    lastLocalCVTimeMs = 0
                     Log.w(TAG, "本地CV失败，将使用VLM: ${e.message}")
                 }
+
+                // V2.9.520: 缓存本地CV结果供DiagnosticLogger上报
+                lastLocalCVEnabled = true
+                lastLocalHandCards = localHoleCards ?: emptyList()
+                lastLocalCommCards = localCommCards ?: emptyList()
 
                 // 本地CV置信度阈值（定义在上方）
                 val localHandOk = localHoleCards != null && localHoleCards!!.size == 2
@@ -1324,6 +1342,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
 
                 val t2 = System.currentTimeMillis()
                 Log.d(TAG, "⏱ 缓存+编码: ${t2 - t1}ms (本地CV hand=$localHandOk comm=$localCommOk, 手API=$needHandApiFinal, 新公共牌=${newCommIndices.size}张, 底池API=$needPotApi)")
+                Log.d(TAG, "🔍 boardBase64=${if(boardBase64!=null) "${boardBase64.length/1024}KB" else "null"} handStitch=${handStitch?.width}x${handStitch?.height} boardParts=${boardParts.size}")
 
                 // 8. 释放中间bitmap（保留screenshotBmp直到不需要）
                 // boardApiBitmap在多部件拼接时是新建bitmap，需回收；单部件时与boardParts元素同一对象，isRecycled检查保证安全
@@ -1481,12 +1500,17 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
 
                 val requestJson = buildSimpleRequest(base64Image, sb.toString(), maxTokens = 300)
                 val raw = sendRequest(requestJson)
-                val jsonStr = extractJson(raw) ?: return@withContext null
+                Log.d(TAG, "🔍 牌面API原始响应(${raw.length}字): ${raw.take(300)}")
+                val jsonStr = extractJson(raw) ?: run {
+                    Log.w(TAG, "🔍 牌面API: JSON提取失败")
+                    return@withContext null
+                }
                 val json = JSONObject(jsonStr)
 
                 val handCards = parseCards(json.optJSONArray("hand_cards"))
                 val commCards = parseCards(json.optJSONArray("community_cards"))
                 val pot = json.optLong("pot", 0)
+                Log.d(TAG, "🔍 牌面API结果: hand=${handCards.map{"${it.rank}${it.suit}"}} comm=${commCards.size}张 pot=$pot")
 
                 BoardRecognitionResult(handCards, commCards, pot, raw)
             } catch (e: Exception) {

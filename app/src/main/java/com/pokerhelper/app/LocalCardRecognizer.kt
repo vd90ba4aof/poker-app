@@ -470,7 +470,10 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             screenshot.getPixels(pixels, 0, cw, x1, y1, cw, ch)
 
             // Check card exists
-            if (!hasCard(pixels, cw, ch, 0, 0, cw, ch)) return null
+            if (!hasCard(pixels, cw, ch, 0, 0, cw, ch)) {
+                Log.w(TAG, "🔍 Hand$handIndex: hasCard=false (区域${x1},${y1}-${x2},${y2}无牌)")
+                return null
+            }
 
             // Detect color from top-left area
             val isRed = detectColor(pixels, cw, 0, 0, cw / 2, ch / 3)
@@ -497,7 +500,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             }
 
             if (rankComp == null || suitComp == null) {
-                Log.d(TAG, "Hand$handIndex: could not find rank/suit components (${components.size} found)")
+                Log.w(TAG, "🔍 Hand$handIndex: rank=${rankComp?.size} suit=${suitComp?.size} " +
+                        "components=${components.size} isRed=$isRed " +
+                        "top5=[${components.sortedByDescending { it.size }.take(5).map { "s=${it.size} cy=${(it.cy/ch).let { "%.2f".format(it) }}" }}]")
                 return null
             }
 
@@ -511,7 +516,11 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 handSuitTemplates.filterKeys { it in BLACK_SUITS }
             val (bestSuit, suitScore) = match(suitBinary, candidateSuits)
 
-            if (bestRank == null || bestSuit == null) return null
+            if (bestRank == null || bestSuit == null) {
+                Log.w(TAG, "🔍 Hand$handIndex: match失败 rank=$bestRank(${"%.2f".format(rankScore)}) suit=$bestSuit(${"%.2f".format(suitScore)}) " +
+                        "rankBinary=${rankBinary.first.count{it}}px suitBinary=${suitBinary.first.count{it}}px")
+                return null
+            }
             CardResult(bestRank, bestSuit, (rankScore + suitScore) / 2, rankScore, suitScore)
         } catch (e: Exception) {
             Log.w(TAG, "Hand card $handIndex failed: ${e.message}")
@@ -524,16 +533,29 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         val holeCards = ArrayList<CardResult>()
         val communityCards = ArrayList<CardResult>()
 
+        Log.d(TAG, "🔍 本地CV开始: bitmap=${screenshot.width}x${screenshot.height}")
+
         // 手牌
         for (i in 0..1) {
-            recognizeHandCard(screenshot, i)?.let { holeCards.add(it) }
+            val result = recognizeHandCard(screenshot, i)
+            if (result != null) {
+                holeCards.add(result)
+                Log.d(TAG, "🔍 Hand$i: 成功 ${result.rank}${result.suit} conf=${result.confidence}")
+            } else {
+                Log.w(TAG, "🔍 Hand$i: 失败(null)")
+            }
         }
 
         // 公共牌
         for (i in 0..4) {
-            recognizeCommunityCard(screenshot, i)?.let { communityCards.add(it) }
+            val result = recognizeCommunityCard(screenshot, i)
+            if (result != null) {
+                communityCards.add(result)
+                Log.d(TAG, "🔍 Comm$i: 成功 ${result.rank}${result.suit} conf=${result.confidence}")
+            }
         }
 
+        Log.d(TAG, "🔍 本地CV完成: hand=${holeCards.size}/2 comm=${communityCards.size}/5")
         return Pair(holeCards, communityCards)
     }
 
