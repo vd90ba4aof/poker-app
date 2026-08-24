@@ -1098,4 +1098,243 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             AmountResult(0, 0f, 0, "exception:${e.message}")
         }
     }
+
+    // ========== V2.9.527: D按钮(庄位)本地CV识别 ==========
+
+    /**
+     * D按钮搜索区域（1080x2344基准）。
+     * 每个座位下方/内侧桌面felt上，D按钮出现的90x90搜索框。
+     * 顺序对应seat 0-5（与chip_seat命名一致）。
+     * 坐标依据：GG手机端6-max桌，D按钮在头像下方牌张旁边的felt上。
+     */
+    private data class DZone(
+        val seat: Int,
+        val cx: Int,
+        val cy: Int
+    )
+
+    private val dZones = listOf(
+        DZone(0, 150, 990),    // seat0 左上(Nass_)：D在头像下方牌侧
+        DZone(1, 540, 510),    // seat1 正上(HeinGeerken1)：D在头像下方
+        DZone(2, 930, 990),    // seat2 右上(hhhxxxxxxx)：D在头像下方
+        DZone(3, 930, 1320),   // seat3 右中(pralomge29)：D在头像上方felt
+        DZone(4, 540, 1620),   // seat4 正下对手：D在头像上方
+        DZone(5, 150, 1320)    // seat5 左中(Lunde@1)：D在头像上方felt
+    )
+
+    private const val D_ZONE_RADIUS = 55
+    // D按钮主体：金黄色（R>200, G>160, B<100）
+    private const val D_BODY_R_MIN = 200
+    private const val D_BODY_G_MIN = 160
+    private const val D_BODY_B_MAX = 100
+    // D字母：深色（R<80, G<80, B<80）
+    private const val D_LETTER_MAX = 80
+    private const val D_MIN_BODY = 150
+    private const val D_MAX_BODY = 2500
+    private const val D_MIN_CLUSTER = 18
+    private const val D_MIN_DARK_IN = 30
+    private const val D_GREEN_RATIO = 0.35f
+
+    data class DButtonResult(
+        val seat: Int,
+        val x: Int,
+        val y: Int,
+        val confidence: Float
+    )
+
+    private fun isDBody(pixel: Int): Boolean {
+        val r = pixel shr 16 and 0xFF
+        val g = pixel shr 8 and 0xFF
+        val b = pixel and 0xFF
+        return r > D_BODY_R_MIN && g > D_BODY_G_MIN && b < D_BODY_B_MAX
+    }
+
+    private fun isDLetter(pixel: Int): Boolean {
+        val r = pixel shr 16 and 0xFF
+        val g = pixel shr 8 and 0xFF
+        val b = pixel and 0xFF
+        return r < D_LETTER_MAX && g < D_LETTER_MAX && b < D_LETTER_MAX
+    }
+
+    private fun isGreenFelt(pixel: Int): Boolean {
+        val r = pixel shr 16 and 0xFF
+        val g = pixel shr 8 and 0xFF
+        val b = pixel and 0xFF
+        return g > r + 15 && g > b
+    }
+
+    /**
+     * 检测D按钮（金黄色圆形+深色D字母，绿色felt背景）。
+     * 6个小区域共~65k像素，纯像素扫描<0.5ms。
+     */
+    fun recognizeDButton(screenshot: Bitmap): DButtonResult {
+        return try {
+            val sw = screenshot.width
+            val sh = screenshot.height
+            val sx = sw / 1080f
+            val sy = sh / 2344f
+            val radius = (D_ZONE_RADIUS * (sx + sy) / 2f).toInt().coerceAtLeast(25)
+
+            var bestSeat = -1
+            var bestX = 0
+            var bestY = 0
+            var bestScore = 0f
+
+            for (zone in dZones) {
+                val zcx = (zone.cx * sx).toInt()
+                val zcy = (zone.cy * sy).toInt()
+                val x0 = (zcx - radius).coerceIn(0, sw - 1)
+                val y0 = (zcy - radius).coerceIn(0, sh - 1)
+                val x1 = (zcx + radius).coerceIn(x0 + 1, sw)
+                val y1 = (zcy + radius).coerceIn(y0 + 1, sh)
+                val zw = x1 - x0
+                val zh = y1 - y0
+                if (zw < 15 || zh < 15) continue
+
+                val pixels = IntArray(zw * zh)
+                screenshot.getPixels(pixels, 0, zw, x0, y0, zw, zh)
+
+                // Flood-fill找金黄色主体连通块
+                val visited = BooleanArray(zw * zh)
+                val queue = IntArray(zw * zh)
+
+                for (startIdx in pixels.indices) {
+                    if (visited[startIdx]) continue
+                    if (!isDBody(pixels[startIdx])) {
+                        visited[startIdx] = true
+                        continue
+                    }
+
+                    var qHead = 0
+                    var qTail = 0
+                    queue[qTail++] = startIdx
+                    visited[startIdx] = true
+
+                    var minX = zw; var maxX = -1
+                    var minY = zh; var maxY = -1
+                    var bodyCount = 0
+
+                    while (qHead < qTail) {
+                        val idx = queue[qHead++]
+                        val px = idx % zw
+                        val py = idx / zw
+                        bodyCount++
+                        if (px < minX) minX = px
+                        if (px > maxX) maxX = px
+                        if (py < minY) minY = py
+                        if (py > maxY) maxY = py
+
+                        // 4-邻接
+                        if (px > 0) {
+                            val ni = idx - 1
+                            if (!visited[ni]) {
+                                visited[ni] = true
+                                if (isDBody(pixels[ni])) queue[qTail++] = ni
+                            }
+                        }
+                        if (px < zw - 1) {
+                            val ni = idx + 1
+                            if (!visited[ni]) {
+                                visited[ni] = true
+                                if (isDBody(pixels[ni])) queue[qTail++] = ni
+                            }
+                        }
+                        if (py > 0) {
+                            val ni = idx - zw
+                            if (!visited[ni]) {
+                                visited[ni] = true
+                                if (isDBody(pixels[ni])) queue[qTail++] = ni
+                            }
+                        }
+                        if (py < zh - 1) {
+                            val ni = idx + zw
+                            if (!visited[ni]) {
+                                visited[ni] = true
+                                if (isDBody(pixels[ni])) queue[qTail++] = ni
+                            }
+                        }
+                    }
+
+                    val cw = maxX - minX + 1
+                    val ch = maxY - minY + 1
+                    if (bodyCount < D_MIN_BODY || bodyCount > D_MAX_BODY) continue
+                    if (cw < D_MIN_CLUSTER || ch < D_MIN_CLUSTER) continue
+                    val aspect = cw.toFloat() / ch
+                    if (aspect < 0.55f || aspect > 1.8f) continue
+
+                    // bbox内统计深色D字母像素
+                    val pad = 4
+                    val bx0 = (minX - pad).coerceIn(0, zw - 1)
+                    val bx1 = (maxX + pad + 1).coerceIn(bx0 + 1, zw)
+                    val by0 = (minY - pad).coerceIn(0, zh - 1)
+                    val by1 = (maxY + pad + 1).coerceIn(by0 + 1, zh)
+                    var darkCount = 0
+                    for (yy in by0 until by1) {
+                        for (xx in bx0 until bx1) {
+                            if (isDLetter(pixels[yy * zw + xx])) darkCount++
+                        }
+                    }
+                    if (darkCount < D_MIN_DARK_IN) continue
+
+                    // 检查周边绿色felt占比
+                    val border = 8
+                    var greenCount = 0
+                    var borderTotal = 0
+                    for (xx in bx0..bx1) {
+                        for (dd in 1..border) {
+                            val yyTop = by0 - dd
+                            val yyBot = by1 + dd - 1
+                            if (yyTop in 0 until zh) {
+                                borderTotal++
+                                if (isGreenFelt(pixels[yyTop * zw + xx])) greenCount++
+                            }
+                            if (yyBot in 0 until zh) {
+                                borderTotal++
+                                if (isGreenFelt(pixels[yyBot * zw + xx])) greenCount++
+                            }
+                        }
+                    }
+                    for (yy in by0 until by1) {
+                        for (dd in 1..border) {
+                            val xxL = bx0 - dd
+                            val xxR = bx1 + dd - 1
+                            if (xxL in 0 until zw) {
+                                borderTotal++
+                                if (isGreenFelt(pixels[yy * zw + xxL])) greenCount++
+                            }
+                            if (xxR in 0 until zw) {
+                                borderTotal++
+                                if (isGreenFelt(pixels[yy * zw + xxR])) greenCount++
+                            }
+                        }
+                    }
+                    val greenRatio = if (borderTotal > 0) greenCount.toFloat() / borderTotal else 0f
+                    if (greenRatio < D_GREEN_RATIO) continue
+
+                    // 置信度：深色密度 + 绿色背景 + 尺寸合适度
+                    val bboxArea = cw * ch
+                    val darkDensity = darkCount.toFloat() / bboxArea
+                    val sizeScore = (bodyCount.toFloat() / 600f).coerceAtMost(1f)
+                    val score = 0.45f * darkDensity.coerceAtMost(0.6f) / 0.6f +
+                                 0.30f * greenRatio +
+                                 0.25f * sizeScore
+
+                    if (score > bestScore) {
+                        bestScore = score
+                        bestSeat = zone.seat
+                        bestX = x0 + (minX + maxX) / 2
+                        bestY = y0 + (minY + maxY) / 2
+                    }
+                }
+            }
+
+            if (bestSeat >= 0) {
+                Log.d(TAG, "🎲 D按钮检测: seat=$bestSeat pos=($bestX,$bestY) conf=%.2f".format(bestScore))
+            }
+            DButtonResult(bestSeat, bestX, bestY, bestScore)
+        } catch (e: Exception) {
+            Log.w(TAG, "D按钮检测失败: ${e.message}")
+            DButtonResult(-1, 0, 0, 0f)
+        }
+    }
 }

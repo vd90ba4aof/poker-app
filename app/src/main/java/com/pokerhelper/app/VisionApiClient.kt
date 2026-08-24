@@ -1289,6 +1289,18 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val isMyTurn = try {
                     LocalActionRecognizer.getInstance(context).isMyTurn(screenshotBmp)
                 } catch (_: Exception) { true }
+                // V2.9.527: D按钮(庄位)本地CV识别（<0.5ms，6个小区域像素扫描）
+                var dButtonSeatLocal = -1
+                try {
+                    val tDB = System.currentTimeMillis()
+                    val dbRes = LocalActionRecognizer.getInstance(context).recognizeDButton(screenshotBmp)
+                    if (dbRes.seat >= 0 && dbRes.confidence >= 0.3f) {
+                        dButtonSeatLocal = dbRes.seat
+                        Log.d(TAG, "🎲 D按钮本地CV: seat=${dbRes.seat} conf=%.2f %dms".format(dbRes.confidence, System.currentTimeMillis() - tDB))
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "D按钮本地CV失败: ${e.message}")
+                }
                 try {
                     val tAmt = System.currentTimeMillis()
                     val larInstance = LocalActionRecognizer.getInstance(context)
@@ -1364,7 +1376,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                             buttonPositions = positions,
                             toCall = lar.callAmount ?: 0,
                             myChips = localChipsValue,
-                            dButtonSeat = -1,
+                            dButtonSeat = dButtonSeatLocal,
                             activePlayers = 2,
                             isInsurance = false,
                             rawResponse = "local: fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} p=${lar.presets} btns=${buttons.size} c=%.2f".format(lar.confidence)
@@ -1554,7 +1566,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     blindBB = inferredBB,
                     ante = 0,
                     players = emptyList(),
-                    dButtonPosition = mapDSeatToPosition(action?.dButtonSeat ?: -1),
+                    dButtonPosition = mapDSeatToPosition(
+                        if (dButtonSeatLocal >= 0) dButtonSeatLocal else (action?.dButtonSeat ?: -1)
+                    ),
                     rawResponse = "V2: board=${boardResult?.rawResponse?.take(100)} | action=${action?.rawResponse?.take(100)}",
                     showdownCards = emptyList(),
                     oppHud = emptyList(),
@@ -1764,13 +1778,15 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
      * D按钮座位号映射到位置字符串（与旧逻辑兼容）
      */
     private fun mapDSeatToPosition(seat: Int): String {
+        // Kotlin座位编号→JS位置名称（必须与poker_helper.html seatMap一致）
+        // seat0=左上, seat1=正上, seat2=右上, seat3=右中, seat4=正下(hero), seat5=左中
         return when (seat) {
-            0 -> "self"
-            1 -> "top"
+            0 -> "left-top"
+            1 -> "top-center"
             2 -> "right-top"
             3 -> "right-bottom"
-            4 -> "bottom"
-            5 -> "left"
+            4 -> "bottom-center"
+            5 -> "left-bottom"
             else -> ""
         }
     }
