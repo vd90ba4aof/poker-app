@@ -160,7 +160,9 @@ object VisionApiClient {
         // V2.9.220: 自动检测到的平台（V2.9.508: 仅支持GGPOKER）
         val detectedPlatform: String = "GGPOKER",  // 自动检测平台
         // V2.9.230: 本地suit识别标记——标记最终suit是否来自本地推断（用于前端判断可信度）
-        val localSuitUsed: Boolean = false
+        val localSuitUsed: Boolean = false,
+        // V2.9.526: 是否轮到我行动（绿色进度条检测，预处理状态不点击）
+        val isMyTurn: Boolean = true
     )
 
     data class CardInfo(val rank: String, val suit: String)
@@ -1278,42 +1280,99 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // 公共牌：手牌识别成功且置信度足够时信任本地结果（含空列表=翻前）
                 val localCommOk = localHandOk
 
+                // V2.9.526: 本地CV底池/筹码金额识别（毫秒级，成功则不调VLM底池API）
+                var localPotValue: Long = 0L
+                var localPotOk = false
+                var localChipsValue: Int = 0
+                var amountDiag = "skipped"
+                // V2.9.526: 检测是否轮到我行动（绿色进度条）
+                val isMyTurn = try {
+                    LocalActionRecognizer.getInstance(context).isMyTurn(screenshotBmp)
+                } catch (_: Exception) { true }
+                try {
+                    val tAmt = System.currentTimeMillis()
+                    val larInstance = LocalActionRecognizer.getInstance(context)
+                    val potBmpLocal = RegionCropper.cropPotAmount(screenshotBmp)
+                    val chipsBmp = RegionCropper.cropMyChips(screenshotBmp)
+                    if (potBmpLocal != null) {
+                        val potRes = larInstance.recognizeAmount(potBmpLocal, isPot = true)
+                        if (potRes != null && potRes.value > 0 && potRes.confidence >= LOCAL_CONFIDENCE_THRESHOLD) {
+                            localPotValue = potRes.value
+                            localPotOk = true
+                            RegionCropper.updatePotCache(potBmpLocal, potRes.value)
+                            Log.d(TAG, "💰 本地CV底池: ${System.currentTimeMillis() - tAmt}ms | pot=${potRes.value} conf=%.2f %s".format(potRes.confidence, potRes.diag))
+                        } else {
+                            amountDiag = "pot:${potRes?.diag ?: "null"}"
+                            Log.w(TAG, "💰 本地CV底池失败(conf=%.2f<%s) %s".format(potRes?.confidence ?: 0f, LOCAL_CONFIDENCE_THRESHOLD, potRes?.diag))
+                        }
+                    }
+                    if (chipsBmp != null) {
+                        val chipsRes = larInstance.recognizeAmount(chipsBmp, isPot = false)
+                        if (chipsRes != null && chipsRes.value > 0 && chipsRes.confidence >= LOCAL_CONFIDENCE_THRESHOLD) {
+                            localChipsValue = chipsRes.value.toInt()
+                            amountDiag += ";chips=${chipsRes.value}(c=%.2f)".format(chipsRes.confidence)
+                            Log.d(TAG, "🪙 本地CV筹码: chips=${chipsRes.value} conf=%.2f %s".format(chipsRes.confidence, chipsRes.diag))
+                        } else {
+                            amountDiag += ";chips_fail:${chipsRes?.diag ?: "null"}"
+                            Log.w(TAG, "🪙 本地CV筹码失败(conf=%.2f) %s".format(chipsRes?.confidence ?: 0f, chipsRes?.diag))
+                        }
+                    }
+                    RegionCropper.recycleBitmaps(potBmpLocal, chipsBmp)
+                } catch (e: Exception) {
+                    amountDiag = "exception:${e.message}"
+                    Log.w(TAG, "本地CV底池/筹码失败，VLM兜底: ${e.message}")
+                }
+
                 // 2. 裁剪操作区（每帧必识别）
                 val actionBmp = RegionCropper.cropActionArea(screenshotBmp)
                 val actionBase64 = actionBmp?.let { bitmapToBase64(it, quality = 80) }
 
                 // V2.9.519: 本地CV操作区识别（毫秒级，成功则跳过VLM操作区API）
                 var localAction: ActionAreaResult? = null
+                var localPresets: List<Int> = emptyList()
                 var actionDiag = "skipped"
                 try {
                     val tLA = System.currentTimeMillis()
                     val larInstance = LocalActionRecognizer.getInstance(context)
                     val lar = larInstance.recognizeAction(screenshotBmp)
                     actionDiag = larInstance.lastDiag
-                    if (lar != null && lar.minRaise != null && lar.confidence >= LOCAL_CONFIDENCE_THRESHOLD) {
+                    if (lar != null) {
+                        localPresets = lar.presets
+                    }
+                    // V2.9.526: 没轮到我时，本地操作区结果不USE（灰色预处理按钮），
+                    // 但仍执行识别用于诊断日志
+                    val useLocal = isMyTurn && lar != null && lar.confidence >= LOCAL_CONFIDENCE_THRESHOLD && (
+                        // A: 三按钮正常
+                        (lar.minRaise != null) ||
+                        // B: 全押两按钮
+                        (lar.facingBet && lar.callAmount != null && lar.callAmount > 0)
+                    )
+                    if (lar != null && useLocal) {
                         val buttons = mutableListOf<String>()
                         buttons.add("弃牌")
-                        if (lar.facingBet && lar.callAmount != null) {
+                        if (lar.facingBet && lar.callAmount != null && lar.callAmount > 0) {
                             buttons.add("跟注 ${lar.callAmount}")
                         } else {
                             buttons.add("让牌")
                         }
-                        buttons.add("加注 ${lar.minRaise}")
+                        if (lar.minRaise != null) {
+                            buttons.add("加注 ${lar.minRaise}")
+                        }
                         val positions = mapButtonsToPositions(buttons)
                         localAction = ActionAreaResult(
                             buttons = buttons,
                             buttonPositions = positions,
                             toCall = lar.callAmount ?: 0,
-                            myChips = 0,
+                            myChips = localChipsValue,
                             dButtonSeat = -1,
                             activePlayers = 2,
                             isInsurance = false,
-                            rawResponse = "local: fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} p=${lar.presets} c=%.2f".format(lar.confidence)
+                            rawResponse = "local: fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} p=${lar.presets} btns=${buttons.size} c=%.2f".format(lar.confidence)
                         )
-                        actionDiag += ";USED"
+                        actionDiag += ";USED(btns=${buttons.size})"
                         Log.d(TAG, "🔍 本地CV操作区: ${System.currentTimeMillis() - tLA}ms | " +
                                 "fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} " +
-                                "presets=${lar.presets} conf=%.2f".format(lar.confidence))
+                                "presets=${lar.presets} btns=${buttons.size} conf=%.2f".format(lar.confidence))
                     } else if (lar != null) {
                         actionDiag += ";LOW_CONF(%.2f<%s)".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD)
                         Log.w(TAG, "🔍 本地CV操作区置信度不足(conf=%.2f<%.2f)，VLM兜底".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD))
@@ -1325,7 +1384,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     Log.w(TAG, "本地CV操作区失败，VLM兜底: ${e.message}")
                 }
                 // V2.9.524: 将操作区诊断追加到手牌diag
-                lastLocalDiag = "${lastLocalDiag}|ACT:$actionDiag"
+                lastLocalDiag = "${lastLocalDiag}|ACT:$actionDiag|AMT:$amountDiag,pot=$localPotOk,chips=$localChipsValue"
 
                 // 3. 裁剪牌面（本地CV已识别手牌/公共牌，仅VLM兜底时需要）
                 val needHandApi = !localHandOk
@@ -1357,8 +1416,10 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     RegionCropper.bitmapHash(commBitmaps.getOrNull(idx))
                 }
 
-                // 7. 底池缓存检查
+                // 7. 底池缓存检查（V2.9.526: 本地CV底池成功时已updatePotCache，缓存应命中）
                 var potValue = RegionCropper.checkPotCache(potBmp)
+                // 本地CV成功时直接使用本地值，不调VLM底池API
+                if (localPotOk) potValue = localPotValue
                 var needPotApi = potValue == null
                 val potHash = if (needPotApi && potBmp != null) RegionCropper.bitmapHash(potBmp) else null
 
@@ -1446,25 +1507,51 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
 
                 // 12. 构建结果（本地CV操作区优先）
                 val action = localAction ?: actionResult
+                val finalToCall = action?.toCall ?: 0
+                val finalMinRaise = action?.let { a ->
+                    a.buttons.firstOrNull { it.contains("加注") }
+                        ?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
+                } ?: 0
+
+                // V2.9.526: 盲注推断。
+                // 首选：翻前预设快捷按钮和主加注额都是BB整数倍，取GCD即为BB（能抗有人open/3bet/straddle）。
+                // 兜底：预设缺失且无人加注时，主加注额=2BB；用toCall校验BB位/SB位/未入场位。
+                val isPreflop = finalHoleCards.size == 2 && finalCommCards.isEmpty()
+                var inferredBB = 0
+                var inferredSB = 0
+                if (isPreflop && finalMinRaise > 0) {
+                    fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)
+                    val gcdInputs = (localPresets.filter { it > 0 } + finalMinRaise).distinct()
+                    var g = gcdInputs.first()
+                    for (v in gcdInputs.drop(1)) g = gcd(g, v)
+
+                    if (g > 0 && finalMinRaise % g == 0 && finalMinRaise / g >= 2) {
+                        inferredBB = g
+                    } else if (finalMinRaise % 2 == 0) {
+                        val candidateBB = finalMinRaise / 2
+                        if (finalToCall == 0 || finalToCall == candidateBB || finalToCall * 2 == candidateBB) {
+                            inferredBB = candidateBB
+                        }
+                    }
+                    if (inferredBB > 0 && inferredBB % 2 == 0) inferredSB = inferredBB / 2
+                }
+
                 val result = VisionResult(
                     isPokerTable = finalHoleCards.size == 2,
                     holeCards = finalHoleCards,
                     communityCards = finalCommCards,
                     potSize = finalPot,
-                    playerChips = action?.myChips ?: 0,
+                    // V2.9.526: 本地CV筹码优先，VLM操作区次之，都没有则0
+                    playerChips = if (localChipsValue > 0) localChipsValue else (action?.myChips ?: 0),
                     totalPlayers = 6,
                     activePlayers = action?.activePlayers ?: 2,
                     myPosition = "",
                     street = determineStreet(finalCommCards),
-                    toCall = action?.toCall ?: 0,
-                    minRaise = action?.let { a ->
-                        // 从"加注 XXX"按钮文本提取数字
-                        a.buttons.firstOrNull { it.contains("加注") }
-                            ?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
-                    } ?: 0,
+                    toCall = finalToCall,
+                    minRaise = finalMinRaise,
                     buttons = action?.buttons ?: emptyList(),
-                    blindSB = 0,
-                    blindBB = 0,
+                    blindSB = inferredSB,
+                    blindBB = inferredBB,
                     ante = 0,
                     players = emptyList(),
                     dButtonPosition = mapDSeatToPosition(action?.dButtonSeat ?: -1),
@@ -1479,7 +1566,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     isPKO = false,
                     gameMode = "cash",
                     detectedPlatform = "GGPOKER",
-                    localSuitUsed = false
+                    localSuitUsed = false,
+                    isMyTurn = isMyTurn
                 )
 
                 // 同步锁定状态
@@ -1610,21 +1698,30 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
     private fun mapButtonsToPositions(buttons: List<String>): List<ButtonPosition> {
         val positions = mutableListOf<ButtonPosition>()
         var rightSlotUsed = false
+        // V2.9.526: 两按钮（弃牌+跟注，全押/短筹码场景）时，弃牌占左1/3，跟注占右2/3
+        // 实测1080宽：弃牌中心x≈180(0.167)，跟注中心x≈660(0.611)
+        val isTwoBtnCallAllin = buttons.size == 2 &&
+            buttons.any { it.contains("弃牌") } &&
+            buttons.any { it.contains("跟注") }
 
         for (btn in buttons) {
             val b = btn.trim()
             when {
-                // 弃牌 — 左
+                // 弃牌 — 两按钮时占左1/3；否则左1/4
                 b.contains("弃牌") || b.contains("fold", ignoreCase = true) -> {
-                    positions.add(ButtonPosition(b, 0.181, 0.974))
+                    positions.add(ButtonPosition(b, if (isTwoBtnCallAllin) 0.167 else 0.181, 0.974))
                 }
                 // 让牌/过牌 — 中
                 b.contains("让牌") || b.contains("过牌") || b.equals("check", ignoreCase = true) -> {
                     positions.add(ButtonPosition(b, 0.500, 0.974))
                 }
-                // 跟注 — 中
+                // 跟注 — 全押两按钮场景占右侧宽按钮；否则中
                 b.contains("跟注") || b.contains("call", ignoreCase = true) -> {
-                    positions.add(ButtonPosition(b, 0.500, 0.974))
+                    if (isTwoBtnCallAllin) {
+                        positions.add(ButtonPosition(b, 0.611, 0.974))
+                    } else {
+                        positions.add(ButtonPosition(b, 0.500, 0.974))
+                    }
                 }
                 // 加注/下注 — 右
                 (b.contains("加注") || b.contains("下注") || b.contains("bet", ignoreCase = true) ||

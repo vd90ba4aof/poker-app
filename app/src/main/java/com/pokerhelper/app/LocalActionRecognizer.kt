@@ -50,6 +50,13 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         private const val PRESET_Y2 = 2200
         private const val PRESET_X1 = 830
         private const val PRESET_X2 = 955
+        // V2.9.526: 我的回合指示器——座位下方绿色进度条
+        // 实测12张轮到我的截图：绿色像素483-495；没轮到的截图：0
+        private const val TURN_BAR_X1 = 20
+        private const val TURN_BAR_X2 = 280
+        private const val TURN_BAR_Y1 = 2045
+        private const val TURN_BAR_Y2 = 2070
+        private const val TURN_BAR_THRESHOLD = 100
 
         // 数字尺寸约束
         private const val DIGIT_MIN_W = 8
@@ -75,6 +82,11 @@ class LocalActionRecognizer private constructor(private val context: Context) {
     // 10个数字模板，data=true表示内容像素
     private val digitTemplates = HashMap<Char, Template>()
 
+    // V2.9.526: 底池/筹码自然尺寸模板（不强制26×36，匹配时动态缩放query到模板高度）
+    // 底池数字h≈30-31px黄色，筹码数字h≈28-29px白色，两套模板跨集互补缺失数字
+    private val potTemplates = HashMap<Char, Template>()
+    private val chipsTemplates = HashMap<Char, Template>()
+
     data class ActionResult(
         val facingBet: Boolean,
         val callAmount: Int?,
@@ -98,8 +110,20 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                     digitTemplates[d.toString()[0]] = it
                 }
             }
+            // V2.9.526: 底池模板（自然尺寸，缺7）
+            for (d in 0..9) {
+                loadAssetTemplate("digit_templates_pot/$d.png")?.let {
+                    potTemplates[d.toString()[0]] = it
+                }
+            }
+            // V2.9.526: 筹码模板（自然尺寸，缺2和9）
+            for (d in 0..9) {
+                loadAssetTemplate("digit_templates_chips/$d.png")?.let {
+                    chipsTemplates[d.toString()[0]] = it
+                }
+            }
             loaded = digitTemplates.size == 10
-            Log.i(TAG, "Digit templates loaded: ${digitTemplates.size}/10")
+            Log.i(TAG, "Digit templates loaded: btn=${digitTemplates.size}/10 pot=${potTemplates.size} chips=${chipsTemplates.size}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load digit templates", e)
         }
@@ -689,6 +713,43 @@ class LocalActionRecognizer private constructor(private val context: Context) {
     fun isLoaded(): Boolean = loaded
 
     /**
+     * V2.9.526: 检测是否轮到我行动。
+     * 我的座位下方有一条绿色行动进度条，轮到我时亮（~490px绿色），没轮到时为0。
+     * 预处理按钮（灰色、无黄色数字）不会触发点击。
+     *
+     * @return true=轮到我，false=别人行动中或预处理状态
+     */
+    fun isMyTurn(screenshot: Bitmap): Boolean {
+        return try {
+            val sw = screenshot.width
+            val sh = screenshot.height
+            val sx = sw / 1080f
+            val sy = sh / 2344f
+            val x1 = (TURN_BAR_X1 * sx).toInt().coerceIn(0, sw - 1)
+            val x2 = (TURN_BAR_X2 * sx).toInt().coerceIn(x1 + 1, sw)
+            val y1 = (TURN_BAR_Y1 * sy).toInt().coerceIn(0, sh - 1)
+            val y2 = (TURN_BAR_Y2 * sy).toInt().coerceIn(y1 + 1, sh)
+            val rw = x2 - x1
+            val rh = y2 - y1
+            val pixels = IntArray(rw * rh)
+            screenshot.getPixels(pixels, 0, rw, x1, y1, rw, rh)
+            var greenPx = 0
+            for (p in pixels) {
+                val r = p shr 16 and 0xFF
+                val g = p shr 8 and 0xFF
+                val b = p and 0xFF
+                if (g > 150 && r < 120 && b < 120) greenPx++
+            }
+            val myTurn = greenPx >= TURN_BAR_THRESHOLD
+            Log.d(TAG, "isMyTurn: greenPx=$greenPx threshold=$TURN_BAR_THRESHOLD -> $myTurn")
+            myTurn
+        } catch (e: Exception) {
+            Log.w(TAG, "isMyTurn failed: ${e.message}")
+            true  // 检测失败时不阻断，保守认为轮到我（避免漏操作）
+        }
+    }
+
+    /**
      * 识别操作区
      * @param screenshot 完整截图Bitmap
      * @return ActionResult，识别失败时各字段为null/空列表
@@ -812,6 +873,229 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             lastDiag = "${diagSb}exception:${e.message}"
             Log.w(TAG, "recognizeAction failed: ${e.message}")
             null
+        }
+    }
+
+    // ========== V2.9.526: 底池/筹码金额识别 ==========
+
+    data class AmountResult(
+        val value: Long,
+        val confidence: Float,
+        val digitCount: Int,
+        val diag: String
+    )
+
+    private fun isWhite(pixel: Int): Boolean {
+        val r = pixel shr 16 and 0xFF
+        val g = pixel shr 8 and 0xFF
+        val b = pixel and 0xFF
+        return r > 200 && g > 200 && b > 200
+    }
+
+    /**
+     * 从裁剪好的区域bitmap生成二值mask（黄色用于底池，白色用于筹码）
+     */
+    private fun buildMask(bmp: Bitmap, useYellow: Boolean): BooleanArray {
+        val w = bmp.width
+        val h = bmp.height
+        val pixels = IntArray(w * h)
+        bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+        val mask = BooleanArray(w * h)
+        for (i in pixels.indices) {
+            mask[i] = if (useYellow) isYellow(pixels[i]) else isWhite(pixels[i])
+        }
+        return mask
+    }
+
+    /**
+     * row-band clipping：只保留row_sum>=5的行范围，裁掉逗号向下延伸的细尾巴
+     * 对应Python: row_sum=mask.sum(axis=1); digit_rows=np.where(row_sum>=5)[0]
+     */
+    private fun rowBandClip(mask: BooleanArray, w: Int, h: Int): Triple<BooleanArray, Int, Int> {
+        val rowSum = IntArray(h)
+        for (y in 0 until h) {
+            var s = 0
+            for (x in 0 until w) if (mask[y * w + x]) s++
+            rowSum[y] = s
+        }
+        var top = -1
+        var bot = -1
+        for (y in 0 until h) {
+            if (rowSum[y] >= 5) {
+                if (top < 0) top = y
+                bot = y
+            }
+        }
+        if (top < 0) return Triple(mask, w, h)
+        val ch = bot - top + 1
+        val clipped = BooleanArray(w * ch)
+        for (y in 0 until ch) {
+            System.arraycopy(mask, (top + y) * w, clipped, y * w, w)
+        }
+        return Triple(clipped, w, ch)
+    }
+
+    /**
+     * 动态尺寸模板匹配（Python 1:1复现）：
+     * 对每个pot/chips模板，将query缩放到模板高度（保持宽高比，nearest-neighbor），
+     * 在 max(nw,tw)+4 宽、th 高的画布上居中query和template，计算IoU。
+     */
+    private fun matchDigitNatural(
+        qData: BooleanArray, qW: Int, qH: Int,
+        templates: Map<Char, Template>
+    ): Pair<Char, Float> {
+        if (qW == 0 || qH == 0) return Pair('?', 0f)
+        var bestCh = '?'
+        var bestScore = 0f
+        for ((ch, tmpl) in templates) {
+            val tw = tmpl.w
+            val th = tmpl.h
+            // scale query to template height
+            val scale = th.toFloat() / qH
+            val nw = maxOf(1, (qW * scale).toInt())
+            val rq = resizeBinary(qData, qW, qH, nw, th)
+            // canvas
+            val cw = maxOf(nw, tw) + 4
+            val canvas = BooleanArray(cw * th)
+            val qx0 = (cw - nw) / 2
+            val tx0 = (cw - tw) / 2
+            // place query
+            for (y in 0 until th) {
+                System.arraycopy(rq, y * nw, canvas, y * cw + qx0, nw)
+            }
+            // compute IoU against template
+            var inter = 0
+            var union = 0
+            for (y in 0 until th) {
+                for (x in 0 until tw) {
+                    val ci = y * cw + (tx0 + x)
+                    val ti = y * tw + x
+                    val qOn = canvas[ci]
+                    val tOn = tmpl.data[ti]
+                    if (qOn || tOn) {
+                        union++
+                        if (qOn && tOn) inter++
+                    }
+                }
+            }
+            val sc = if (union > 0) inter.toFloat() / union else 0f
+            if (sc > bestScore) {
+                bestScore = sc
+                bestCh = ch
+            }
+        }
+        return Pair(bestCh, bestScore)
+    }
+
+    /**
+     * 识别金额（底池/筹码）：
+     * 1. 颜色mask（黄/白）
+     * 2. row-band clipping去除逗号尾巴
+     * 3. findComponents + area>=100 && h>=20 + gap<=1合并
+     * 4. 紧bbox提取数字
+     * 5. 跨pot+chips两套模板动态匹配，取最高分
+     *
+     * @param bmp 已裁剪的区域bitmap
+     * @param isPot true=底池(黄色mask)，false=筹码(白色mask)
+     */
+    fun recognizeAmount(bmp: Bitmap, isPot: Boolean): AmountResult? {
+        return try {
+            val w0 = bmp.width
+            val h0 = bmp.height
+            if (w0 < 10 || h0 < 10) return AmountResult(0, 0f, 0, "region_too_small ${w0}x${h0}")
+
+            // 1. mask
+            var mask = buildMask(bmp, isPot)
+            // 2. row-band clipping
+            val clipResult = rowBandClip(mask, w0, h0)
+            mask = clipResult.first
+            val w = clipResult.second
+            val h = clipResult.third
+
+            // 3. find components
+            var comps = findComponents(mask, w, h)
+            if (comps.isEmpty()) return AmountResult(0, 0f, 0, "no_components")
+            comps = comps.sortedBy { it.x1 }
+            // filter: area>=100 && h>=20 (与Python一致)
+            comps = comps.filter { it.area >= 100 && it.h >= 20 }
+            if (comps.isEmpty()) return AmountResult(0, 0f, 0, "filtered_all(area/h)")
+
+            // merge gap<=1
+            val merged = ArrayList<Comp>()
+            for (c in comps) {
+                if (merged.isNotEmpty()) {
+                    val gap = c.x1 - merged.last().x2 - 1
+                    if (gap <= 1) {
+                        val p = merged.last()
+                        p.x1 = minOf(p.x1, c.x1)
+                        p.x2 = maxOf(p.x2, c.x2)
+                        p.y1 = minOf(p.y1, c.y1)
+                        p.y2 = maxOf(p.y2, c.y2)
+                        p.area += c.area
+                        continue
+                    }
+                }
+                merged.add(c.copy())
+            }
+
+            // 4. tight bbox + extract digits
+            val digits = ArrayList<Triple<BooleanArray, Int, Int>>()
+            for (c in merged) {
+                val rw = c.w
+                val rh = c.h
+                val d = BooleanArray(rw * rh)
+                for (y in 0 until rh) {
+                    for (x in 0 until rw) {
+                        d[y * rw + x] = mask[(c.y1 + y) * w + (c.x1 + x)]
+                    }
+                }
+                var minX = rw; var maxX = -1; var minY = rh; var maxY = -1
+                for (y in 0 until rh) {
+                    for (x in 0 until rw) {
+                        if (d[y * rw + x]) {
+                            if (x < minX) minX = x
+                            if (x > maxX) maxX = x
+                            if (y < minY) minY = y
+                            if (y > maxY) maxY = y
+                        }
+                    }
+                }
+                if (maxX < 0) continue
+                val tw = maxX - minX + 1
+                val th = maxY - minY + 1
+                if (tw < 6 || th < 18) continue
+                val trimmed = BooleanArray(tw * th)
+                for (y in 0 until th) {
+                    System.arraycopy(d, (minY + y) * rw + minX, trimmed, y * tw, tw)
+                }
+                digits.add(Triple(trimmed, tw, th))
+            }
+            if (digits.isEmpty()) return AmountResult(0, 0f, 0, "no_digits_after_bbox")
+
+            // 5. match across BOTH pot and chips template sets, take best per digit
+            val sb = StringBuilder()
+            var minConf = 1.0f
+            val diagParts = ArrayList<String>()
+            for (d in digits) {
+                val (qData, qW, qH) = d
+                // try pot templates
+                val (chPot, scPot) = matchDigitNatural(qData, qW, qH, potTemplates)
+                // try chips templates
+                val (chChips, scChips) = matchDigitNatural(qData, qW, qH, chipsTemplates)
+                val (ch, sc, src) = if (scPot >= scChips) Triple(chPot, scPot, "p") else Triple(chChips, scChips, "c")
+                if (ch == '?') {
+                    return AmountResult(0, 0f, digits.size, "digit_unmatched")
+                }
+                sb.append(ch)
+                if (sc < minConf) minConf = sc
+                diagParts.add("$ch(%s%.2f)".format(src, sc))
+            }
+            val value = try { sb.toString().toLong() } catch (_: Exception) { 0L }
+            val diag = "n=${digits.size} ${diagParts.joinToString(" ")} v=$value"
+            AmountResult(value, minConf, digits.size, diag)
+        } catch (e: Exception) {
+            Log.w(TAG, "recognizeAmount(${if (isPot) "pot" else "chips"}) failed: ${e.message}")
+            AmountResult(0, 0f, 0, "exception:${e.message}")
         }
     }
 }

@@ -38,9 +38,15 @@ object RegionCropper {
     private val COMM_3 = RegionRect(616, 1068, 760, 1272)
     private val COMM_4 = RegionRect(766, 1068, 910, 1272)
 
-    // ===== 底池金额区域（公共牌正下方，含"底池"标签+数字）=====
-    // 实测：y≈1240-1310
-    private val POT_AMOUNT = RegionRect(380, 1240, 700, 1310)
+    // ===== 底池金额区域（公共牌上方，黄色数字）=====
+    // V2.9.526: 坐标修正。旧值(380,1240,700,1310)裁到的是公共牌下方，实际底池在y≈975-1050
+    // 实测11张训练截图：底池"500"~"6,469"黄色数字，h≈30-31px
+    private val POT_AMOUNT = RegionRect(460, 975, 620, 1050)
+
+    // ===== 我的筹码区域（左下角，白色数字）=====
+    // V2.9.526: 新增本地CV筹码识别。实测白色数字h≈28-29px
+    // 注意y>2055有绿色进度条，白色mask+row-band clipping会自动排除
+    private val MY_CHIPS = RegionRect(95, 1990, 275, 2070)
 
     // ===== 操作区（底部按钮+筹码+预设）=====
     // 包含：主操作按钮（y≈2140-2340）、预设按钮（x≈730-1060, y≈1640-2130）、
@@ -186,6 +192,13 @@ object RegionCropper {
      */
     fun cropPotAmount(bitmap: Bitmap): Bitmap? {
         return cropRegion(bitmap, POT_AMOUNT)
+    }
+
+    /**
+     * 裁剪我的筹码区域（V2.9.526新增，用于本地CV数字识别）
+     */
+    fun cropMyChips(bitmap: Bitmap): Bitmap? {
+        return cropRegion(bitmap, MY_CHIPS)
     }
 
     /**

@@ -2635,6 +2635,24 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                 )
                 
                 if (result != null) {
+                    // V2.9.526: 没轮到我——预处理按钮状态，不发送策略、不点击、不启动Shot Clock
+                    if (!result.isMyTurn) {
+                        Log.d(TAG, "★ NOT_MY_TURN: 绿色进度条未亮，预处理状态，跳过策略和点击")
+                        handStartTime = 0
+                        _shotClockRunnable?.let { handler.removeCallbacks(it) }
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+                        handler.post {
+                            updateBallAdvice("COLOR:WAIT|SIGNAL:NOT_MY_TURN|REASON:等待其他玩家")
+                            tvStatus?.text = "⏳ 等待中"
+                            tvRecResult?.text = "不是我的回合"
+                            tvRecResult?.visibility = View.VISIBLE
+                            tvRecResult?.setBackgroundColor(0xFF37474F.toInt())
+                            tvRecDetail?.text = "底池=${result.potSize} 筹码=${result.playerChips}"
+                            tvRecDetail?.visibility = View.VISIBLE
+                        }
+                        scheduleNextAutoCapture()
+                        return@Thread
+                    }
                     // V2.9.111: NO_TABLE检测——优先看isPokerTable，其次3信号联合判断
                     val modelSaysNoTable = !result.isPokerTable
                     val noHoleCards = result.holeCards.size < 2
