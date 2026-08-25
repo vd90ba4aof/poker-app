@@ -1122,18 +1122,18 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         DZone(5, 150, 1320)    // seat5 左中(Lunde@1)：D在头像上方felt
     )
 
-    private const val D_ZONE_RADIUS = 55
+    private val D_ZONE_RADIUS = 55
     // D按钮主体：金黄色（R>200, G>160, B<100）
-    private const val D_BODY_R_MIN = 200
-    private const val D_BODY_G_MIN = 160
-    private const val D_BODY_B_MAX = 100
+    private val D_BODY_R_MIN = 200
+    private val D_BODY_G_MIN = 160
+    private val D_BODY_B_MAX = 100
     // D字母：深色（R<80, G<80, B<80）
-    private const val D_LETTER_MAX = 80
-    private const val D_MIN_BODY = 150
-    private const val D_MAX_BODY = 2500
-    private const val D_MIN_CLUSTER = 18
-    private const val D_MIN_DARK_IN = 30
-    private const val D_GREEN_RATIO = 0.35f
+    private val D_LETTER_MAX = 80
+    private val D_MIN_BODY = 150
+    private val D_MAX_BODY = 2500
+    private val D_MIN_CLUSTER = 18
+    private val D_MIN_DARK_IN = 30
+    private val D_GREEN_RATIO = 0.35f
 
     data class DButtonResult(
         val seat: Int,
