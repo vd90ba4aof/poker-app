@@ -136,7 +136,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         val r = pixel shr 16 and 0xFF
         val g = pixel shr 8 and 0xFF
         val b = pixel and 0xFF
-        return r > 100 && g < 90 && b < 90
+        return r > 110 && r - g > 25 && r - b > 25
     }
 
     private fun isBlack(pixel: Int): Boolean {
@@ -248,24 +248,49 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         for ((label, tmpl) in templates) {
             val scale = tmpl.h.toFloat() / qH
             val newW = (qW * scale).toInt().coerceAtLeast(1)
-            // Resize query to template height
             val qResized = resizeBinary(qData, qW, qH, newW, tmpl.h)
-            val minW = minOf(newW, tmpl.w)
+
+            // V2.9.528: 水平居中对齐（原左对齐，偏移2-3px即崩）
+            val xOff = (newW - tmpl.w) / 2
+            val overlapW = minOf(newW, tmpl.w)
 
             var fgUnion = 0
             var agree = 0
+            var extraFg = 0
             for (y in 0 until tmpl.h) {
-                for (x in 0 until minW) {
-                    val q = qResized[y * newW + x]
-                    val t = tmpl.data[y * tmpl.w + x]
-                    if (!q || !t) {
-                        fgUnion++
-                        if (q == t) agree++
+                // 1) 重叠区域：水平居中对齐
+                for (i in 0 until overlapW) {
+                    val qx = i + if (xOff > 0) xOff else 0
+                    val tx = i + if (xOff < 0) -xOff else 0
+                    if (qx in 0 until newW && tx in 0 until tmpl.w) {
+                        val q = qResized[y * newW + qx]
+                        val t = tmpl.data[y * tmpl.w + tx]
+                        if (!q || !t) {
+                            fgUnion++
+                            if (q == t) agree++
+                        }
+                    }
+                }
+                // 2) 宽度不匹配惩罚：超出部分的前景像素计入union但不计入agree
+                if (newW > tmpl.w) {
+                    for (qx in 0 until xOff) {
+                        if (!qResized[y * newW + qx]) extraFg++
+                    }
+                    for (qx in (xOff + tmpl.w) until newW) {
+                        if (!qResized[y * newW + qx]) extraFg++
+                    }
+                } else if (tmpl.w > newW) {
+                    for (tx in 0 until -xOff) {
+                        if (!tmpl.data[y * tmpl.w + tx]) extraFg++
+                    }
+                    for (tx in (-xOff + newW) until tmpl.w) {
+                        if (!tmpl.data[y * tmpl.w + tx]) extraFg++
                     }
                 }
             }
-            if (fgUnion > 0) {
-                val score = agree.toFloat() / fgUnion
+            val totalUnion = fgUnion + extraFg
+            if (totalUnion > 0) {
+                val score = agree.toFloat() / totalUnion
                 if (score > bestScore) {
                     bestScore = score
                     bestLabel = label
@@ -513,11 +538,11 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
             for (c in components) {
                 if (c.xMin < cw * 0.55f) {
-                    if (c.cy < ch * 0.42f && c.size >= 200) {
+                    if (c.cy < ch * 0.42f && c.size >= 120) {
                         if (rankComp == null || c.size > rankComp!!.size) {
                             rankComp = c
                         }
-                    } else if (c.cy < ch * 0.65f && c.size >= 200) {
+                    } else if (c.cy < ch * 0.65f && c.size >= 120) {
                         if (suitComp == null || c.xMin < suitComp!!.xMin) {
                             suitComp = c
                         }
@@ -569,7 +594,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val result = recognizeHandCard(screenshot, i)
             if (result != null) {
                 holeCards.add(result)
-                diag.append("H$i=OK(${result.rank}${result.suit},c=%.2f);".format(result.confidence))
+                diag.append("H$i=OK(${result.rank}${result.suit},c=%.2f,r=%.2f,s=%.2f);".format(result.confidence,result.rankScore,result.suitScore))
                 Log.d(TAG, "🔍 Hand$i: 成功 ${result.rank}${result.suit} conf=${result.confidence}")
             } else {
                 val reason = if (i == 0) hand0FailReason else hand1FailReason

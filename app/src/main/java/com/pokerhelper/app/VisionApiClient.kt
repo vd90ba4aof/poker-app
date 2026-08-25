@@ -1215,8 +1215,11 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val localRecognizer = LocalCardRecognizer.getInstance(context)
                 var localHoleCards: List<CardInfo>? = null
                 var localCommCards: List<CardInfo>? = null
+                var localMinConfidence = 0f  // V2.9.528: 本地CV最低置信度（供HIGH/LOW分级）
                 // 本地CV置信度阈值（任一张低于阈值则VLM兜底）
                 val LOCAL_CONFIDENCE_THRESHOLD = 0.75f
+                val LOCAL_LOW_CONFIDENCE = 0.50f  // V2.9.528: LOW置信下限，低于此丢弃
+                val AMOUNT_CONFIDENCE_THRESHOLD = 0.60f  // V2.9.528: 金额识别阈值（原0.75太严，0.72就丢）
 
                 try {
                     val tLocal = System.currentTimeMillis()
@@ -1254,15 +1257,24 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     val minCommConf = if (localComms.isNotEmpty()) localComms.minOf { it.confidence } else 1.0f
                     val minHandConf = if (localHands.isNotEmpty()) localHands.minOf { it.confidence } else 1.0f
                     val minCardConf = minOf(minHandConf, minCommConf)
-                    // 置信度低于阈值则丢弃本地结果，VLM兜底
-                    if (minCardConf < LOCAL_CONFIDENCE_THRESHOLD) {
-                        Log.w(TAG, "🔍 本地CV置信度不足(min=%.2f<%.2f)，VLM兜底".format(minCardConf, LOCAL_CONFIDENCE_THRESHOLD))
-                        localHoleCards = null
-                        localCommCards = null
-                    } else {
-                        Log.d(TAG, "🔍 本地CV: ${localCVElapsed}ms | " +
+                    localMinConfidence = minCardConf
+                    // V2.9.528: 三级置信度策略（原"全有或全无"改为分级保留）
+                    // HIGH(>=0.75): 直接使用，跳过VLM牌面API
+                    // LOW(>=0.50): 保留结果，仍调VLM校验，VLM空时回退本地
+                    if (minCardConf >= LOCAL_CONFIDENCE_THRESHOLD) {
+                        Log.d(TAG, "🔍 本地CV HIGH: ${localCVElapsed}ms | " +
                                 "hand=${localHands.map { "${it.rank}${it.suit}(${it.confidence})" }} | " +
                                 "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }} minConf=$minCardConf")
+                    } else if (minCardConf >= 0.50f) {
+                        // LOW置信：保留本地结果但标记为待VLM校验，不置null
+                        localHoleCards = localHands.map { CardInfo(it.rank, it.suit) }
+                        localCommCards = localComms.map { CardInfo(it.rank, it.suit) }
+                        Log.w(TAG, "🔍 本地CV LOW(min=%.2f): 保留结果，VLM校验后空则回退 | hand=%s".format(
+                                minCardConf, localHands.map { "${it.rank}${it.suit}(${it.confidence})" }))
+                    } else {
+                        Log.w(TAG, "🔍 本地CV置信度过低(min=%.2f<0.50)，丢弃，VLM兜底".format(minCardConf))
+                        localHoleCards = null
+                        localCommCards = null
                     }
                 } catch (e: Exception) {
                     lastLocalCVTimeMs = 0
@@ -1275,10 +1287,14 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 lastLocalCommCards = localCommCards ?: emptyList()
                 lastLocalDiag = localRecognizer.lastDiag
 
-                // 本地CV置信度阈值（定义在上方）
-                val localHandOk = localHoleCards != null && localHoleCards!!.size == 2
-                // 公共牌：手牌识别成功且置信度足够时信任本地结果（含空列表=翻前）
+                // V2.9.528: HIGH置信(>=0.75)才跳过VLM；LOW置信(0.50-0.74)仍调VLM校验
+                val localHandOk = localHoleCards != null && localHoleCards!!.size == 2 &&
+                        localMinConfidence >= LOCAL_CONFIDENCE_THRESHOLD
+                // 公共牌：手牌HIGH置信时信任本地结果（含空列表=翻前）
                 val localCommOk = localHandOk
+                // LOW置信标志：本地有结果但置信度不够高，VLM返回空时回退本地
+                val localHandLowFallback = localHoleCards != null && localHoleCards!!.size == 2 &&
+                        localMinConfidence >= LOCAL_LOW_CONFIDENCE && !localHandOk
 
                 // V2.9.526: 本地CV底池/筹码金额识别（毫秒级，成功则不调VLM底池API）
                 var localPotValue: Long = 0L
@@ -1308,25 +1324,25 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     val chipsBmp = RegionCropper.cropMyChips(screenshotBmp)
                     if (potBmpLocal != null) {
                         val potRes = larInstance.recognizeAmount(potBmpLocal, isPot = true)
-                        if (potRes != null && potRes.value > 0 && potRes.confidence >= LOCAL_CONFIDENCE_THRESHOLD) {
+                        if (potRes != null && potRes.value > 0 && potRes.confidence >= AMOUNT_CONFIDENCE_THRESHOLD) {
                             localPotValue = potRes.value
                             localPotOk = true
                             RegionCropper.updatePotCache(potBmpLocal, potRes.value)
                             Log.d(TAG, "💰 本地CV底池: ${System.currentTimeMillis() - tAmt}ms | pot=${potRes.value} conf=%.2f %s".format(potRes.confidence, potRes.diag))
                         } else {
                             amountDiag = "pot:${potRes?.diag ?: "null"}"
-                            Log.w(TAG, "💰 本地CV底池失败(conf=%.2f<%s) %s".format(potRes?.confidence ?: 0f, LOCAL_CONFIDENCE_THRESHOLD, potRes?.diag))
+                            Log.w(TAG, "💰 本地CV底池失败(conf=%.2f<%s) %s".format(potRes?.confidence ?: 0f, AMOUNT_CONFIDENCE_THRESHOLD, potRes?.diag))
                         }
                     }
                     if (chipsBmp != null) {
                         val chipsRes = larInstance.recognizeAmount(chipsBmp, isPot = false)
-                        if (chipsRes != null && chipsRes.value > 0 && chipsRes.confidence >= LOCAL_CONFIDENCE_THRESHOLD) {
+                        if (chipsRes != null && chipsRes.value > 0 && chipsRes.confidence >= AMOUNT_CONFIDENCE_THRESHOLD) {
                             localChipsValue = chipsRes.value.toInt()
                             amountDiag += ";chips=${chipsRes.value}(c=%.2f)".format(chipsRes.confidence)
                             Log.d(TAG, "🪙 本地CV筹码: chips=${chipsRes.value} conf=%.2f %s".format(chipsRes.confidence, chipsRes.diag))
                         } else {
                             amountDiag += ";chips_fail:${chipsRes?.diag ?: "null"}"
-                            Log.w(TAG, "🪙 本地CV筹码失败(conf=%.2f) %s".format(chipsRes?.confidence ?: 0f, chipsRes?.diag))
+                            Log.w(TAG, "🪙 本地CV筹码失败(conf=%.2f<%.2f) %s".format(chipsRes?.confidence ?: 0f, AMOUNT_CONFIDENCE_THRESHOLD, chipsRes?.diag))
                         }
                     }
                     RegionCropper.recycleBitmaps(potBmpLocal, chipsBmp)
@@ -1503,16 +1519,22 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     }
                 }
 
-                // 11. 获取最终牌面数据（本地CV优先）
+                // 11. 获取最终牌面数据（V2.9.528: 三级优先级 + LOW回退）
                 val finalHoleCards = when {
                     localHandOk -> localHoleCards!!
-                    holeCards != null -> holeCards!!
-                    board != null -> board.handCards
+                    holeCards != null -> holeCards!!                        // 缓存命中
+                    board != null && board.handCards.size == 2 -> board.handCards  // VLM返回完整手牌
+                    localHandLowFallback -> {
+                        Log.w(TAG, "🔍 VLM空手牌，回退本地CV LOW结果: ${localHoleCards!!.map{"${it.rank}${it.suit}"}}")
+                        localHoleCards!!
+                    }
+                    board != null -> board.handCards                        // VLM有部分结果
                     else -> emptyList()
                 }
                 val finalCommCards = when {
                     localCommOk -> localCommCards!!
                     newCommIndices.isEmpty() && !needHandApiFinal -> RegionCropper.getCachedCommunityCards()
+                    localHandLowFallback && (board == null || board.commCards.isEmpty()) -> localCommCards ?: emptyList()
                     else -> mergeCommCards(newCommIndices, board?.commCards ?: emptyList())
                 }
                 val finalPot = (potValue ?: board?.potAmount ?: 0L).toInt()
