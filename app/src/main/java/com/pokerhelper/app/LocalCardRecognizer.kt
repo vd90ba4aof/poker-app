@@ -476,108 +476,344 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         return Triple(data, tw, th)
     }
 
+
+    // ===== V2.9.530: 手牌角区识别方案 =====
+    // 从卡片左上角裁出rank+suit索引区域，避免中心pips和底部遮挡物干扰
+    // 自动band检测分离rank/suit，"10"双component检测，plateau_ratio黑色suit分类
+
     fun recognizeHandCard(screenshot: Bitmap, handIndex: Int): CardResult? {
         val failReason = fun(r: String): CardResult? {
             if (handIndex == 0) hand0FailReason = r else hand1FailReason = r
-            Log.w(TAG, "🔍 Hand$handIndex FAIL: $r")
+            Log.w(TAG, "H${handIndex} FAIL: $r")
             return null
         }
         return try {
             val sw = screenshot.width
             val sh = screenshot.height
-            val scaleX = sw / 1080f
-            val scaleY = sh / 2344f
+            val sx = sw / 1080f
+            val sy = sh / 2344f
 
-            val x1: Int; val y1: Int; val x2: Int; val y2: Int
-            if (handIndex == 0) {
-                x1 = (55 * scaleX).toInt().coerceIn(0, sw - 1)
-                y1 = (1745 * scaleY).toInt().coerceIn(0, sh - 1)
-                x2 = (195 * scaleX).toInt().coerceIn(x1 + 1, sw)
-                y2 = (1945 * scaleY).toInt().coerceIn(y1 + 1, sh)
-            } else {
-                x1 = (165 * scaleX).toInt().coerceIn(0, sw - 1)
-                y1 = (1745 * scaleY).toInt().coerceIn(0, sh - 1)
-                x2 = (325 * scaleX).toInt().coerceIn(x1 + 1, sw)
-                y2 = (1945 * scaleY).toInt().coerceIn(y1 + 1, sh)
-            }
+            // V2.9.530: 修正H1左边界（165→150），卡面实际从x=150开始
+            val baseX1 = if (handIndex == 0) 55 else 150
+            val x1 = (baseX1 * sx).toInt().coerceIn(0, sw - 1)
+            val y1 = (1745 * sy).toInt().coerceIn(0, sh - 1)
+            val x2 = ((baseX1 + 140) * sx).toInt().coerceIn(x1 + 1, sw)
+            val y2 = (1945 * sy).toInt().coerceIn(y1 + 1, sh)
 
             val cw = x2 - x1
             val ch = y2 - y1
-            if (cw <= 0 || ch <= 0) return failReason("region_invalid ${cw}x${ch}")
+            if (cw <= 0 || ch <= 0) return failReason("region_invalid")
 
             val pixels = IntArray(cw * ch)
             screenshot.getPixels(pixels, 0, cw, x1, y1, cw, ch)
 
-            // Check card exists
             if (!hasCard(pixels, cw, ch, 0, 0, cw, ch)) {
-                // V2.9.521: 诊断——统计实际像素分布
-                var white=0; var red=0; var black=0; var other=0
-                for (py in 0 until ch) for (px in 0 until cw) {
-                    val p = pixels[py*cw+px]
-                    when {
-                        isWhite(p) -> white++
-                        isRed(p) -> red++
-                        isBlack(p) -> black++
-                        else -> other++
-                    }
-                }
-                val total = cw*ch
-                return failReason("hasCard=false w=${white*100/total}% r=$red b=$black o=$other")
+                return failReason("no_card")
             }
 
-            // Detect color from top-left area (skip top 12px card border/shadow)
-            val colorY1 = (12 * scaleY).toInt().coerceAtMost(ch / 4)
-            val isRed = detectColor(pixels, cw, 0, colorY1, cw / 2, ch / 3)
+            // 计算缩放因子（相对1080p基准）
+            val scale = ch / 200.0
 
-            // Find connected components
-            val (components, labels) = findComponents(pixels, cw, ch, isRed)
+            // 角区裁剪参数（基于Python原型验证）
+            val cornerX = (5 * scale).toInt().coerceAtLeast(1)
+            val cornerY = (20 * scale).toInt().coerceAtLeast(1)
+            val cornerW = (53 * scale).toInt().coerceAtLeast(10)
+            val cornerH = (92 * scale).toInt().coerceAtLeast(20)
 
-            // Select rank (topmost left component) and suit (below rank)
-            var rankComp: Component? = null
-            var suitComp: Component? = null
+            // 确保角区不超出卡片范围
+            val cx2 = (cornerX + cornerW).coerceAtMost(cw)
+            val cy2 = (cornerY + cornerH).coerceAtMost(ch)
+            val actualCW = cx2 - cornerX
+            val actualCH = cy2 - cornerY
+            if (actualCW < 10 || actualCH < 20) return failReason("corner_too_small")
 
-            for (c in components) {
-                if (c.xMin < cw * 0.55f) {
-                    if (c.cy < ch * 0.42f && c.size >= 120) {
-                        if (rankComp == null || c.size > rankComp!!.size) {
-                            rankComp = c
-                        }
-                    } else if (c.cy < ch * 0.65f && c.size >= 120) {
-                        if (suitComp == null || c.xMin < suitComp!!.xMin) {
-                            suitComp = c
-                        }
-                    }
+            // 提取角区mask
+            val cornerMask = extractMask(pixels, cw, ch, cornerX, cornerY, cx2, cy2, false)
+            val mw = cornerMask.second  // = actualCW
+            val mh = cornerMask.third   // = actualCH
+
+            // 自动band检测：行投影找到rank和suit两个content band
+            val bands = findHandContentBands(cornerMask.first, mw, mh, scale)
+            if (bands.size < 2) return failReason("bands=${bands.size}")
+
+            val rankBands = bands.subList(0, 1)
+            val suitBands = bands.subList(1, bands.size)
+
+            // ===== Rank识别 =====
+            // 提取rank band的mask
+            val rStart = rankBands[0].first
+            val rEnd = rankBands[0].second
+            val rankSubmask = BooleanArray(mw * (rEnd - rStart))
+            for (row in rStart until rEnd) {
+                for (col in 0 until mw) {
+                    rankSubmask[(row - rStart) * mw + col] = cornerMask.first[row * mw + col]
                 }
             }
+            val rankTrimmed = trimBorder(rankSubmask, mw, rEnd - rStart)
 
-            if (rankComp == null || suitComp == null) {
-                val top5 = components.sortedByDescending { it.size }.take(5).map {
-                    "s=${it.size},cy=${"%.2f".format(it.cy/ch)},x=${it.xMin}"
-                }
-                return failReason("comp_fail rank=${rankComp?.size} suit=${suitComp?.size} " +
-                        "n=${components.size} red=$isRed top5=[$top5]")
+            // 先检测"10"（双component特征）
+            val tenResult = detectTenDualComp(rankTrimmed.first, rankTrimmed.second, rankTrimmed.third, scale)
+
+            val bestRank: String?
+            val rankConf: Double
+
+            if (tenResult != null) {
+                bestRank = "10"
+                rankConf = tenResult
+            } else {
+                val rankBinary = resizeBinary(rankTrimmed, 52)
+                val rm = match(rankBinary, handRankTemplates)
+                bestRank = rm.first
+                rankConf = rm.second
             }
 
-            val rankBinary = componentToBinary(labels, cw, rankComp!!)
-            val suitBinary = componentToBinary(labels, cw, suitComp!!)
+            // ===== Suit识别 =====
+            val sStart = suitBands[0].first
+            val sMergeRow = findSuitMergeRow(cornerMask.first, mw, sStart, suitBands[suitBands.size - 1].second)
+            val sEnd = if (sMergeRow > sStart) sMergeRow else suitBands[suitBands.size - 1].second
 
-            val (bestRank, rankScore) = match(rankBinary, handRankTemplates)
-            val candidateSuits = if (isRed)
-                handSuitTemplates.filterKeys { it in RED_SUITS }
-            else
+            val suitSubmask = BooleanArray(mw * (sEnd - sStart))
+            for (row in sStart until sEnd) {
+                for (col in 0 until mw) {
+                    suitSubmask[(row - sStart) * mw + col] = cornerMask.first[row * mw + col]
+                }
+            }
+            val suitTrimmed = trimBorder(suitSubmask, mw, sEnd - sStart)
+            val suitBinary = resizeBinary(suitTrimmed, 40)
+
+            // 黑色/红色检测（使用原始像素颜色）
+            val isBlack = detectBlackOrRed(pixels, cw, cornerX, cornerY, cx2, cy2)
+
+            val suitTemplates = if (isBlack) {
                 handSuitTemplates.filterKeys { it in BLACK_SUITS }
-            val (bestSuit, suitScore) = match(suitBinary, candidateSuits)
+            } else {
+                handSuitTemplates.filterKeys { it in RED_SUITS }
+            }
+
+            var bestSuit: String? = null
+            var suitConf = 0.0
+
+            if (isBlack) {
+                // plateau_ratio分类：club>0.30, spade<0.20
+                val ratio = computePlateauRatio(suitTrimmed.first, suitTrimmed.second, suitTrimmed.third)
+                bestSuit = if (ratio > 0.30) "c" else "s"
+                suitConf = if (ratio > 0.30)
+                    0.5 + (ratio - 0.30) * 1.5
+                else
+                    0.5 + (0.30 - ratio) * 1.5
+                suitConf = suitConf.coerceIn(0.5, 0.9)
+            } else {
+                // 红色suit用IoU匹配（♥ vs ♦）
+                val sm = match(suitBinary, suitTemplates)
+                bestSuit = sm.first
+                suitConf = sm.second
+            }
 
             if (bestRank == null || bestSuit == null) {
-                return failReason("match_fail rank=$bestRank(${"%.2f".format(rankScore)}) " +
-                        "suit=$bestSuit(${"%.2f".format(suitScore)}) " +
-                        "rankPx=${rankBinary.first.count{it}} suitPx=${suitBinary.first.count{it}}")
+                return failReason("match_fail rank=$bestRank suit=$bestSuit")
             }
+
+            val conf = (rankConf * 0.55 + suitConf * 0.45).coerceIn(0.0, 1.0)
             if (handIndex == 0) hand0FailReason = "" else hand1FailReason = ""
-            CardResult(bestRank, bestSuit, (rankScore + suitScore) / 2, rankScore, suitScore)
+            Log.d(TAG, "H${handIndex}: ${bestRank}${bestSuit} conf=${"%.2f".format(conf)} r=${"%.2f".format(rankConf)} s=${"%.2f".format(suitConf)}")
+            CardResult(bestRank, bestSuit, conf, rankConf, suitConf)
         } catch (e: Exception) {
             failReason("exception: ${e.message}")
         }
+    }
+
+    /** 行投影自动检测角区content bands（rank + suit） */
+    private fun findHandContentBands(mask: BooleanArray, w: Int, h: Int, scale: Double): List<Pair<Int, Int>> {
+        val gap = maxOf(2, (5 * scale).toInt())
+        val proj = IntArray(h)
+        for (row in 0 until h) {
+            var cnt = 0
+            for (col in 0 until w) if (mask[row * w + col]) cnt++
+            proj[row] = cnt
+        }
+
+        val threshold = maxOf(1, w / 20)
+        val content = BooleanArray(h) { proj[it] >= threshold }
+
+        // 找连续content段，gap<阈值则合并
+        val rawBands = mutableListOf<Pair<Int, Int>>()
+        var start = -1
+        for (i in 0 until h) {
+            if (content[i]) {
+                if (start < 0) start = i
+            } else {
+                if (start >= 0) {
+                    var j = i
+                    while (j < h && j < i + gap && !content[j]) j++
+                    if (j < h && j < i + gap) {
+                        // gap内找到下一个content，不关闭band
+                    } else {
+                        rawBands.add(Pair(start, i))
+                        start = -1
+                    }
+                }
+            }
+        }
+        if (start >= 0) rawBands.add(Pair(start, h))
+
+        if (rawBands.size <= 2) return rawBands
+
+        // 如果合并后仍有>2个band，取前2个最显著的
+        return rawBands.sortedByDescending { it.second - it.first }.take(2)
+            .sortedBy { it.first }
+    }
+
+    /** 在suit band中找到与中心pips合并的行（宽度开始显著增长的位置） */
+    private fun findSuitMergeRow(mask: BooleanArray, w: Int, suitStart: Int, suitEnd: Int): Int {
+        val widths = IntArray(suitEnd - suitStart)
+        var maxWidth = 0
+        for (i in 0 until widths.size) {
+            var cnt = 0
+            val row = suitStart + i
+            for (col in 0 until w) if (mask[row * w + col]) cnt++
+            widths[i] = cnt
+            if (cnt > maxWidth) maxWidth = cnt
+        }
+        if (maxWidth <= 2) return suitEnd
+
+        // 找平台：连续≥3行宽度稳定（差≤2）且≥max的50%
+        var plateauEnd = -1
+        var runLen = 1
+        for (i in 1 until widths.size) {
+            if (kotlin.math.abs(widths[i] - widths[i - 1]) <= 2 && widths[i] >= maxWidth * 0.5f) {
+                runLen++
+                if (runLen >= 3 && plateauEnd < 0) plateauEnd = i
+            } else {
+                runLen = 1
+                plateauEnd = -1
+            }
+            if (plateauEnd >= 0 && i > plateauEnd) {
+                if (widths[i] > widths[plateauEnd] * 1.15f) {
+                    return suitStart + i
+                }
+            }
+        }
+        return suitEnd
+    }
+
+    /** "10"双component检测：左窄(aspect<0.45)+gap≥2+总宽>右×1.3 */
+    private fun detectTenDualComp(mask: BooleanArray, w: Int, h: Int, scale: Double): Double? {
+        if (w <= 0 || h <= 0) return null
+
+        val visited = BooleanArray(w * h)
+        val comps = mutableListOf<IntArray>()  // [xMin, xMax, size]
+
+        for (startIdx in 0 until w * h) {
+            if (mask[startIdx] && !visited[startIdx]) {
+                var xMin = startIdx % w; var xMax = xMin
+                var size = 0
+                val stack = mutableListOf(startIdx)
+                visited[startIdx] = true
+                while (stack.isNotEmpty()) {
+                    val idx = stack.removeAt(stack.size - 1)
+                    size++
+                    val cx = idx % w; val cy = idx / w
+                    if (cx < xMin) xMin = cx
+                    if (cx > xMax) xMax = cx
+                    for (dy in -1..1) {
+                        for (dx in -1..1) {
+                            if (dx == 0 && dy == 0) continue
+                            val nx = cx + dx; val ny = cy + dy
+                            if (nx in 0 until w && ny in 0 until h) {
+                                val ni = ny * w + nx
+                                if (mask[ni] && !visited[ni]) {
+                                    visited[ni] = true
+                                    stack.add(ni)
+                                }
+                            }
+                        }
+                    }
+                }
+                if (size >= maxOf(10, (h * 0.15).toInt())) {
+                    comps.add(intArrayOf(xMin, xMax, size))
+                }
+            }
+        }
+
+        if (comps.size != 2) return null
+        comps.sortBy { it[0] }
+
+        val leftW = comps[0][1] - comps[0][0] + 1
+        val rightW = comps[1][1] - comps[1][0] + 1
+        val leftAspect = leftW.toFloat() / h.toFloat()
+        val gap = comps[1][0] - comps[0][1] - 1
+        val totalW = comps[1][1] - comps[0][0] + 1
+
+        if (leftAspect >= 0.45f) return null
+        if (gap < maxOf(2, (2 * scale).toInt())) return null
+        if (totalW <= rightW * 1.3) return null
+
+        return 0.85
+    }
+
+    /** 计算suit顶部宽度平台占比（club>0.30, spade<0.20） */
+    private fun computePlateauRatio(mask: BooleanArray, w: Int, h: Int): Double {
+        if (h <= 0 || w <= 0) return 0.0
+
+        val heights = IntArray(h)
+        var maxW = 0
+        for (i in 0 until h) {
+            var left = -1; var right = -1
+            for (x in 0 until w) {
+                if (mask[i * w + x]) { if (left < 0) left = x; right = x }
+            }
+            heights[i] = if (left >= 0) right - left + 1 else 0
+            if (heights[i] > maxW) maxW = heights[i]
+        }
+        if (maxW <= 2) return 0.0
+
+        // 找平台期：连续≥3行宽度稳定（差≤2）且≥max的60%
+        var plateauStart = -1; var plateauEnd = -1
+        var runStart = 0
+        for (i in 1 until h) {
+            if (kotlin.math.abs(heights[i] - heights[i - 1]) <= 2 && heights[i] >= maxW * 0.6f) {
+                if (plateauStart < 0) plateauStart = runStart
+                plateauEnd = i
+            } else {
+                if (plateauStart >= 0 && plateauEnd - plateauStart >= 2) break
+                plateauStart = -1; plateauEnd = -1; runStart = i
+            }
+        }
+
+        if (plateauStart < 0 || plateauEnd - plateauStart < 2) return 0.0
+        val plateauRows = plateauEnd - plateauStart + 1
+        val totalRows = maxOf(1, (h * 0.5).toInt()).coerceAtMost(h)
+        return plateauRows.toDouble() / totalRows.toDouble()
+    }
+
+    /** 检测角区suit颜色：黑色=true（mask白=花色），红色=false（mask黑=花色） */
+    private fun detectBlackOrRed(pixels: IntArray, stride: Int, x1: Int, y1: Int, x2: Int, y2: Int): Boolean {
+        val w = x2 - x1; val h = y2 - y1
+        if (w <= 0 || h <= 0) return true
+
+        val suitTopInCorner = (20.0 / 92.0 * h).toInt().coerceIn(0, h - 1)
+        val suitBotInCorner = (60.0 / 92.0 * h).toInt().coerceIn(suitTopInCorner + 1, h)
+        val checkH = suitBotInCorner - suitTopInCorner
+        if (checkH < 4) return true
+
+        val resizeScale = 92.0 / h
+        val suitTopSuit = (25 * resizeScale / h * checkH).toInt().coerceIn(0, checkH - 1)
+        val suitBotSuit = (55 * resizeScale / h * checkH).toInt().coerceIn(suitTopSuit + 1, checkH)
+
+        var darkCount = 0; var lightCount = 0
+        for (y in suitTopSuit until suitBotSuit) {
+            for (x in 0 until w) {
+                val p = pixels[(suitTopInCorner + y) * stride + (x1 + x)]
+                val r = (p >> 16) and 0xFF
+                val g = (p >> 8) and 0xFF
+                val b = p and 0xFF
+                if (r < 100 && g < 100 && b < 100) darkCount++
+                else if (r > 150 && g > 100 && b > 100) lightCount++
+            }
+        }
+        val total = darkCount + lightCount
+        if (total < 10) return true
+        return darkCount.toDouble() / total > 0.6
     }
 
     /** 一次性识别所有牌：2张手牌 + 最多5张公共牌 */
@@ -587,19 +823,17 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         val diag = StringBuilder()
 
         diag.append("bitmap=${screenshot.width}x${screenshot.height};")
-        Log.d(TAG, "🔍 本地CV开始: bitmap=${screenshot.width}x${screenshot.height}")
+        Log.d(TAG, "本地CV开始: bitmap=${screenshot.width}x${screenshot.height}")
 
-        // 手牌
+        // 手牌（角区识别 V2.9.530）
         for (i in 0..1) {
             val result = recognizeHandCard(screenshot, i)
             if (result != null) {
                 holeCards.add(result)
-                diag.append("H$i=OK(${result.rank}${result.suit},c=%.2f,r=%.2f,s=%.2f);".format(result.confidence,result.rankScore,result.suitScore))
-                Log.d(TAG, "🔍 Hand$i: 成功 ${result.rank}${result.suit} conf=${result.confidence}")
+                diag.append("H$i=OK(${result.rank}${result.suit},c=%.2f);".format(result.confidence))
             } else {
                 val reason = if (i == 0) hand0FailReason else hand1FailReason
                 diag.append("H$i=FAIL($reason);")
-                Log.w(TAG, "🔍 Hand$i: 失败(null) reason=$reason")
             }
         }
 
@@ -609,26 +843,23 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             if (result != null) {
                 communityCards.add(result)
                 diag.append("C$i=OK(${result.rank}${result.suit});")
-                Log.d(TAG, "🔍 Comm$i: 成功 ${result.rank}${result.suit} conf=${result.confidence}")
             }
         }
 
         diag.append("hand=${holeCards.size}/2,comm=${communityCards.size}/5")
         lastDiag = diag.toString()
-        Log.d(TAG, "🔍 本地CV完成: hand=${holeCards.size}/2 comm=${communityCards.size}/5 diag=$lastDiag")
+        Log.d(TAG, "本地CV完成: hand=${holeCards.size}/2 comm=${communityCards.size}/5")
         return Pair(holeCards, communityCards)
     }
 
     /** 检查手牌是否在缓存中变化（用于判断是否需要走API） */
     fun quickCardHash(screenshot: Bitmap): Long {
-        // 简单采样手牌区域像素作为hash
         return try {
             val sw = screenshot.width
             val sh = screenshot.height
             val scaleX = sw / 1080f
             val scaleY = sh / 2344f
             var hash = 0L
-            // 采样手牌区域关键点
             val samples = intArrayOf(
                 (60*scaleX).toInt(), (1800*scaleY).toInt(),
                 (200*scaleX).toInt(), (1800*scaleY).toInt(),
