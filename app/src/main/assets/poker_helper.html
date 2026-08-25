@@ -1299,7 +1299,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.527',
+  CURRENT_VERSION:'2.9.528',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2713,7 +2713,7 @@ var HandStateMachine=(function(){
 // 升级自 V2.9.215
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
-'use strict';var APP_VERSION='2.9.527';
+'use strict';var APP_VERSION='2.9.528';
 
 // ====== 第一部分: GTO翻前频率表 (5-Max专用) ======
 var _RFI={
@@ -11439,6 +11439,18 @@ function onVisionResult(data){
   }
 
   // 6. 更新UI
+  // V2.9.527 FIX: ★ 致命缺口修复 - 将API识别的原始chips值转换为BB赋给策略引擎 ★
+  // Android端传的是原始chips，策略引擎用的是BB单位，必须转换否则翻后决策全错
+  if(bbValue>0){
+    var _rawPot=parseInt(data.pot_size)||0;
+    var _rawChips=parseInt(data.my_chips)||0;
+    var _rawBet=parseInt(data.to_call)||0;
+    if(_rawPot>0){ G.pot=Math.round(_rawPot/bbValue); }
+    if(_rawChips>0){ G.stk=Math.round(_rawChips/bbValue); }
+    if(_rawBet>0){ G.bet=Math.round(_rawBet/bbValue); }
+    console.log("[V2.9.527 数据链路修复] bbValue="+bbValue+" pot: "+_rawPot+"chips→"+G.pot+"BB | stk: "+_rawChips+"chips→"+G.stk+"BB | bet: "+_rawBet+"chips→"+G.bet+"BB");
+  }
+
   uCards();
   
   // 7. ★ V2.9.12: 确保极速模式始终开启 + 移除loading ★
