@@ -493,12 +493,15 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val sx = sw / 1080f
             val sy = sh / 2344f
 
-            // V2.9.530: 修正H1左边界（165→150），卡面实际从x=150开始
-            val baseX1 = if (handIndex == 0) 55 else 150
+            // V2.9.537: 基于8月22日实际游戏截图修正坐标（旧值55/150/1745/1945太靠右下，错过rank+suit标记）
+            val baseX1 = if (handIndex == 0) 30 else 110
+            val baseY1 = if (handIndex == 0) 1690 else 1670
+            val cardW = 140
+            val cardH = 250
             val x1 = (baseX1 * sx).toInt().coerceIn(0, sw - 1)
-            val y1 = (1745 * sy).toInt().coerceIn(0, sh - 1)
-            val x2 = ((baseX1 + 140) * sx).toInt().coerceIn(x1 + 1, sw)
-            val y2 = (1945 * sy).toInt().coerceIn(y1 + 1, sh)
+            val y1 = (baseY1 * sy).toInt().coerceIn(0, sh - 1)
+            val x2 = ((baseX1 + cardW) * sx).toInt().coerceIn(x1 + 1, sw)
+            val y2 = ((baseY1 + cardH) * sy).toInt().coerceIn(y1 + 1, sh)
 
             val cw = x2 - x1
             val ch = y2 - y1
@@ -511,8 +514,8 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 return failReason("no_card")
             }
 
-            // 计算缩放因子（相对1080p基准）
-            val scale = ch / 200.0
+            // 计算缩放因子（相对250px基准高度，V2.9.537从200改为250）
+            val scale = ch / 250.0
 
             // V2.9.537: 诊断日志——分辨率/缩放/裁切
             val whiteCount = pixels.count { isWhite(it) }

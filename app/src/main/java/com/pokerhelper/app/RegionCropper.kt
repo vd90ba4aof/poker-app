@@ -24,11 +24,12 @@ object RegionCropper {
 
     data class RegionRect(val x1: Int, val y1: Int, val x2: Int, val y2: Int)
 
-    // ===== 手牌区域（基于Screenshot_2026-08-14干净截图实测）=====
-    // 2张手牌在底部偏左，重叠式扇出，直接裁整体区域
-    // V2.9.523: H0坐标修正（原35起裁入了卡片左侧黑边，导致rank+suit连通成巨型组件）
-    private val HAND_0 = RegionRect(55, 1745, 195, 1945)
-    private val HAND_1 = RegionRect(150, 1745, 290, 1945)
+    // ===== 手牌区域（基于Screenshot_2026-08-22实际游戏截图实测）=====
+    // 2张手牌在底部偏左，重叠式扇出
+    // V2.9.537: 坐标修正。旧值H0=(55,1745,195,1945)/H1=(150,1745,290,1945)的y起始1745太靠下，
+    // 错过了rank+suit标记顶部；H1左边界150太靠右，没覆盖到第二张牌完整角区
+    private val HAND_0 = RegionRect(30, 1690, 170, 1940)
+    private val HAND_1 = RegionRect(110, 1670, 250, 1920)
 
     // ===== 公共牌区域（5张，基于Screenshot_2026-08-14干净截图实测）=====
     // 每张宽约130px，间距约20px，y≈1068-1272
