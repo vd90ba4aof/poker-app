@@ -528,7 +528,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             if (actualCW < 10 || actualCH < 20) return failReason("corner_too_small")
 
             // 提取角区mask
-            val cornerMask = extractMask(pixels, cw, ch, cornerX, cornerY, cx2, cy2, false)
+            val cornerMask = extractMask(pixels, cw, cornerX, cornerY, cx2, cy2, false)
             val mw = actualCW
             val mh = actualCH
 
@@ -615,8 +615,8 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
             val conf = (rankConf * 0.55 + suitConf * 0.45).coerceIn(0.0, 1.0)
             if (handIndex == 0) hand0FailReason = "" else hand1FailReason = ""
-            Log.d(TAG, "H${handIndex}: ${bestRank}${bestSuit} conf=${"%.2f".format(conf)} r=${"%.2f".format(rankConf)} s=${"%.2f".format(suitConf)}")
-            CardResult(bestRank, bestSuit, conf, rankConf, suitConf)
+            Log.d(TAG, "H${handIndex}: ${bestRank}${bestSuit} conf=${String.format("%.2f", conf)} r=${String.format("%.2f", rankConf)} s=${String.format("%.2f", suitConf)}")
+            CardResult(bestRank, bestSuit, conf.toFloat(), rankConf.toFloat(), suitConf.toFloat())
         } catch (e: Exception) {
             failReason("exception: ${e.message}")
         }
