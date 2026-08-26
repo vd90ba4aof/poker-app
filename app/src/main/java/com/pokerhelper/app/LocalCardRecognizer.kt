@@ -527,8 +527,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val actualCH = cy2 - cornerY
             if (actualCW < 10 || actualCH < 20) return failReason("corner_too_small")
 
-            // 提取角区mask
-            val cornerMask = extractMask(pixels, cw, cornerX, cornerY, cx2, cy2, false)
+            // V2.9.535: 先检测角区颜色，再用正确的isRed提取mask（原硬编码false导致红色rank牌bands=0）
+            val isBlackCard = detectBlackOrRed(pixels, cw, cornerX, cornerY, cx2, cy2)
+            val cornerMask = extractMask(pixels, cw, cornerX, cornerY, cx2, cy2, !isBlackCard)
             val mw = actualCW
             val mh = actualCH
 
@@ -581,8 +582,8 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             }
             val suitTrimmed = trim(suitSubmask, mw, sEnd - sStart)
 
-            // 黑色/红色检测（使用原始像素颜色）
-            val isBlack = detectBlackOrRed(pixels, cw, cornerX, cornerY, cx2, cy2)
+            // V2.9.535: 复用前面已检测的颜色结果，不重复计算
+            val isBlack = isBlackCard
 
             val suitTemplates = if (isBlack) {
                 handSuitTemplates.filterKeys { it in BLACK_SUITS }
@@ -624,7 +625,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
     /** 行投影自动检测角区content bands（rank + suit） */
     private fun findHandContentBands(mask: BooleanArray, w: Int, h: Int, scale: Double): List<Pair<Int, Int>> {
-        val gap = maxOf(2, (5 * scale).toInt())
+        val gap = maxOf(2, (3 * scale).toInt())  // V2.9.535: 5→3，红色rank/suit间距仅3px，5会粘成1个band
         val proj = IntArray(h)
         for (row in 0 until h) {
             var cnt = 0
