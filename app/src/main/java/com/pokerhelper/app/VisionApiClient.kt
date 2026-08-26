@@ -1351,6 +1351,30 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     Log.w(TAG, "本地CV底池/筹码失败，VLM兜底: ${e.message}")
                 }
 
+                // V2.9.539: 对手筹码本地CV识别（5个座位，纯像素模板匹配，~5ms）
+                // seatIndex 0-4 对应 dZones seat 0,1,2,3,5（跳过seat4=Hero）
+                val oppChipsMap = HashMap<Int, Int>()
+                try {
+                    val tOC = System.currentTimeMillis()
+                    val larInstance = LocalActionRecognizer.getInstance(context)
+                    val oppSeatIds = listOf(0, 1, 2, 3, 5)
+                    for ((idx, seatId) in oppSeatIds.withIndex()) {
+                        val oppBmp = RegionCropper.cropOpponentChips(screenshotBmp, idx)
+                        if (oppBmp != null) {
+                            val oppRes = larInstance.recognizeAmount(oppBmp, isPot = false)
+                            if (oppRes != null && oppRes.value > 0 && oppRes.confidence >= AMOUNT_CONFIDENCE_THRESHOLD) {
+                                oppChipsMap[seatId] = oppRes.value.toInt()
+                            }
+                            oppBmp.recycle()
+                        }
+                    }
+                    if (oppChipsMap.isNotEmpty()) {
+                        Log.d(TAG, "👥 对手筹码: ${oppChipsMap.size}/5 %dms".format(System.currentTimeMillis() - tOC))
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "对手筹码识别失败: ${e.message}")
+                }
+
                 // 2. 裁剪操作区（每帧必识别）
                 val actionBmp = RegionCropper.cropActionArea(screenshotBmp)
                 val actionBase64 = actionBmp?.let { bitmapToBase64(it, quality = 80) }
@@ -1587,7 +1611,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     blindSB = inferredSB,
                     blindBB = inferredBB,
                     ante = 0,
-                    players = emptyList(),
+                    players = buildOppPlayerList(oppChipsMap, localChipsValue, dButtonSeatLocal),
                     dButtonPosition = mapDSeatToPosition(
                         if (dButtonSeatLocal >= 0) dButtonSeatLocal else (action?.dButtonSeat ?: -1)
                     ),
@@ -1811,6 +1835,37 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             5 -> "left-bottom"
             else -> ""
         }
+    }
+
+    /**
+     * V2.9.539: 根据本地CV识别的对手筹码构建PlayerInfo列表
+     * @param oppChipsMap seatId→筹码值（仅含识别成功的座位）
+     * @param myChips 自己的筹码
+     * @param dSeat D按钮座位号
+     */
+    private fun buildOppPlayerList(
+        oppChipsMap: Map<Int, Int>,
+        myChips: Int,
+        dSeat: Int
+    ): List<PlayerInfo> {
+        val players = mutableListOf<PlayerInfo>()
+        // 按seat顺序0-5构建
+        for (seat in 0..5) {
+            val pos = mapDSeatToPosition(seat)
+            if (seat == 4) {
+                // Hero自己
+                if (myChips > 0) {
+                    players.add(PlayerInfo(pos, 0, myChips, true))
+                }
+            } else {
+                val chips = oppChipsMap[seat]
+                if (chips != null && chips > 0) {
+                    // 有筹码的座位视为活跃玩家
+                    players.add(PlayerInfo(pos, 0, chips, true))
+                }
+            }
+        }
+        return players
     }
 
     /**

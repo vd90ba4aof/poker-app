@@ -188,14 +188,14 @@ object GameModeConfig {
             intArrayOf(800, 1470, 1010, 1510), // 座位5 右下
             intArrayOf(135, 1920, 265, 1960)   // 座位6 Hero底部
         ),
-        // V2.9.210: 6个座位的筹码区域 [x1,y1,x2,y2]
+        // V2.9.539: 5个对手+Hero筹码区域，8/22满桌截图实测校准
         playerChips = listOf(
-            intArrayOf(460, 545, 620, 580),    // 座位1
-            intArrayOf(10, 910, 200, 950),     // 座位2
-            intArrayOf(860, 895, 1030, 935),   // 座位3
-            intArrayOf(25, 1485, 200, 1520),   // 座位4
-            intArrayOf(830, 1515, 1010, 1555), // 座位5
-            intArrayOf(95, 1990, 275, 2070)    // 座位6 Hero（V2.9.538同步RegionCropper MY_CHIPS）
+            intArrayOf(490, 558, 590, 600),     // 座位1 正上(seat1)
+            intArrayOf(60, 884, 300, 925),      // 座位2 左上(seat0)
+            intArrayOf(780, 884, 1000, 925),    // 座位3 右上(seat2)
+            intArrayOf(20, 1570, 220, 1615),    // 座位4 左中(seat5)
+            intArrayOf(870, 1570, 1055, 1615),  // 座位5 右中(seat3)
+            intArrayOf(95, 1990, 275, 2070)     // 座位6 Hero(seat4)
         ),
         // V2.9.537: 底池区域 — 与RegionCropper POT_AMOUNT / LocalActionRecognizer POT同步
         potLabel = intArrayOf(415, 955, 540, 1000),     // 底池文字

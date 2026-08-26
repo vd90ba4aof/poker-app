@@ -47,6 +47,20 @@ object RegionCropper {
     // 注意y>2055有绿色进度条，白色mask+row-band clipping会自动排除
     private val MY_CHIPS = RegionRect(95, 1990, 275, 2070)
 
+    // ===== 对手筹码区域（5个座位，白色数字在深色半透明面板上）=====
+    // V2.9.539: 基于8/22满桌截图实测校准，seat编号与dZones一致
+    // 只裁面板下半部分（筹码行），排除上半部分玩家名字行
+    // seat0左上: 11,777  seat1正上: 4,800  seat2右上: 642
+    // seat3右中: 3,030   seat5左中: 11,799
+    private val OPP_CHIPS = listOf(
+        RegionRect(60, 884, 300, 925),      // seat0 左上
+        RegionRect(490, 558, 590, 600),     // seat1 正上
+        RegionRect(780, 884, 1000, 925),    // seat2 右上
+        RegionRect(870, 1570, 1055, 1615),  // seat3 右中
+        RegionRect(20, 1570, 220, 1615)     // seat5 左中
+        // seat4 是Hero自己，不在这里
+    )
+
     // ===== 操作区（底部按钮+筹码+预设）=====
     // 包含：主操作按钮（y≈2140-2340）、预设按钮（x≈730-1060, y≈1640-2130）、
     //       我的筹码（x≈45-310, y≈1935-2020）、底部玩家信息
@@ -198,6 +212,15 @@ object RegionCropper {
      */
     fun cropMyChips(bitmap: Bitmap): Bitmap? {
         return cropRegion(bitmap, MY_CHIPS)
+    }
+
+    /**
+     * 裁剪指定对手座位的筹码区域（V2.9.539新增）
+     * @param seatIndex 0-4，对应OPP_CHIPS列表索引（seat0,1,2,3,5）
+     */
+    fun cropOpponentChips(bitmap: Bitmap, seatIndex: Int): Bitmap? {
+        if (seatIndex < 0 || seatIndex >= OPP_CHIPS.size) return null
+        return cropRegion(bitmap, OPP_CHIPS[seatIndex])
     }
 
     /**
