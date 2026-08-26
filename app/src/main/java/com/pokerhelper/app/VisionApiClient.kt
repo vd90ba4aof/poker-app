@@ -121,6 +121,15 @@ object VisionApiClient {
     @Volatile var lastPromptMode = ""
         private set
 
+    // V2.9.540: 动态玩家检测——追踪在座/离场
+    @Volatile private var prevPlayerSeats: Set<Int> = emptySet()
+    @Volatile var seatedPlayerCount: Int = 0
+        private set
+    @Volatile var lastJoinedSeats: List<Int> = emptyList()
+        private set
+    @Volatile var lastLeftSeats: List<Int> = emptyList()
+        private set
+
     data class VisionResult(
         val isPokerTable: Boolean,
         val holeCards: List<CardInfo>,
@@ -1417,7 +1426,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                             toCall = lar.callAmount ?: 0,
                             myChips = localChipsValue,
                             dButtonSeat = dButtonSeatLocal,
-                            activePlayers = 2,
+                            activePlayers = oppChipsMap.size + 1,
                             isInsurance = false,
                             rawResponse = "local: fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} p=${lar.presets} btns=${buttons.size} c=%.2f".format(lar.confidence)
                         )
@@ -1602,7 +1611,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     // V2.9.526: 本地CV筹码优先，VLM操作区次之，都没有则0
                     playerChips = if (localChipsValue > 0) localChipsValue else (action?.myChips ?: 0),
                     totalPlayers = 6,
-                    activePlayers = action?.activePlayers ?: 2,
+                    activePlayers = oppChipsMap.size + 1,
                     myPosition = "",
                     street = determineStreet(finalCommCards),
                     toCall = finalToCall,
@@ -1629,6 +1638,18 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     localSuitUsed = false,
                     isMyTurn = isMyTurn
                 )
+
+                // V2.9.540: 动态玩家追踪——对比前后帧，检测谁加入/谁离场
+                val currentSeats = (oppChipsMap.keys + 4).toSet()  // oppChipsMap的keys + Hero(seat4)
+                val joined = currentSeats - prevPlayerSeats
+                val left = prevPlayerSeats - currentSeats
+                lastJoinedSeats = joined.toList().sorted()
+                lastLeftSeats = left.toList().sorted()
+                seatedPlayerCount = currentSeats.size
+                prevPlayerSeats = currentSeats
+                if (joined.isNotEmpty() || left.isNotEmpty()) {
+                    Log.d(TAG, "🪑 玩家变化: 在座=$seatedPlayerCount 加入=$lastJoinedSeats 离场=$lastLeftSeats")
+                }
 
                 // 同步锁定状态
                 if (finalHoleCards.size == 2) {
