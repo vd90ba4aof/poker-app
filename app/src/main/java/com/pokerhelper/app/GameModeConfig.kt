@@ -161,7 +161,7 @@ object GameModeConfig {
     // V2.9.210: 完整坐标体系 — 含玩家位置、底池、按钮、D按钮搜索区域
     private val GG_PORTRAIT_COORDS = CoordinateConfig(
         // GG竖屏：手牌在底部中央，两张牌左右排列
-        // V2.9.537: 与RegionCropper HAND_0/HAND_1同步 — 旧值(75,200)/(170,310)/y=1760错过rank+suit标记
+        // V2.9.538: 与RegionCropper HAND_0/HAND_1同步
         handCardsBase = listOf(
             Pair(30, 170),   // 手牌0 x范围（V2.9.537同步RegionCropper HAND_0）
             Pair(110, 250)   // 手牌1 x范围（V2.9.537同步RegionCropper HAND_1）
@@ -195,7 +195,7 @@ object GameModeConfig {
             intArrayOf(860, 895, 1030, 935),   // 座位3
             intArrayOf(25, 1485, 200, 1520),   // 座位4
             intArrayOf(830, 1515, 1010, 1555), // 座位5
-            intArrayOf(170, 1965, 295, 2005)   // 座位6 Hero
+            intArrayOf(95, 1990, 275, 2070)    // 座位6 Hero（V2.9.538同步RegionCropper MY_CHIPS）
         ),
         // V2.9.537: 底池区域 — 与RegionCropper POT_AMOUNT / LocalActionRecognizer POT同步
         potLabel = intArrayOf(415, 955, 540, 1000),     // 底池文字
@@ -212,14 +212,15 @@ object GameModeConfig {
             intArrayOf(730, 2020, 1080, 2140), // 50%
             intArrayOf(730, 2195, 1080, 2320)  // 33%
         ),
-        // V2.9.210: D按钮搜索区域（6个座位附近）[x1~x2, y1~y2]
+        // V2.9.538: D按钮搜索区域（6个座位附近）[x1~x2, y1~y2]
+        // 全部由8/22六张真实截图实测校准，与LocalActionRecognizer.dZones同步
         dealerSearchAreas = listOf(
-            intArrayOf(400, 550, 650, 620),    // 座位1附近
-            intArrayOf(0, 880, 220, 960),      // 座位2附近
-            intArrayOf(780, 860, 1040, 940),   // 座位3附近
-            intArrayOf(0, 1450, 220, 1530),    // 座位4附近
-            intArrayOf(780, 1480, 1020, 1560), // 座位5附近
-            intArrayOf(100, 1930, 300, 2010)   // 座位6/Hero附近
+            intArrayOf(322, 515, 432, 625),    // seat1 正上：D实测(377,570)✅
+            intArrayOf(94, 935, 204, 1045),    // seat2 左上：D实测(149,990)✅
+            intArrayOf(874, 935, 984, 1045),   // seat3 右上：D实测(929,990)✅
+            intArrayOf(46, 1262, 156, 1372),   // seat4 左中：D实测(101,1317)✅
+            intArrayOf(922, 1262, 1032, 1372), // seat5 右中：D实测(977,1317)✅
+            intArrayOf(319, 1826, 429, 1936)   // seat6/Hero正下：D实测(374,1881)✅
         ),
         // V2.9.210: 顶部导航栏 [x1,y1,x2,y2]
         topNavBar = listOf(

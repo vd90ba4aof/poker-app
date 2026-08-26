@@ -493,7 +493,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val sx = sw / 1080f
             val sy = sh / 2344f
 
-            // V2.9.537: 基于8月22日实际游戏截图修正坐标（旧值55/150/1745/1945太靠右下，错过rank+suit标记）
+            // V2.9.538: 基于8月22日实际游戏截图实测坐标
             val baseX1 = if (handIndex == 0) 30 else 110
             val baseY1 = if (handIndex == 0) 1690 else 1670
             val cardW = 140
@@ -521,11 +521,24 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val whiteCount = pixels.count { isWhite(it) }
             Log.d(TAG, "H${handIndex} diag: sw=$sw sh=$sh sx=${String.format("%.3f", sx)} sy=${String.format("%.3f", sy)} cw=$cw ch=$ch scale=${String.format("%.3f", scale)} white%=${String.format("%.1f", whiteCount*100.0/pixels.size)}")
 
-            // 角区裁剪参数（基于Python原型验证）
-            val cornerX = (5 * scale).toInt().coerceAtLeast(1)
-            val cornerY = (20 * scale).toInt().coerceAtLeast(1)
-            val cornerW = (53 * scale).toInt().coerceAtLeast(10)
-            val cornerH = (92 * scale).toInt().coerceAtLeast(20)
+            // V2.9.538: tight per-card corner参数（8/22真实截图像素级校准）
+            // per-card corner：H0/H1因扇出偏移分别校准，确保bands≥2
+            // H0(5♥): rank偏左x≈39, corner suit y≈143-175; H1(3♦): rank偏右x≈58, corner suit y≈156-195
+            val cornerX: Int
+            val cornerY: Int
+            val cornerW: Int
+            val cornerH: Int
+            if (handIndex == 0) {
+                cornerX = (35 * scale).toInt().coerceAtLeast(1)
+                cornerY = (75 * scale).toInt().coerceAtLeast(1)
+                cornerW = (50 * scale).toInt().coerceAtLeast(10)
+                cornerH = (115 * scale).toInt().coerceAtLeast(20)
+            } else {
+                cornerX = (44 * scale).toInt().coerceAtLeast(1)
+                cornerY = (82 * scale).toInt().coerceAtLeast(1)
+                cornerW = (51 * scale).toInt().coerceAtLeast(10)
+                cornerH = (128 * scale).toInt().coerceAtLeast(20)
+            }
 
             // 确保角区不超出卡片范围
             val cx2 = (cornerX + cornerW).coerceAtMost(cw)
@@ -649,7 +662,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
     /** 行投影自动检测角区content bands（rank + suit） */
     private fun findHandContentBands(mask: BooleanArray, w: Int, h: Int, scale: Double): List<Pair<Int, Int>> {
-        val gap = maxOf(2, (3 * scale).toInt())  // V2.9.535: 5→3，红色rank/suit间距仅3px，5会粘成1个band
+        val gap = maxOf(2, (9 * scale).toInt())  // V2.9.538: 3→9，数字"3"笔画内部有8px间隙，3会被拆成3个独立band
         val proj = IntArray(h)
         for (row in 0 until h) {
             var cnt = 0

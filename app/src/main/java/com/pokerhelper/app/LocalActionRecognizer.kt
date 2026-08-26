@@ -48,8 +48,8 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         private const val BTN3_X2 = 1050
         private const val PRESET_Y1 = 1680
         private const val PRESET_Y2 = 2200
-        private const val PRESET_X1 = 830
-        private const val PRESET_X2 = 955
+        private const val PRESET_X1 = 815  // V2.9.538: 830→815，左右加宽覆盖完整预设数字
+        private const val PRESET_X2 = 970  // V2.9.538: 955→970
         // V2.9.536: 我的回合指示器——改用黄色下注数字+按钮数量检测
         // 豪哥逻辑：有黄色下注数字或>=2个按钮=轮到我；只有2个按钮+灰色数字=预处理
         // 底池金额区域（黄色数字）
@@ -1149,13 +1149,15 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         val cy: Int
     )
 
+    // V2.9.538: 6个D按钮位置全部由8/22六张真实截图实测校准（D按钮直径~55px）
+    // GG竖屏6-max桌为偏右椭圆，正上/正下不在屏幕中线而在x≈375
     private val dZones = listOf(
-        DZone(0, 150, 990),    // seat0 左上(Nass_)：D在头像下方牌侧
-        DZone(1, 540, 510),    // seat1 正上(HeinGeerken1)：D在头像下方
-        DZone(2, 930, 990),    // seat2 右上(hhhxxxxxxx)：D在头像下方
-        DZone(3, 930, 1320),   // seat3 右中(pralomge29)：D在头像上方felt
-        DZone(4, 540, 1620),   // seat4 正下对手：D在头像上方
-        DZone(5, 150, 1320)    // seat5 左中(Lunde@1)：D在头像上方felt
+        DZone(0, 149, 990),    // seat0 左上：D实测(149,990)✅
+        DZone(1, 377, 570),    // seat1 正上：D实测(377,570)✅
+        DZone(2, 929, 990),    // seat2 右上：D实测(929,990)✅
+        DZone(3, 977, 1317),   // seat3 右中：D实测(977,1317)✅
+        DZone(4, 374, 1881),   // seat4 正下Hero：D实测(374,1881)✅
+        DZone(5, 101, 1317)    // seat5 左中：D实测(101,1317)✅
     )
 
     private val D_ZONE_RADIUS = 55
