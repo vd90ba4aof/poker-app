@@ -529,11 +529,11 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
             // 提取角区mask
             val cornerMask = extractMask(pixels, cw, ch, cornerX, cornerY, cx2, cy2, false)
-            val mw = cornerMask.second  // = actualCW
-            val mh = cornerMask.third   // = actualCH
+            val mw = actualCW
+            val mh = actualCH
 
             // 自动band检测：行投影找到rank和suit两个content band
-            val bands = findHandContentBands(cornerMask.first, mw, mh, scale)
+            val bands = findHandContentBands(cornerMask, mw, mh, scale)
             if (bands.size < 2) return failReason("bands=${bands.size}")
 
             val rankBands = bands.subList(0, 1)
@@ -546,13 +546,15 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val rankSubmask = BooleanArray(mw * (rEnd - rStart))
             for (row in rStart until rEnd) {
                 for (col in 0 until mw) {
-                    rankSubmask[(row - rStart) * mw + col] = cornerMask.first[row * mw + col]
+                    rankSubmask[(row - rStart) * mw + col] = cornerMask[row * mw + col]
                 }
             }
-            val rankTrimmed = trimBorder(rankSubmask, mw, rEnd - rStart)
+            val rankTrimmed = trim(rankSubmask, mw, rEnd - rStart)
 
             // 先检测"10"（双component特征）
-            val tenResult = detectTenDualComp(rankTrimmed.first, rankTrimmed.second, rankTrimmed.third, scale)
+            val tenResult = if (rankTrimmed != null)
+                detectTenDualComp(rankTrimmed.first, rankTrimmed.second, rankTrimmed.third, scale)
+            else null
 
             val bestRank: String?
             val rankConf: Double
@@ -561,25 +563,23 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 bestRank = "10"
                 rankConf = tenResult
             } else {
-                val rankBinary = resizeBinary(rankTrimmed, 52)
-                val rm = match(rankBinary, handRankTemplates)
+                val rm = match(rankTrimmed, handRankTemplates)
                 bestRank = rm.first
-                rankConf = rm.second
+                rankConf = rm.second.toDouble()
             }
 
             // ===== Suit识别 =====
             val sStart = suitBands[0].first
-            val sMergeRow = findSuitMergeRow(cornerMask.first, mw, sStart, suitBands[suitBands.size - 1].second)
+            val sMergeRow = findSuitMergeRow(cornerMask, mw, sStart, suitBands[suitBands.size - 1].second)
             val sEnd = if (sMergeRow > sStart) sMergeRow else suitBands[suitBands.size - 1].second
 
             val suitSubmask = BooleanArray(mw * (sEnd - sStart))
             for (row in sStart until sEnd) {
                 for (col in 0 until mw) {
-                    suitSubmask[(row - sStart) * mw + col] = cornerMask.first[row * mw + col]
+                    suitSubmask[(row - sStart) * mw + col] = cornerMask[row * mw + col]
                 }
             }
-            val suitTrimmed = trimBorder(suitSubmask, mw, sEnd - sStart)
-            val suitBinary = resizeBinary(suitTrimmed, 40)
+            val suitTrimmed = trim(suitSubmask, mw, sEnd - sStart)
 
             // 黑色/红色检测（使用原始像素颜色）
             val isBlack = detectBlackOrRed(pixels, cw, cornerX, cornerY, cx2, cy2)
@@ -593,7 +593,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             var bestSuit: String? = null
             var suitConf = 0.0
 
-            if (isBlack) {
+            if (isBlack && suitTrimmed != null) {
                 // plateau_ratio分类：club>0.30, spade<0.20
                 val ratio = computePlateauRatio(suitTrimmed.first, suitTrimmed.second, suitTrimmed.third)
                 bestSuit = if (ratio > 0.30) "c" else "s"
@@ -604,9 +604,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 suitConf = suitConf.coerceIn(0.5, 0.9)
             } else {
                 // 红色suit用IoU匹配（♥ vs ♦）
-                val sm = match(suitBinary, suitTemplates)
+                val sm = match(suitTrimmed, suitTemplates)
                 bestSuit = sm.first
-                suitConf = sm.second
+                suitConf = sm.second.toDouble()
             }
 
             if (bestRank == null || bestSuit == null) {
@@ -746,7 +746,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
         if (leftAspect >= 0.45f) return null
         if (gap < maxOf(2, (2 * scale).toInt())) return null
-        if (totalW <= rightW * 1.3) return null
+        if (totalW <= (rightW * 1.3).toInt()) return null
 
         return 0.85
     }
@@ -771,7 +771,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         var plateauStart = -1; var plateauEnd = -1
         var runStart = 0
         for (i in 1 until h) {
-            if (kotlin.math.abs(heights[i] - heights[i - 1]) <= 2 && heights[i] >= maxW * 0.6f) {
+            if (kotlin.math.abs(heights[i] - heights[i - 1]) <= 2 && heights[i] >= (maxW * 0.6).toInt()) {
                 if (plateauStart < 0) plateauStart = runStart
                 plateauEnd = i
             } else {

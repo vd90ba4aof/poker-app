@@ -1299,7 +1299,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.530',
+  CURRENT_VERSION:'2.9.531',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2713,7 +2713,7 @@ var HandStateMachine=(function(){
 // 升级自 V2.9.215
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
-'use strict';var APP_VERSION='2.9.530';
+'use strict';var APP_VERSION='2.9.531';
 
 // ====== 第一部分: GTO翻前频率表 (5-Max专用) ======
 var _RFI={
