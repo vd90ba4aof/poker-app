@@ -628,7 +628,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         val proj = IntArray(h)
         for (row in 0 until h) {
             var cnt = 0
-            for (col in 0 until w) if (mask[row * w + col]) cnt++
+            for (col in 0 until w) if (!mask[row * w + col]) cnt++  // V2.9.534-fix: mask极性修正，!mask=内容(黑色像素)
             proj[row] = cnt
         }
 
@@ -670,7 +670,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         for (i in 0 until widths.size) {
             var cnt = 0
             val row = suitStart + i
-            for (col in 0 until w) if (mask[row * w + col]) cnt++
+            for (col in 0 until w) if (!mask[row * w + col]) cnt++  // V2.9.534-fix: mask极性修正
             widths[i] = cnt
             if (cnt > maxWidth) maxWidth = cnt
         }
@@ -704,7 +704,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         val comps = mutableListOf<IntArray>()  // [xMin, xMax, size]
 
         for (startIdx in 0 until w * h) {
-            if (mask[startIdx] && !visited[startIdx]) {
+            if (!mask[startIdx] && !visited[startIdx]) {  // V2.9.534-fix: !mask=内容
                 var xMin = startIdx % w; var xMax = xMin
                 var size = 0
                 val stack = mutableListOf(startIdx)
@@ -721,7 +721,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                             val nx = cx + dx; val ny = cy + dy
                             if (nx in 0 until w && ny in 0 until h) {
                                 val ni = ny * w + nx
-                                if (mask[ni] && !visited[ni]) {
+                                if (!mask[ni] && !visited[ni]) {  // V2.9.534-fix: !mask=内容
                                     visited[ni] = true
                                     stack.add(ni)
                                 }
@@ -760,7 +760,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         for (i in 0 until h) {
             var left = -1; var right = -1
             for (x in 0 until w) {
-                if (mask[i * w + x]) { if (left < 0) left = x; right = x }
+                if (!mask[i * w + x]) { if (left < 0) left = x; right = x }  // V2.9.534-fix: !mask=内容
             }
             heights[i] = if (left >= 0) right - left + 1 else 0
             if (heights[i] > maxW) maxW = heights[i]
