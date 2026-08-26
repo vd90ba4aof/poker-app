@@ -161,20 +161,21 @@ object GameModeConfig {
     // V2.9.210: 完整坐标体系 — 含玩家位置、底池、按钮、D按钮搜索区域
     private val GG_PORTRAIT_COORDS = CoordinateConfig(
         // GG竖屏：手牌在底部中央，两张牌左右排列
+        // V2.9.537: 与RegionCropper HAND_0/HAND_1同步 — 旧值(75,200)/(170,310)/y=1760错过rank+suit标记
         handCardsBase = listOf(
-            Pair(75, 200),   // 手牌0 x范围（V2.9.210校准）
-            Pair(170, 310)   // 手牌1 x范围（V2.9.210校准）
+            Pair(30, 170),   // 手牌0 x范围（V2.9.537同步RegionCropper HAND_0）
+            Pair(110, 250)   // 手牌1 x范围（V2.9.537同步RegionCropper HAND_1）
         ),
-        handYBase = Pair(1760, 2000),  // V2.9.210校准
-        // 公共牌在屏幕中部（V2.9.210校准）
+        handYBase = Pair(1670, 1940),  // V2.9.537同步RegionCropper HAND_0/HAND_1 y并集
+        // 公共牌在屏幕中部（V2.9.537: 与RegionCropper COMM_0-4同步）
         communityCardsBase = listOf(
-            Pair(180, 325),   // 公共牌0
-            Pair(325, 460),   // 公共牌1
-            Pair(460, 595),   // 公共牌2
-            Pair(595, 730),   // 公共牌3
-            Pair(730, 870)    // 公共牌4
+            Pair(166, 310),   // 公共牌0
+            Pair(316, 460),   // 公共牌1
+            Pair(466, 610),   // 公共牌2
+            Pair(616, 760),   // 公共牌3
+            Pair(766, 910)    // 公共牌4
         ),
-        communityYBase = Pair(1030, 1290),
+        communityYBase = Pair(1068, 1272),
         referenceWidth = 1080,
         referenceHeight = 2344,
         orientation = ScreenOrientation.PORTRAIT,
@@ -196,13 +197,13 @@ object GameModeConfig {
             intArrayOf(830, 1515, 1010, 1555), // 座位5
             intArrayOf(170, 1965, 295, 2005)   // 座位6 Hero
         ),
-        // V2.9.210: 底池区域
+        // V2.9.537: 底池区域 — 与RegionCropper POT_AMOUNT / LocalActionRecognizer POT同步
         potLabel = intArrayOf(415, 955, 540, 1000),     // 底池文字
-        potAmount = intArrayOf(430, 995, 550, 1050),    // 底池金额
-        // V2.9.210: 底部操作按钮 [x1,y1,x2,y2]
+        potAmount = intArrayOf(460, 975, 620, 1050),    // 底池金额（V2.9.537同步）
+        // V2.9.537: 底部操作按钮 [x1,y1,x2,y2] — 与LocalActionRecognizer BTN2/BTN3同步
         actionButtons = listOf(
-            intArrayOf(20, 2190, 370, 2340),   // 左按钮（让牌/弃牌）
-            intArrayOf(390, 2190, 710, 2340)   // 右按钮（让牌/跟注/全押）
+            intArrayOf(370, 2215, 700, 2295),  // BTN2 中间按钮
+            intArrayOf(715, 2215, 1050, 2295)  // BTN3 右侧按钮
         ),
         // V2.9.210: 下注按钮（右侧4档）[x1,y1,x2,y2]
         betButtons = listOf(
