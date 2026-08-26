@@ -514,6 +514,10 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             // 计算缩放因子（相对1080p基准）
             val scale = ch / 200.0
 
+            // V2.9.537: 诊断日志——分辨率/缩放/裁切
+            val whiteCount = pixels.count { isWhite(it) }
+            Log.d(TAG, "H${handIndex} diag: sw=$sw sh=$sh sx=${String.format("%.3f", sx)} sy=${String.format("%.3f", sy)} cw=$cw ch=$ch scale=${String.format("%.3f", scale)} white%=${String.format("%.1f", whiteCount*100.0/pixels.size)}")
+
             // 角区裁剪参数（基于Python原型验证）
             val cornerX = (5 * scale).toInt().coerceAtLeast(1)
             val cornerY = (20 * scale).toInt().coerceAtLeast(1)
@@ -533,9 +537,26 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val mw = actualCW
             val mh = actualCH
 
+            // V2.9.537: 诊断日志——角区颜色+mask内容统计
+            var contentPx = 0
+            for (i in cornerMask.indices) if (!cornerMask[i]) contentPx++
+            Log.d(TAG, "H${handIndex} corner: ($cornerX,$cornerY)-(${cx2},${cy2}) ${actualCW}x${actualCH} isBlack=$isBlackCard maskContent=$contentPx/${cornerMask.size}(${String.format("%.1f", contentPx*100.0/cornerMask.size)}%)")
+
             // 自动band检测：行投影找到rank和suit两个content band
             val bands = findHandContentBands(cornerMask, mw, mh, scale)
-            if (bands.size < 2) return failReason("bands=${bands.size}")
+            if (bands.size < 2) {
+                // V2.9.537: bands<2时输出投影详情
+                val proj = IntArray(mh)
+                for (row in 0 until mh) {
+                    var cnt = 0
+                    for (col in 0 until mw) if (!cornerMask[row * mw + col]) cnt++
+                    proj[row] = cnt
+                }
+                val maxProj = proj.maxOrNull() ?: 0
+                val threshold = maxOf(1, mw / 20)
+                Log.w(TAG, "H${handIndex} bands=${bands.size} maxProj=$maxProj threshold=$threshold mw=$mw mh=$mh")
+                return failReason("bands=${bands.size}")
+            }
 
             val rankBands = bands.subList(0, 1)
             val suitBands = bands.subList(1, bands.size)
