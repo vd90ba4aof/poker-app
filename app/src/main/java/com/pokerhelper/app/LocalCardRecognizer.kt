@@ -804,8 +804,8 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         for (y in suitTopSuit until suitBotSuit) {
             for (x in 0 until w) {
                 val p = pixels[(suitTopInCorner + y) * stride + (x1 + x)]
-                val r = (p >> 16) and 0xFF
-                val g = (p >> 8) and 0xFF
+                val r = p shr 16 and 0xFF
+                val g = p shr 8 and 0xFF
                 val b = p and 0xFF
                 if (r < 100 && g < 100 && b < 100) darkCount++
                 else if (r > 150 && g > 100 && b > 100) lightCount++
