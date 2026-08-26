@@ -50,13 +50,16 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         private const val PRESET_Y2 = 2200
         private const val PRESET_X1 = 830
         private const val PRESET_X2 = 955
-        // V2.9.526: 我的回合指示器——座位下方绿色进度条
-        // 实测12张轮到我的截图：绿色像素483-495；没轮到的截图：0
-        private const val TURN_BAR_X1 = 20
-        private const val TURN_BAR_X2 = 280
-        private const val TURN_BAR_Y1 = 2045
-        private const val TURN_BAR_Y2 = 2070
-        private const val TURN_BAR_THRESHOLD = 100
+        // V2.9.536: 我的回合指示器——改用黄色下注数字+按钮数量检测
+        // 豪哥逻辑：有黄色下注数字或>=2个按钮=轮到我；只有2个按钮+灰色数字=预处理
+        // 底池金额区域（黄色数字）
+        private const val POT_X1 = 460
+        private const val POT_X2 = 620
+        private const val POT_Y1 = 975
+        private const val POT_Y2 = 1050
+        private const val POT_YELLOW_THRESHOLD = 100
+        // 按钮区域黄色像素阈值
+        private const val BTN_YELLOW_THRESHOLD = 100
 
         // 数字尺寸约束
         private const val DIGIT_MIN_W = 8
@@ -713,9 +716,9 @@ class LocalActionRecognizer private constructor(private val context: Context) {
     fun isLoaded(): Boolean = loaded
 
     /**
-     * V2.9.526: 检测是否轮到我行动。
-     * 我的座位下方有一条绿色行动进度条，轮到我时亮（~490px绿色），没轮到时为0。
-     * 预处理按钮（灰色、无黄色数字）不会触发点击。
+     * V2.9.536: 检测是否轮到我行动。
+     * 豪哥逻辑：有黄色下注数字或>=2个按钮=轮到我；只有2个按钮+灰色数字=预处理。
+     * 检测底池金额区域（黄色数字）和按钮区域黄色像素数量。
      *
      * @return true=轮到我，false=别人行动中或预处理状态
      */
@@ -725,23 +728,56 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             val sh = screenshot.height
             val sx = sw / 1080f
             val sy = sh / 2344f
-            val x1 = (TURN_BAR_X1 * sx).toInt().coerceIn(0, sw - 1)
-            val x2 = (TURN_BAR_X2 * sx).toInt().coerceIn(x1 + 1, sw)
-            val y1 = (TURN_BAR_Y1 * sy).toInt().coerceIn(0, sh - 1)
-            val y2 = (TURN_BAR_Y2 * sy).toInt().coerceIn(y1 + 1, sh)
-            val rw = x2 - x1
-            val rh = y2 - y1
-            val pixels = IntArray(rw * rh)
-            screenshot.getPixels(pixels, 0, rw, x1, y1, rw, rh)
-            var greenPx = 0
-            for (p in pixels) {
-                val r = p shr 16 and 0xFF
-                val g = p shr 8 and 0xFF
-                val b = p and 0xFF
-                if (g > 150 && r < 120 && b < 120) greenPx++
+            
+            // 检测底池金额区域（黄色数字）
+            val potX1 = (POT_X1 * sx).toInt().coerceIn(0, sw - 1)
+            val potX2 = (POT_X2 * sx).toInt().coerceIn(potX1 + 1, sw)
+            val potY1 = (POT_Y1 * sy).toInt().coerceIn(0, sh - 1)
+            val potY2 = (POT_Y2 * sy).toInt().coerceIn(potY1 + 1, sh)
+            val potW = potX2 - potX1
+            val potH = potY2 - potY1
+            val potPixels = IntArray(potW * potH)
+            screenshot.getPixels(potPixels, 0, potW, potX1, potY1, potW, potH)
+            var potYellow = 0
+            for (p in potPixels) {
+                if (isYellow(p)) potYellow++
             }
-            val myTurn = greenPx >= TURN_BAR_THRESHOLD
-            Log.d(TAG, "isMyTurn: greenPx=$greenPx threshold=$TURN_BAR_THRESHOLD -> $myTurn")
+            
+            // 检测按钮区域黄色像素（BTN2 + BTN3）
+            val btn2X1 = (370 * sx).toInt().coerceIn(0, sw - 1)
+            val btn2X2 = (700 * sx).toInt().coerceIn(btn2X1 + 1, sw)
+            val btn3X1 = (715 * sx).toInt().coerceIn(0, sw - 1)
+            val btn3X2 = (1050 * sx).toInt().coerceIn(btn3X1 + 1, sw)
+            val btnY1 = (2215 * sy).toInt().coerceIn(0, sh - 1)
+            val btnY2 = (2295 * sy).toInt().coerceIn(btnY1 + 1, sh)
+            
+            // BTN2 黄色像素
+            val btn2W = btn2X2 - btn2X1
+            val btn2H = btnY2 - btnY1
+            val btn2Pixels = IntArray(btn2W * btn2H)
+            screenshot.getPixels(btn2Pixels, 0, btn2W, btn2X1, btnY1, btn2W, btn2H)
+            var btn2Yellow = 0
+            for (p in btn2Pixels) {
+                if (isYellow(p)) btn2Yellow++
+            }
+            
+            // BTN3 黄色像素
+            val btn3W = btn3X2 - btn3X1
+            val btn3H = btnY2 - btnY1
+            val btn3Pixels = IntArray(btn3W * btn3H)
+            screenshot.getPixels(btn3Pixels, 0, btn3W, btn3X1, btnY1, btn3W, btn3H)
+            var btn3Yellow = 0
+            for (p in btn3Pixels) {
+                if (isYellow(p)) btn3Yellow++
+            }
+            
+            // 豪哥逻辑：有黄色下注数字或>=2个按钮=轮到我
+            var yellowButtons = 0
+            if (btn2Yellow >= BTN_YELLOW_THRESHOLD) yellowButtons++
+            if (btn3Yellow >= BTN_YELLOW_THRESHOLD) yellowButtons++
+            
+            val myTurn = potYellow >= POT_YELLOW_THRESHOLD || yellowButtons >= 2
+            Log.d(TAG, "isMyTurn: potYellow=$potYellow btn2Yellow=$btn2Yellow btn3Yellow=$btn3Yellow yellowButtons=$yellowButtons -> $myTurn")
             myTurn
         } catch (e: Exception) {
             Log.w(TAG, "isMyTurn failed: ${e.message}")
