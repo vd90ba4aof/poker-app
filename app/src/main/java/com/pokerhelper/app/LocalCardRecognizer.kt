@@ -831,33 +831,27 @@ class LocalCardRecognizer private constructor(private val context: Context) {
     }
 
     /** 检测角区suit颜色：黑色=true（mask白=花色），红色=false（mask黑=花色） */
+    /**
+     * V2.9.542: 检测角区内容是黑色还是红色。
+     * 直接数红色像素 vs 黑色像素，红色多返回false（红桃/方块），黑色多返回true（黑桃/梅花）。
+     * 旧版detectBlackOrRed在suit区域采样但把白色背景算成light，导致dark占比永远到不了60%，
+     * 所有黑桃/梅花被误判为红色→mask为空→bands=0。
+     */
     private fun detectBlackOrRed(pixels: IntArray, stride: Int, x1: Int, y1: Int, x2: Int, y2: Int): Boolean {
-        val w = x2 - x1; val h = y2 - y1
-        if (w <= 0 || h <= 0) return true
-
-        val suitTopInCorner = (20.0 / 92.0 * h).toInt().coerceIn(0, h - 1)
-        val suitBotInCorner = (60.0 / 92.0 * h).toInt().coerceIn(suitTopInCorner + 1, h)
-        val checkH = suitBotInCorner - suitTopInCorner
-        if (checkH < 4) return true
-
-        val resizeScale = 92.0 / h
-        val suitTopSuit = (25 * resizeScale / h * checkH).toInt().coerceIn(0, checkH - 1)
-        val suitBotSuit = (55 * resizeScale / h * checkH).toInt().coerceIn(suitTopSuit + 1, checkH)
-
-        var darkCount = 0; var lightCount = 0
-        for (y in suitTopSuit until suitBotSuit) {
-            for (x in 0 until w) {
-                val p = pixels[(suitTopInCorner + y) * stride + (x1 + x)]
+        var red = 0
+        var black = 0
+        for (y in y1 until y2) {
+            for (x in x1 until x2) {
+                val p = pixels[y * stride + x]
                 val r = p shr 16 and 0xFF
                 val g = p shr 8 and 0xFF
                 val b = p and 0xFF
-                if (r < 100 && g < 100 && b < 100) darkCount++
-                else if (r > 150 && g > 100 && b > 100) lightCount++
+                if (r > 110 && r - g > 25 && r - b > 25) red++
+                if (r < 90 && g < 90 && b < 90) black++
             }
         }
-        val total = darkCount + lightCount
-        if (total < 10) return true
-        return darkCount.toDouble() / total > 0.6
+        // 默认黑色（保险），只有明确红色占优才返回false
+        return black >= red
     }
 
     /** 一次性识别所有牌：2张手牌 + 最多5张公共牌 */
