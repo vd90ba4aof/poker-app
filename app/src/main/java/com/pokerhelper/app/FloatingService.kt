@@ -90,8 +90,7 @@ class FloatingService : Service() {
     // V2.9.68: WakeLock保活，防止CPU休眠导致服务被杀
     private var wakeLock: PowerManager.WakeLock? = null
 
-    // V2.9.515: 本地CV已废弃（YOLO/NCC太慢/崩溃），纯云端VLM方案
-    // 归档文件：archived/local-cv/
+    // V2.9.541: 本地CV为主识别链路（手牌/公共牌/操作区/筹码全像素匹配），VLM仅兜底
 
     // V2.9.153: AutoCapture
     private var autoCaptureEnabled = false
@@ -168,7 +167,6 @@ class FloatingService : Service() {
     private val pendingJsCalls = java.util.Collections.synchronizedList(mutableListOf<String>())  // P2-fix: WebView线程与主线程并发安全
     // V2.9.167: 诊断日志变量——记录每次识别的完整信息
     private var _diagStartTime = 0L
-    // V2.9.515: 本地CV诊断变量已废弃
     // V2.9.503: Pipeline耗时追踪（@Volatile保证@JavascriptInterface后台线程可见性）
     @Volatile private var _pipelineScreenshotTime = 0L
     @Volatile private var _pipelineJsDecisionTimeMs = 0L
@@ -342,8 +340,6 @@ class FloatingService : Service() {
         } else {
             registerReceiver(notificationReceiver, filter)
         }
-
-        // V2.9.515: 本地CV已废弃，纯云端VLM方案
 
         initSpeechRecognizer()
         showFloatingWindow()
@@ -559,7 +555,6 @@ class FloatingService : Service() {
             }
         } catch (_: Exception) {}
         
-        // V2.9.515: 本地CV已废弃，纯云端VLM方案
         
         // 重新初始化语音识别
         initSpeechRecognizer()
@@ -594,7 +589,6 @@ class FloatingService : Service() {
         ballSignalRunnable = null
         ballSignalHandler = null
         speechRecognizer?.destroy()
-        // V2.9.515: 本地CV已废弃，无需释放
 
         // V2.9.112: 断开BLE连接
         try { bleManager?.stopHeartbeatMonitor() } catch (_: Exception) {}  // V1.0.35
@@ -2563,7 +2557,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             ScreenCaptureService.screenshotHeight = opts.outHeight
         } catch (_: Exception) {}
 
-        // V2.9.515: 纯云端VLM方案（本地CV已废弃）
+        // V2.9.541: 本地CV为主+VLM兜底
         // 有API Key → 调用视觉模型识别牌面（本地CV已锁牌时只补充场景信息）
         tvStatus?.text = "🎯 API识别中..."
         tvAction?.alpha = 0.5f
@@ -2605,7 +2599,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
         }
         Thread {
             try {
-                // V2.9.515: 使用并发区域识别方案
+                // V2.9.541: 使用并发区域识别方案（本地CV多区域并行）
                 val result = VisionApiClient.analyzeScreenshotConcurrent(
                     screenshot,
                     screenWidth = ScreenCaptureService.screenshotWidth.takeIf { it > 0 } ?: 1080,

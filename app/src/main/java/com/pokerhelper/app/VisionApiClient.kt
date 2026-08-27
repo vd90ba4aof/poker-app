@@ -65,7 +65,7 @@ object VisionApiClient {
     // V2.9.108: prompt格式开关——true=单行紧凑(快), false=原格式(稳)
     var useCompactPrompt = true
 
-    // V2.9.520: 本地CV已恢复启用（V2.9.515曾废弃，V2.9.518重新启用）
+    // V2.9.541: 本地CV为主识别链路（手牌/公共牌/操作区/筹码全像素匹配），VLM仅兜底
     var useLocalRecognition: Boolean = true
     
     var apiProvider = "siliconflow"
@@ -202,7 +202,7 @@ object VisionApiClient {
         try {
         return try {
             val t0 = System.currentTimeMillis()
-            // V2.9.515: 本地CV已废弃，纯云端VLM方案
+            // V2.9.541: 本地CV为主+VLM兜底（analyzeScreenshotConcurrent路径）
 
             val compressedJpeg = compressImage(jpegData, maxWidth = 960)
             val t1 = System.currentTimeMillis()
