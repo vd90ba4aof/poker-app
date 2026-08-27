@@ -830,28 +830,13 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         return plateauRows.toDouble() / totalRows.toDouble()
     }
 
-    /** 检测角区suit颜色：黑色=true（mask白=花色），红色=false（mask黑=花色） */
     /**
-     * V2.9.542: 检测角区内容是黑色还是红色。
-     * 直接数红色像素 vs 黑色像素，红色多返回false（红桃/方块），黑色多返回true（黑桃/梅花）。
-     * 旧版detectBlackOrRed在suit区域采样但把白色背景算成light，导致dark占比永远到不了60%，
-     * 所有黑桃/梅花被误判为红色→mask为空→bands=0。
+     * V2.9.542: 手牌角区颜色检测，直接复用公共牌的detectColor逻辑。
+     * detectColor返回true=红色（红桃/方块），手牌需要true=黑色（黑桃/梅花），
+     * 所以取反。旧版独立实现因采样范围错误+白色背景计入light导致黑桃/梅花全部误判。
      */
     private fun detectBlackOrRed(pixels: IntArray, stride: Int, x1: Int, y1: Int, x2: Int, y2: Int): Boolean {
-        var red = 0
-        var black = 0
-        for (y in y1 until y2) {
-            for (x in x1 until x2) {
-                val p = pixels[y * stride + x]
-                val r = p shr 16 and 0xFF
-                val g = p shr 8 and 0xFF
-                val b = p and 0xFF
-                if (r > 110 && r - g > 25 && r - b > 25) red++
-                if (r < 90 && g < 90 && b < 90) black++
-            }
-        }
-        // 默认黑色（保险），只有明确红色占优才返回false
-        return black >= red
+        return !detectColor(pixels, stride, x1, y1, x2, y2)
     }
 
     /** 一次性识别所有牌：2张手牌 + 最多5张公共牌 */

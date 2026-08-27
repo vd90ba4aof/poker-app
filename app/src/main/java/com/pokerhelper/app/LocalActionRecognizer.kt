@@ -929,41 +929,17 @@ class LocalActionRecognizer private constructor(private val context: Context) {
     }
 
     /**
-     * V2.9.542: 自适应二值mask。
-     * GG平台有两种主题：绿色赌桌（暗底黄/白字）和浅紫主题（亮底深紫字）。
-     * 先检测区域平均亮度决定明暗主题，再选择对应mask方向。
-     * - 暗背景(avg<128)：底池用isYellow，筹码用isWhite
-     * - 亮背景(avg>=128)：统一用亮度<150的暗色内容mask
+     * 二值mask：暗底亮字——底池用isYellow提取黄色数字，筹码用isWhite提取白色数字。
+     * GG绿色赌桌主题平均亮度48-65，文字为黄/白色，背景为深绿/深灰。
      */
     private fun buildMask(bmp: Bitmap, useYellow: Boolean): BooleanArray {
         val w = bmp.width
         val h = bmp.height
         val pixels = IntArray(w * h)
         bmp.getPixels(pixels, 0, w, 0, 0, w, h)
-
-        // 检测区域平均亮度
-        var totalBrightness = 0L
-        for (p in pixels) {
-            val r = p shr 16 and 0xFF
-            val g = p shr 8 and 0xFF
-            val b = p and 0xFF
-            totalBrightness += r + g + b
-        }
-        val avgBrightness = totalBrightness / (pixels.size * 3)
-        val darkBackground = avgBrightness < 128
-
         val mask = BooleanArray(w * h)
         for (i in pixels.indices) {
-            mask[i] = if (darkBackground) {
-                // 暗背景：提取亮色文字
-                if (useYellow) isYellow(pixels[i]) else isWhite(pixels[i])
-            } else {
-                // 亮背景：提取暗色文字
-                val r = pixels[i] shr 16 and 0xFF
-                val g = pixels[i] shr 8 and 0xFF
-                val b = pixels[i] and 0xFF
-                (r + g + b) / 3 < 150
-            }
+            mask[i] = if (useYellow) isYellow(pixels[i]) else isWhite(pixels[i])
         }
         return mask
     }
@@ -1077,8 +1053,7 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             var comps = findComponents(mask, w, h)
             if (comps.isEmpty()) return AmountResult(0, 0f, 0, "no_components")
             comps = comps.sortedBy { it.x1 }
-            // V2.9.542: 降低过滤阈值兼容浅紫主题小字号(h=18)和窄数字"1"(area~70)
-            comps = comps.filter { it.area >= 50 && it.h >= 12 }
+            comps = comps.filter { it.area >= 100 && it.h >= 20 }
             if (comps.isEmpty()) return AmountResult(0, 0f, 0, "filtered_all(area/h)")
 
             // merge gap<=1
