@@ -660,20 +660,25 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         }
     }
 
-    /** 行投影自动检测角区content bands（rank + suit） */
+    /**
+     * V2.9.541: 自适应段高度过滤——不依赖gap跨间隙合并。
+     * 1. 行投影找所有连续content段（不合并）
+     * 2. 过滤高度<15px的噪点碎段（边缘抗锯齿产生的1-6px碎段）
+     * 3. 前2个主体段 = rank + suit（按y顺序）
+     * 根因：V2.9.538 gap=9跨过rank与suit间仅~2行的真实间隙，把两段合并成1个band。
+     */
     private fun findHandContentBands(mask: BooleanArray, w: Int, h: Int, scale: Double): List<Pair<Int, Int>> {
-        val gap = maxOf(2, (9 * scale).toInt())  // V2.9.538: 3→9，数字"3"笔画内部有8px间隙，3会被拆成3个独立band
         val proj = IntArray(h)
         for (row in 0 until h) {
             var cnt = 0
-            for (col in 0 until w) if (!mask[row * w + col]) cnt++  // V2.9.534-fix: mask极性修正，!mask=内容(黑色像素)
+            for (col in 0 until w) if (!mask[row * w + col]) cnt++
             proj[row] = cnt
         }
 
         val threshold = maxOf(1, w / 20)
         val content = BooleanArray(h) { proj[it] >= threshold }
 
-        // 找连续content段，gap<阈值则合并
+        // 1. 找所有连续content段（不跨间隙合并）
         val rawBands = mutableListOf<Pair<Int, Int>>()
         var start = -1
         for (i in 0 until h) {
@@ -681,24 +686,25 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 if (start < 0) start = i
             } else {
                 if (start >= 0) {
-                    var j = i
-                    while (j < h && j < i + gap && !content[j]) j++
-                    if (j < h && j < i + gap) {
-                        // gap内找到下一个content，不关闭band
-                    } else {
-                        rawBands.add(Pair(start, i))
-                        start = -1
-                    }
+                    rawBands.add(Pair(start, i))
+                    start = -1
                 }
             }
         }
         if (start >= 0) rawBands.add(Pair(start, h))
 
-        if (rawBands.size <= 2) return rawBands
+        // 2. 过滤高度<minBandH的噪点碎段（rank高52-59px, suit高40-49px, 噪点1-6px）
+        val minBandH = maxOf(8, (15 * scale).toInt())
+        val majorBands = rawBands.filter { (it.second - it.first) >= minBandH }
 
-        // 如果合并后仍有>2个band，取前2个最显著的
-        return rawBands.sortedByDescending { it.second - it.first }.take(2)
-            .sortedBy { it.first }
+        if (majorBands.size < 2) {
+            val rawInfo = rawBands.joinToString(",") { "${it.first}-${it.second}(h=${it.second - it.first})" }
+            val majorInfo = majorBands.joinToString(",") { "${it.first}-${it.second}(h=${it.second - it.first})" }
+            Log.w(TAG, "bands V3: raw=${rawBands.size}[$rawInfo] major=${majorBands.size}[$majorInfo] minH=$minBandH")
+        }
+
+        // 3. 前2个主体段按y顺序
+        return majorBands.take(2)
     }
 
     /** 在suit band中找到与中心pips合并的行（宽度开始显著增长的位置） */
