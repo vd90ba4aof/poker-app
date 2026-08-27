@@ -1225,10 +1225,11 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var localHoleCards: List<CardInfo>? = null
                 var localCommCards: List<CardInfo>? = null
                 var localMinConfidence = 0f  // V2.9.528: 本地CV最低置信度（供HIGH/LOW分级）
-                // 本地CV置信度阈值（任一张低于阈值则VLM兜底）
-                val LOCAL_CONFIDENCE_THRESHOLD = 0.75f
-                val LOCAL_LOW_CONFIDENCE = 0.50f  // V2.9.528: LOW置信下限，低于此丢弃
-                val AMOUNT_CONFIDENCE_THRESHOLD = 0.60f  // V2.9.528: 金额识别阈值（原0.75太严，0.72就丢）
+                // V2.9.544: 分离操作区/牌面置信度阈值——操作区数字0.62+即正确，牌面黑色花色plateau分类天然0.50+
+                val LOCAL_CONFIDENCE_THRESHOLD = 0.60f  // 操作区按钮金额阈值
+                val CARD_CONFIDENCE_THRESHOLD = 0.50f   // 牌面阈值（黑色花色plateau_ratio置信度上限0.90）
+                val LOCAL_LOW_CONFIDENCE = 0.50f
+                val AMOUNT_CONFIDENCE_THRESHOLD = 0.60f
 
                 try {
                     val tLocal = System.currentTimeMillis()
@@ -1267,19 +1268,11 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     val minHandConf = if (localHands.isNotEmpty()) localHands.minOf { it.confidence } else 1.0f
                     val minCardConf = minOf(minHandConf, minCommConf)
                     localMinConfidence = minCardConf
-                    // V2.9.528: 三级置信度策略（原"全有或全无"改为分级保留）
-                    // HIGH(>=0.75): 直接使用，跳过VLM牌面API
-                    // LOW(>=0.50): 保留结果，仍调VLM校验，VLM空时回退本地
-                    if (minCardConf >= LOCAL_CONFIDENCE_THRESHOLD) {
+                    // V2.9.544: HIGH(>=0.50)直接使用跳过VLM；<0.50丢弃VLM兜底（黑色花色plateau分类天然0.50+）
+                    if (minCardConf >= CARD_CONFIDENCE_THRESHOLD) {
                         Log.d(TAG, "🔍 本地CV HIGH: ${localCVElapsed}ms | " +
                                 "hand=${localHands.map { "${it.rank}${it.suit}(${it.confidence})" }} | " +
                                 "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }} minConf=$minCardConf")
-                    } else if (minCardConf >= 0.50f) {
-                        // LOW置信：保留本地结果但标记为待VLM校验，不置null
-                        localHoleCards = localHands.map { CardInfo(it.rank, it.suit) }
-                        localCommCards = localComms.map { CardInfo(it.rank, it.suit) }
-                        Log.w(TAG, "🔍 本地CV LOW(min=%.2f): 保留结果，VLM校验后空则回退 | hand=%s".format(
-                                minCardConf, localHands.map { "${it.rank}${it.suit}(${it.confidence})" }))
                     } else {
                         Log.w(TAG, "🔍 本地CV置信度过低(min=%.2f<0.50)，丢弃，VLM兜底".format(minCardConf))
                         localHoleCards = null
@@ -1296,9 +1289,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 lastLocalCommCards = localCommCards ?: emptyList()
                 lastLocalDiag = localRecognizer.lastDiag
 
-                // V2.9.528: HIGH置信(>=0.75)才跳过VLM；LOW置信(0.50-0.74)仍调VLM校验
+                // V2.9.544: 牌面用CARD_CONFIDENCE_THRESHOLD(0.50)，操作区用LOCAL_CONFIDENCE_THRESHOLD(0.60)
                 val localHandOk = localHoleCards != null && localHoleCards!!.size == 2 &&
-                        localMinConfidence >= LOCAL_CONFIDENCE_THRESHOLD
+                        localMinConfidence >= CARD_CONFIDENCE_THRESHOLD
                 // 公共牌：手牌HIGH置信时信任本地结果（含空列表=翻前）
                 val localCommOk = localHandOk
                 // LOW置信标志：本地有结果但置信度不够高，VLM返回空时回退本地
