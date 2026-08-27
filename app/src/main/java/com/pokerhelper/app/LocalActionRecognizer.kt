@@ -929,8 +929,21 @@ class LocalActionRecognizer private constructor(private val context: Context) {
     }
 
     /**
-     * 二值mask：暗底亮字——底池用isYellow提取黄色数字，筹码用isWhite提取白色数字。
-     * GG绿色赌桌主题平均亮度48-65，文字为黄/白色，背景为深绿/深灰。
+     * V2.9.543: 统一亮色mask——白色和灰色数字都提取。
+     * GG筹码数字有白色(RGB~240)和灰色(RGB~165)两种，原isWhite阈值>200漏掉灰色数字(seat3等)。
+     * 条件：亮度>140 且 R/G/B三通道差值<20（排除彩色像素）。
+     */
+    private fun isWhiteOrGray(pixel: Int): Boolean {
+        val r = pixel shr 16 and 0xFF
+        val g = pixel shr 8 and 0xFF
+        val b = pixel and 0xFF
+        val brightness = (r + g + b) / 3
+        val maxDiff = maxOf(kotlin.math.abs(r - g), kotlin.math.abs(g - b), kotlin.math.abs(r - b))
+        return brightness > 140 && maxDiff < 20
+    }
+
+    /**
+     * 二值mask：暗底亮字——底池用isYellow提取黄色数字，筹码用isWhiteOrGray提取白/灰色数字。
      */
     private fun buildMask(bmp: Bitmap, useYellow: Boolean): BooleanArray {
         val w = bmp.width
@@ -939,7 +952,7 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         bmp.getPixels(pixels, 0, w, 0, 0, w, h)
         val mask = BooleanArray(w * h)
         for (i in pixels.indices) {
-            mask[i] = if (useYellow) isYellow(pixels[i]) else isWhite(pixels[i])
+            mask[i] = if (useYellow) isYellow(pixels[i]) else isWhiteOrGray(pixels[i])
         }
         return mask
     }
@@ -1118,7 +1131,13 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                 val (chPot, scPot) = matchDigitNatural(qData, qW, qH, potTemplates)
                 // try chips templates
                 val (chChips, scChips) = matchDigitNatural(qData, qW, qH, chipsTemplates)
-                val (ch, sc, src) = if (scPot >= scChips) Triple(chPot, scPot, "p") else Triple(chChips, scChips, "c")
+                // V2.9.543: try btn templates (26x36原始尺寸，匹配效果最好)
+                val (chBtn, scBtn) = matchDigitNatural(qData, qW, qH, digitTemplates)
+                val (ch, sc, src) = when {
+                    scBtn >= scPot && scBtn >= scChips -> Triple(chBtn, scBtn, "b")
+                    scPot >= scChips -> Triple(chPot, scPot, "p")
+                    else -> Triple(chChips, scChips, "c")
+                }
                 if (ch == '?') {
                     return AmountResult(0, 0f, digits.size, "digit_unmatched")
                 }
