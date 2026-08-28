@@ -1299,7 +1299,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.544',
+  CURRENT_VERSION:'2.9.545',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2713,7 +2713,7 @@ var HandStateMachine=(function(){
 // 升级自 V2.9.215
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
-'use strict';var APP_VERSION='2.9.544';
+'use strict';var APP_VERSION='2.9.545';
 
 // ====== 第一部分: GTO翻前频率表 (5-Max专用) ======
 var _RFI={
@@ -12258,7 +12258,48 @@ var BoardTexture = {
 
 // ===== 自动执行桥接 =====
 var _autoExecEnabled = false;
-var _autoExecLastAction = null;
+function enableAutoExec(){_autoExecEnabled=true;console.log("[AutoExec] enabled");}
+function disableAutoExec(){_autoExecEnabled=false;console.log("[AutoExec] disabled");}
+// 筹码重置——Kotlin端ChipTracker.reset()后回调，清空JS侧追踪状态
+function onChipReset(){
+  try{
+    G.hole=[null,null];G.comm=[null,null,null,null,null];
+    G.bet=0;G.pot=10;G.limpers=0;G._heroDid4bet=false;G._slowplayed=false;
+    if(typeof DRTA!=='undefined'&&DRTA.reset)DRTA.reset();
+    if(typeof HudLearner!=='undefined'&&HudLearner.reset)HudLearner.reset();
+    if(typeof uCards==='function')uCards();
+    if(typeof clr==='function')clr();
+    console.log('[onChipReset] JS侧筹码/追踪状态已重置');
+  }catch(e){console.log('[onChipReset] err:'+e.message);}
+}
+// 语音输入——Kotlin语音识别后回调，data={holeCards:[],communityCards:[],position,tableSize,rawText}
+function onVoiceInput(data){
+  try{
+    if(!data)return;
+    function parseCardStr(s){
+      if(!s||s.length<2)return null;
+      var r=s[0].toUpperCase();
+      var su=s[1].toLowerCase();
+      if('23456789TJQKA'.indexOf(r)<0)return null;
+      if('shdc'.indexOf(su)<0)return null;
+      return{rank:r,suit:su};
+    }
+    if(data.holeCards&&data.holeCards.length>=2){
+      G.hole=[parseCardStr(data.holeCards[0]),parseCardStr(data.holeCards[1])];
+    }
+    if(data.communityCards&&data.communityCards.length>0){
+      G.comm=[null,null,null,null,null];
+      for(var i=0;i<Math.min(data.communityCards.length,5);i++){
+        G.comm[i]=parseCardStr(data.communityCards[i]);
+      }
+    }
+    if(data.position)G.pos=data.position;
+    if(data.tableSize)G.tt=data.tableSize;
+    if(typeof uCards==='function')uCards();
+    if(typeof go==='function')go();
+    console.log('[onVoiceInput] 手牌已设置: '+(data.holeCards||[]).join(' ')+' raw='+(data.rawText||''));
+  }catch(e){console.log('[onVoiceInput] err:'+e.message);}
+}
 // 自动执行决策——在bridgeAdvice之后调用
 function autoExecuteDecision(r, isAutoMode) {
   if (!isAutoMode || !_autoExecEnabled) return false;
