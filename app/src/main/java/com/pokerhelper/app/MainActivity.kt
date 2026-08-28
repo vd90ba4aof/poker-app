@@ -60,19 +60,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // V2.9.171: BLE蓝牙权限请求（Android 12+必须，否则无法扫描/连接BLE设备）
-    private val blePermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        val allGranted = results.values.all { it }
-        if (!allGranted) {
-            val denied = results.filter { !it.value }.keys.joinToString(", ")
-            Log.w(TAG, "BLE permissions denied: $denied")
-            Toast.makeText(this, "蓝牙权限未授予，无法连接ESP32", Toast.LENGTH_LONG).show()
-        } else {
-            Log.i(TAG, "BLE permissions granted")
-        }
-    }
+    // V2.9.546: BLE已迁移到WiFi TCP，不再需要蓝牙权限
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,19 +74,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // V2.9.171: Android 12+必须请求BLE权限，否则无法扫描/连接蓝牙设备
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val blePermissions = mutableListOf<String>()
-                if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    blePermissions.add(Manifest.permission.BLUETOOTH_SCAN)
-                }
-                if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    blePermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-                }
-                if (blePermissions.isNotEmpty()) {
-                    blePermissionLauncher.launch(blePermissions.toTypedArray())
-                }
-            }
+            // V2.9.546: BLE已迁移到WiFi TCP，不再请求蓝牙权限
 
             prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             floatingPrefs = getSharedPreferences("poker_floating_prefs", MODE_PRIVATE)

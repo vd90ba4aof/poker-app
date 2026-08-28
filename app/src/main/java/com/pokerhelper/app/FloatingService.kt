@@ -156,7 +156,7 @@ class FloatingService : Service() {
     private var _shotClockRunnable: Runnable? = null
     // P0-fix #6: 截屏超时兜底——MediaProjection不回调时强制恢复
     private var _screenshotTimeoutRunnable: Runnable? = null
-    // P0-fix #3: BLE乐观确认——write后等待ESP32响应，超时后乐观确认成功
+    // V2.9.546: 保留变量仅用于cancelBleAckTimeout()安全清理（TCP同步ACK后不再schedule）
     private var _bleAckTimeoutRunnable: Runnable? = null
     // P0-fix #8: 截屏串行化门闩——防止自动/手动截屏并发覆盖回调
     private val _screenshotGate = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -217,20 +217,13 @@ class FloatingService : Service() {
         } catch (_: Exception) {}
     }
 
-    // V2.9.112: BLE ESP32连接
-    private var bleManager: Esp32BleManager? = null
+    // V2.9.546: WiFi TCP ESP32连接（替代BLE）
+    private var bleManager: Esp32TcpManager? = null
     private var tvBle: TextView? = null
-    // V2.9.173: BLE诊断信息独立显示区，不被tap结果覆盖
     private var tvBleStatus: TextView? = null
-    private var bleStatusPending = false  // V2.9.184: 用标志位替代字符串比较
-    private var bleErrorCount = 0  // V3.9: ESP32连续失败计数
-    // V1.0.35: BLE心跳状态指示 (0=未连接/红, 1=已连接心跳正常/绿, 2=已连接心跳超时/黄)
-    @Volatile private var _bleHeartbeatState = 0  // 0=disconnected, 1=connected-ok, 2=timeout
-    // V2.9.240: RSSI信号强度缓存
+    private var bleStatusPending = false
     private var _lastRssi = 0
-    // V2.9.505: BLE断连诊断跟踪
-    private var _bleConnectTime = 0L  // BLE连接建立时间戳
-    private var _bleLastHeartbeatTime = 0L  // 最后一次心跳时间戳
+    private var _bleConnectTime = 0L
 
     // V2.9.38: 隐身模式通知广播接收器
     private val notificationReceiver = object : BroadcastReceiver() {
@@ -345,44 +338,34 @@ class FloatingService : Service() {
         showFloatingWindow()
         showFloatingBall()
 
-        // V2.9.112: 初始化BLE管理器
-        bleManager = Esp32BleManager(this)
+        // V2.9.546: 初始化WiFi TCP管理器（替代BLE）
+        bleManager = Esp32TcpManager()
         setupBleCallbacks()
-        // v1.0.39-fix: 悬浮窗启动后自动连接BLE，不再依赖青云触发
-        handler.postDelayed({ try { bleManager?.startScan() } catch (e: Exception) { Log.w(TAG, "auto BLE scan on startup error", e) } }, 3000)
+        bleManager?.start()
     }
 
-    // V2.9.184: 服务重启后恢复关键组件——onStartCommand(START_STICKY)重启时onCreate不会被调用
-    // V2.9.240: 统一设置BLE回调（供onCreate和reinitializeComponents共用）
     private fun setupBleCallbacks() {
         bleManager?.onStatusChanged = { connected, message ->
             try { DiagnosticLogger.setBleConnected(connected) } catch (_: Exception) {}
             handler.post {
                 try {
-                    Log.d(TAG, "BLE onStatusChanged: connected=$connected, msg=$message")
+                    Log.i(TAG, "ESP32 TCP: connected=$connected, msg=$message")
                     tvBle?.text = if (connected) "🔗 ${_lastRssi}dBm" else "📡"
                     tvBle?.setTextColor(if (connected) {
-                        // V2.9.240: RSSI信号强度分档颜色
                         when {
-                            _lastRssi > -50 -> 0xFF4ade80.toInt()  // 绿色 >-50
-                            _lastRssi >= -70 -> 0xFFFFEB3B.toInt()  // 黄色 -50~-70
-                            else -> 0xFFFF5252.toInt()  // 红色 <-70
+                            _lastRssi > -50 -> 0xFF4ade80.toInt()
+                            _lastRssi >= -70 -> 0xFFFFEB3B.toInt()
+                            else -> 0xFFFF5252.toInt()
                         }
                     } else 0xFFBDBDBD.toInt())
-                    tvStatus?.text = "BLE: $message"
-                    // V2.9.173: 连接成功后自动发送status查询USB/HID状态
+                    tvStatus?.text = "ESP32: $message"
                     if (connected) {
-                        _bleHeartbeatState = 1  // V1.0.35: 已连接
-                        _bleConnectTime = System.currentTimeMillis()  // V2.9.505: 记录连接时间
-                        _bleLastHeartbeatTime = _bleConnectTime  // V2.9.505: 初始化心跳时间
-                        Log.i(TAG, "BLE 已连接，启动心跳监控")
+                        _bleConnectTime = System.currentTimeMillis()
                         updateBleIndicator()
-                        bleManager?.startHeartbeatMonitor()  // V1.0.35: 启动心跳监控
                         tvBleStatus?.text = "查询ESP32状态..."
                         tvBleStatus?.visibility = View.VISIBLE
-                        bleStatusPending = true  // V2.9.184
+                        bleStatusPending = true
                         handler.postDelayed({ bleManager?.sendStatus() }, 500)
-                        // V2.9.174: 5秒无响应超时
                         handler.postDelayed({
                             try {
                                 if (bleStatusPending) {
@@ -392,132 +375,81 @@ class FloatingService : Service() {
                             } catch (_: Exception) {}
                         }, 5500)
                     } else {
-                        // V2.9.505: 记录BLE断连诊断信息
-                        val connectDuration = if (_bleConnectTime > 0) "${(System.currentTimeMillis() - _bleConnectTime) / 1000}s" else "unknown"
-                        val sinceLastHeartbeat = if (_bleLastHeartbeatTime > 0) "${(System.currentTimeMillis() - _bleLastHeartbeatTime) / 1000}s" else "unknown"
-                        val lastRssiAtDisconnect = _lastRssi
-                        val diagMsg = "BLE断开: 连接持续=$connectDuration, 距上次心跳=$sinceLastHeartbeat, 断开时RSSI=${lastRssiAtDisconnect}dBm, msg=$message"
-                        Log.w(TAG, diagMsg)
-                        try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.COMMUNICATION, DiagnosticLogger.Severity.MEDIUM, "BLE断开连接", "连接持续=$connectDuration, 距上次心跳=$sinceLastHeartbeat, RSSI=${lastRssiAtDisconnect}dBm, msg=$message") } catch (_: Exception) {}
-
-                        _bleHeartbeatState = 0  // V1.0.35: 断开
                         _lastRssi = 0
-                        _bleConnectTime = 0L  // V2.9.505: 重置连接时间
-                        _bleLastHeartbeatTime = 0L  // V2.9.505: 重置心跳时间
-                        Log.i(TAG, "BLE 已断开，停止心跳监控")
+                        _bleConnectTime = 0L
                         updateBleIndicator()
-                        bleManager?.stopHeartbeatMonitor()  // V1.0.35: 停止心跳
-                        // P0-fix #8: BLE断连时FSM不回退——如果处于活跃状态，强制RESET到IDLE
+                        // V2.9.546: TCP断连不杀自动模式——ESP32会自动重连
+                        // FSM如果在EXECUTING状态，强制RESET避免卡死
                         val fsmState = pipelineFSM.getCurrentState()
                         if (fsmState != PipelineStateMachine.PipelineState.IDLE &&
                             fsmState != PipelineStateMachine.PipelineState.COOLDOWN &&
                             fsmState != PipelineStateMachine.PipelineState.ERROR_RECOVERY) {
-                            Log.w(TAG, "★ P0-fix#8: BLE断连时FSM在$fsmState，强制RESET→IDLE")
+                            Log.w(TAG, "★ TCP断连时FSM在$fsmState，强制RESET→IDLE")
                             cancelBleAckTimeout()
                             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
                         }
-                        if (autoCaptureEnabled) {
-                            // 断连后暂停自动模式，防止无效操作
-                            stopAutoCapture()
-                            updateAdviceNotification("❌ BLE断开", "自动模式已暂停")
-                        }
+                        updateAdviceNotification("⚠️ ESP32断开", "等待WiFi重连...")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "BLE onStatusChanged error", e)
+                    Log.e(TAG, "ESP32 TCP onStatusChanged error", e)
                 }
             }
         }
-        // V1.0.35: BLE心跳回调
-        bleManager?.onHeartbeat = { connected, heartbeatData ->
-            handler.post {
-                try {
-                    val prevState = _bleHeartbeatState
-                    if (connected) {
-                        _bleHeartbeatState = 1  // 收到心跳=正常(绿)
-                        _bleLastHeartbeatTime = System.currentTimeMillis()  // V2.9.505: 记录心跳时间
-                    } else {
-                        _bleHeartbeatState = 2  // 心跳超时(黄)
-                    }
-                    if (prevState != _bleHeartbeatState) {
-                        Log.i(TAG, "BLE心跳状态变化: $prevState→$_bleHeartbeatState (data=$heartbeatData)")
-                    } else {
-                        Log.d(TAG, "BLE心跳: state=$_bleHeartbeatState, data=$heartbeatData")
-                    }
-                    updateBleIndicator()
-                } catch (e: Exception) {
-                    Log.e(TAG, "BLE onHeartbeat error", e)
-                }
-            }
-        }
-        // V2.9.240: RSSI更新回调
+
         bleManager?.onRssiUpdate = { rssi ->
             handler.post {
                 try {
                     _lastRssi = rssi
-                    // 同步更新BLE图标颜色
                     tvBle?.text = "🔗 ${rssi}dBm"
                     tvBle?.setTextColor(when {
                         rssi > -50 -> 0xFF4ade80.toInt()
                         rssi >= -70 -> 0xFFFFEB3B.toInt()
                         else -> 0xFFFF5252.toInt()
                     })
-                    Log.d(TAG, "RSSI更新: ${rssi}dBm")
                 } catch (e: Exception) {
                     Log.w(TAG, "onRssiUpdate error", e)
                 }
             }
         }
+
         bleManager?.onCommandResult = { result ->
             handler.post {
                 try {
-                    Log.d(TAG, "BLE onCommandResult: result=${result.take(100)}")
-                    bleStatusPending = false  // V2.9.184: 收到响应，取消超时
-                    // P0-fix #3: ESP32响应到达→取消乐观超时，确认BLE执行成功
+                    Log.d(TAG, "ESP32 TCP result: ${result.take(200)}")
+                    bleStatusPending = false
                     if (result.startsWith("ok:")) {
-                        val currentAckTimeout = _bleAckTimeoutRunnable
-                        if (currentAckTimeout != null) {
+                        // 取消可能存在的乐观超时
+                        if (_bleAckTimeoutRunnable != null) {
                             cancelBleAckTimeout()
                             if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.EXECUTING) {
-                                Log.d(TAG, "★ P0-fix#3: ESP32 ACK收到→BLE_EXEC_OK")
+                                Log.d(TAG, "★ ESP32 ACK收到→BLE_EXEC_OK")
                                 pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
                                 handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
                             }
                         }
-                    }
-                    // V3.9: ESP32断线检测 — 点击静默失败保护
-                    if (result.startsWith("err:not_connected") || result.startsWith("err:no_tx")) {
-                        Log.e(TAG, "★ ESP32断线! 点击失败: $result — 尝试重连")
-                        bleErrorCount++
-                        _bleHeartbeatState = 0  // V1.0.35
-                        updateBleIndicator()
-                        updateAdviceNotification("⚠️ ESP32断线", "第${bleErrorCount}次失败，尝试重连...")
-                        updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER|REASON:ESP32断线")
-                        if (bleErrorCount >= 3) {
-                            Log.e(TAG, "★ ESP32连续${bleErrorCount}次失败，暂停自动执行")
-                            stopAutoCapture()
-                            updateAdviceNotification("❌ ESP32已断开", "自动模式已暂停，请检查硬件连接后重新启动")
-                            updateBallAdvice("COLOR:FOLD|SIGNAL:ERROR|REASON:ESP32断开")
-                        } else {
-                            // 尝试重连
-                            try { bleManager?.startScan() } catch (e: Exception) {
-                                Log.w(TAG, "重连失败", e)
-                            }
-                        }
-                        return@post
-                    } else if (result.startsWith("ok:") || result.startsWith("查询ESP32")) {
-                        bleErrorCount = 0  // 正常通信，重置错误计数
-                        // V2.9.176: 将逗号分隔的字段格式化为多行显示，便于查看
-                        val formattedResult = if (result.startsWith("ok:")) {
+                        // 格式化status显示
+                        if (result.startsWith("ok:ver") || result.startsWith("ok:selftest") ||
+                            result.startsWith("ok:rssi") || result.startsWith("ok:log")) {
                             val fields = result.removePrefix("ok:")
-                            "ESP32状态:\n" + fields.split(",").joinToString("\n") { "  $it" }
-                        } else "ESP32: $result"
-                        tvBleStatus?.text = formattedResult
-                        tvBleStatus?.visibility = View.VISIBLE
+                            tvBleStatus?.text = "ESP32状态:\n" + fields.split(",").joinToString("\n") { "  $it" }
+                            tvBleStatus?.visibility = View.VISIBLE
+                        }
+                    } else if (result.startsWith("err:")) {
+                        Log.w(TAG, "ESP32 error: $result")
+                        if (result.contains("not_connected") || result.contains("disconnected")) {
+                            // TCP断连，ESP32会自动重连，不杀自动模式
+                            updateAdviceNotification("⚠️ ESP32断开", "等待重连...")
+                        }
+                        tvStatus?.text = "ESP32: $result"
+                    } else if (result.startsWith("hb:")) {
+                        // 心跳，不显示
+                    } else if (result.startsWith("hello:")) {
+                        Log.i(TAG, "ESP32 hello: $result")
                     } else {
                         tvStatus?.text = "ESP32: $result"
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "BLE onCommandResult error", e)
+                    Log.e(TAG, "ESP32 onCommandResult error", e)
                 }
             }
         }
@@ -559,11 +491,10 @@ class FloatingService : Service() {
         // 重新初始化语音识别
         initSpeechRecognizer()
         
-        // 重新初始化BLE
-        bleManager = Esp32BleManager(this)
+        // V2.9.546: 重新初始化WiFi TCP
+        bleManager = Esp32TcpManager()
         setupBleCallbacks()
-        // v1.0.39-fix: 服务重启后也自动重连BLE
-        handler.postDelayed({ try { bleManager?.startScan() } catch (e: Exception) { Log.w(TAG, "auto BLE scan on reinit error", e) } }, 3000)
+        bleManager?.start()
 
         Log.i(TAG, "reinit: all components restored")
     }
@@ -590,8 +521,7 @@ class FloatingService : Service() {
         ballSignalHandler = null
         speechRecognizer?.destroy()
 
-        // V2.9.112: 断开BLE连接
-        try { bleManager?.stopHeartbeatMonitor() } catch (_: Exception) {}  // V1.0.35
+        // V2.9.546: 断开WiFi TCP连接
         bleManager?.disconnect()
         bleManager = null
         removeFloatingBall()
@@ -832,8 +762,8 @@ class FloatingService : Service() {
             }
         }
     }
-    private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; pipelineFSM.reset(); autoCaptureInterval=4000L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture(); try { bleManager?.startHeartbeatMonitor() } catch (_: Exception) {} }  // V1.0.35: 同步启动心跳 | V3.50: pipelineFSM.reset()替代isVisionInProgress=false
-    private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; _screenshotTimeoutRunnable?.let{handler.removeCallbacks(it)}; _screenshotTimeoutRunnable=null; _bleAckTimeoutRunnable?.let{handler.removeCallbacks(it)}; _bleAckTimeoutRunnable=null; _screenshotGate.set(false); handStartTime=0; pipelineFSM.reset(); executeJs("if(typeof disableAutoExec==='function')disableAutoExec()"); try { bleManager?.stopHeartbeatMonitor() } catch (_: Exception) {} }  // V1.0.35: 同步停止心跳 | V3.50: pipelineFSM.reset()替代isVisionInProgress=false | P0-fix: 清理新增定时器
+    private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; pipelineFSM.reset(); autoCaptureInterval=4000L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture() }
+    private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; _screenshotTimeoutRunnable?.let{handler.removeCallbacks(it)}; _screenshotTimeoutRunnable=null; _bleAckTimeoutRunnable?.let{handler.removeCallbacks(it)}; _bleAckTimeoutRunnable=null; _screenshotGate.set(false); handStartTime=0; pipelineFSM.reset(); executeJs("if(typeof disableAutoExec==='function')disableAutoExec()") }
     private fun scheduleNextAutoCapture() {
         if(!autoCaptureEnabled)return; autoCaptureRunnable?.let{handler.removeCallbacks(it)}
         val r=Runnable{if(!autoCaptureEnabled)return@Runnable;if(pipelineFSM.isPipelineActive()){scheduleNextAutoCapture();return@Runnable};val pm=getSystemService(Context.POWER_SERVICE)as PowerManager;if(!pm.isScreenOn){scheduleNextAutoCapture();return@Runnable};autoCaptureTrigger()}
@@ -908,18 +838,7 @@ class FloatingService : Service() {
         } catch (_: Exception) {}
     }
     fun onAutoCaptureVisionDone(success:Boolean){val state=pipelineFSM.getCurrentState();when(state){PipelineStateMachine.PipelineState.ERROR_RECOVERY->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)};PipelineStateMachine.PipelineState.STRATEGY_COMPUTING->{};PipelineStateMachine.PipelineState.EXECUTING->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)};else->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)}};if(success)autoConsecutiveErrors=0 else{autoConsecutiveErrors++;checkAutoErrors()};if(success)executeJs("if(typeof FrameDiffEngine!=='undefined')FrameDiffEngine.onAutoFrameDone()");scheduleNextAutoCapture()}  // V3.50: state-aware FSM (Bug#2)
-    // P0-fix #3: BLE乐观确认——sendTap后不立即判定成功，等待ESP32响应或2s超时
-    private fun startBleExecWithAckTimeout() {
-        _bleAckTimeoutRunnable?.let { handler.removeCallbacks(it) }
-        _bleAckTimeoutRunnable = Runnable {
-            if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.EXECUTING) {
-                Log.w(TAG, "★ P0-fix#3: BLE ACK超时2s，乐观确认成功")
-                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
-                handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
-            }
-        }
-        handler.postDelayed(_bleAckTimeoutRunnable!!, 2000)
-    }
+    // V2.9.546: BLE乐观确认已移除——sendTap()同步等ACK，不再需要2s超时
     private fun cancelBleAckTimeout() {
         _bleAckTimeoutRunnable?.let { handler.removeCallbacks(it) }
         _bleAckTimeoutRunnable = null
@@ -936,9 +855,14 @@ class FloatingService : Service() {
         try {
             // V2.9.503: BLE连接检查——未连接时记录警告并跳过，避免无效tap
             if (bleManager?.isConnected != true) {
-                Log.w(TAG, "★ executeAutoTap跳过: BLE未连接 (action=$action)")
-                try { DiagnosticLogger.logEsp32Tap("autoTap_${action}_SKIPPED", 0, 0, action, "BLE_NOT_CONNECTED") } catch (_: Exception) {}
-                try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.COMMUNICATION, DiagnosticLogger.Severity.MEDIUM, "BLE未连接，${action}自动点击跳过", "bleConnected=false") } catch (_: Exception) {}
+                Log.w(TAG, "★ executeAutoTap跳过: ESP32未连接 (action=$action)")
+                try { DiagnosticLogger.logEsp32Tap("autoTap_${action}_SKIPPED", 0, 0, action, "NOT_CONNECTED") } catch (_: Exception) {}
+                try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.COMMUNICATION, DiagnosticLogger.Severity.MEDIUM, "ESP32未连接，${action}自动点击跳过", "connected=false") } catch (_: Exception) {}
+                // V2.9.546: 不能只return——FSM会卡在EXECUTING导致下一帧被挡
+                // RESET回IDLE，等ESP32重连后下一帧继续
+                cancelBleAckTimeout()
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+                if (autoCaptureEnabled) scheduleNextAutoCapture()
                 return
             }
             // V2.9.207: Shot Clock保护——检查从手牌开始分析是否超时
@@ -966,7 +890,6 @@ class FloatingService : Service() {
                     Log.d(TAG, "★ 纳什push: 点全押按钮")
                     executeAutoTapFallback("allin")
                     handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
-                    startBleExecWithAckTimeout()  // P0-fix#3: 等ESP32 ACK或2s乐观超时
                     return
                 }
                 // V3.16: 翻前raise → 直接点GG加注按钮(默认2.5x min-raise)
@@ -982,7 +905,6 @@ class FloatingService : Service() {
                         executeAutoTapFallback("allin")
                     }
                     handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
-                    startBleExecWithAckTimeout()  // P0-fix#3: 等ESP32 ACK或2s乐观超时
                     return
                 }
                 if (sizing > 0 && pot > 0 && GameModeConfig.currentPlatform == GamePlatform.GGPOKER) {
@@ -1008,7 +930,6 @@ class FloatingService : Service() {
                                 executeAutoTapFallback("raise")
                                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                                 Log.d(TAG, "★ GG bet confirm: raise button tapped")
-                                startBleExecWithAckTimeout()  // P0-fix#3: 等ESP32 ACK或2s乐观超时
                             } catch (e: Exception) {
                                 Log.e(TAG, "GG bet confirm error", e)
                             }
@@ -1023,8 +944,6 @@ class FloatingService : Service() {
             if (btns.isEmpty()) {
                 Log.w(TAG, "autoTap: 无按钮坐标，回退固定位置")
                 executeAutoTapFallback(action)
-                Log.d(TAG, "executeAutoTap 结果: fallback (no buttons)")
-                startBleExecWithAckTimeout()  // P0-fix#3: 等ESP32 ACK或2s乐观超时
                 return
             }
             
@@ -1046,28 +965,30 @@ class FloatingService : Service() {
             if (targetBtn != null) {
                 val x = (targetBtn.xPct * screenWidth).toInt().coerceIn(0, screenWidth - 1)
                 val y = (targetBtn.yPct * screenHeight).toInt().coerceIn(0, screenHeight - 1)
-                Log.i(TAG, "★ executeAutoTap: $action → ($x, $y) btn=${targetBtn.text} duration=50ms")
-                // V2.9.503: 记录ESP32点击执行到DiagnosticLogger
-                val tapStart = System.currentTimeMillis()
+                Log.i(TAG, "★ executeAutoTap: $action → ($x, $y) btn=${targetBtn.text}")
                 try {
                     DiagnosticLogger.logEsp32Tap(action, x, y, targetBtn.text.toString(), "sendTap")
                 } catch (_: Exception) {}
-                bleManager?.sendTap(x, y, 50)
-                // V2.9.503: pipeline耗时记录
+                // V2.9.546: 同步等ACK，确认ESP32真的执行了HID点击
+                val tapOk = bleManager?.sendTap(x, y, 50) ?: false
                 _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
                 _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
                 _pipelineLastAction = action
                 try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, action) } catch (_: Exception) {}
-                Log.i(TAG, "★ Pipeline: 截图→ESP32点击=${_pipelineEsp32TapTimeMs}ms (JS决策=${_pipelineJsDecisionTimeMs}ms)")
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
-                Log.d(TAG, "executeAutoTap 结果: 成功 (坐标点击)")
-                startBleExecWithAckTimeout()  // P0-fix#3: 等ESP32 ACK或2s乐观超时
+                if (tapOk) {
+                    Log.i(TAG, "★ Pipeline: 截图→ESP32点击=${_pipelineEsp32TapTimeMs}ms ACK=OK")
+                    cancelBleAckTimeout()
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                    handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+                } else {
+                    Log.w(TAG, "★ Pipeline: ESP32 tap ACK失败")
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
+                    if (autoCaptureEnabled) scheduleNextAutoCapture()
+                }
             } else {
                 Log.w(TAG, "executeAutoTap: 未匹配按钮 $action, 回退固定位置")
                 executeAutoTapFallback(action)
-                handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
-                Log.d(TAG, "executeAutoTap 结果: fallback (button not matched)")
-                startBleExecWithAckTimeout()  // P0-fix#3: 等ESP32 ACK或2s乐观超时
             }
         } catch (e: Exception) {
             Log.e(TAG, "executeAutoTap error", e)
@@ -1096,7 +1017,7 @@ class FloatingService : Service() {
             val boxY = ((inputBox[1] + inputBox[3]) / 2 * sy).toInt()
             Log.d(TAG, "executeExactBet step1: 点击输入框 ($boxX, $boxY)")
             try { DiagnosticLogger.logEsp32Tap("exactBet_inputBox", boxX, boxY, "inputBox", "executeExactBet") } catch (_: Exception) {}
-            bleManager?.sendTap(boxX, boxY, 50)
+            bleManager?.sendTapFast(boxX, boxY, 50)
             Thread.sleep(250) // 等键盘弹出
             // 1.5 V2.9.370: 先清空已有输入 (消费 numpadBackspace)
             try {
@@ -1106,7 +1027,7 @@ class FloatingService : Service() {
                     val bsY = ((backspace[1] + backspace[3]) / 2 * sy).toInt()
                     try { DiagnosticLogger.logEsp32Tap("exactBet_backspace", bsX, bsY, "backspace", "executeExactBet") } catch (_: Exception) {}
                     repeat(10) { // 最多清10位，覆盖绝大多数下注金额
-                        bleManager?.sendTap(bsX, bsY, 40)
+                        bleManager?.sendTapFast(bsX, bsY, 40)
                         Thread.sleep(40)
                     }
                     Log.d(TAG, "精确输入: 已清空旧值 (backspace x10)")
@@ -1123,7 +1044,7 @@ class FloatingService : Service() {
                 val ky = (key[1] * sy).toInt()
                 Log.d(TAG, "executeExactBet step2[$idx]: 点击 '$ch' ($kx, $ky)")
                 try { DiagnosticLogger.logEsp32Tap("exactBet_digit_$ch", kx, ky, ch.toString(), "executeExactBet") } catch (_: Exception) {}
-                bleManager?.sendTap(kx, ky, 40)
+                bleManager?.sendTapFast(kx, ky, 40)
                 Thread.sleep(60) // 按键间隔
             }
             // 3. 点击确认
@@ -1131,7 +1052,7 @@ class FloatingService : Service() {
             val cy = ((confirm[1] + confirm[3]) / 2 * sy).toInt()
             Log.d(TAG, "executeExactBet step3: 点击确认 ($cx, $cy)")
             try { DiagnosticLogger.logEsp32Tap("exactBet_confirm", cx, cy, "confirm", "executeExactBet") } catch (_: Exception) {}
-            bleManager?.sendTap(cx, cy, 50)
+            bleManager?.sendTapFast(cx, cy, 50)
             // V2.9.503: pipeline耗时记录（精确下注路径）
             _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
             _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
@@ -1147,11 +1068,15 @@ class FloatingService : Service() {
 
     // V2.9.200: 回退动态坐标——使用GameModeConfig根据当前平台自动适配
     private fun executeAutoTapFallback(action: String) {
-        // V2.9.503: BLE连接检查——未连接时跳过tap，避免无效操作
+        // V2.9.546: ESP32 TCP连接检查
         if (bleManager?.isConnected != true) {
-            Log.w(TAG, "★ autoTapFallback跳过: BLE未连接 (action=$action)")
-            try { DiagnosticLogger.logEsp32Tap("fallback_${action}_SKIPPED", 0, 0, action, "BLE_NOT_CONNECTED") } catch (_: Exception) {}
-            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.COMMUNICATION, DiagnosticLogger.Severity.MEDIUM, "BLE未连接，${action}操作跳过", "bleConnected=false") } catch (_: Exception) {}
+            Log.w(TAG, "★ autoTapFallback跳过: ESP32未连接 (action=$action)")
+            try { DiagnosticLogger.logEsp32Tap("fallback_${action}_SKIPPED", 0, 0, action, "NOT_CONNECTED") } catch (_: Exception) {}
+            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.COMMUNICATION, DiagnosticLogger.Severity.MEDIUM, "ESP32未连接，${action}操作跳过", "connected=false") } catch (_: Exception) {}
+            // V2.9.546: RESET FSM + scheduleNext，不能卡住
+            cancelBleAckTimeout()
+            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+            if (autoCaptureEnabled) scheduleNextAutoCapture()
             return
         }
         // V3.42: 优先用截图真实尺寸（Android 15显示缩放时截图≠屏幕尺寸）
@@ -1161,13 +1086,22 @@ class FloatingService : Service() {
         val (x, y) = GameModeConfig.getAutoTapFallback(action, sw, sh)
         Log.d(TAG, "★ autoTapFallback: $action → ($x, $y) [screen=${sw}x${sh} platform=${GameModeConfig.currentPlatform}]")
         try { DiagnosticLogger.logEsp32Tap("fallback_$action", x, y, action, "autoTapFallback") } catch (_: Exception) {}
-        bleManager?.sendTap(x, y, 50)
-        // V2.9.503: pipeline耗时记录（fallback路径）
+        // V2.9.546: 同步等ACK
+        val tapOk = bleManager?.sendTap(x, y, 50) ?: false
         _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
         _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
         _pipelineLastAction = "fallback_$action"
         try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, _pipelineLastAction) } catch (_: Exception) {}
         handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+        // V2.9.546: 根据ACK结果驱动FSM
+        if (tapOk) {
+            cancelBleAckTimeout()
+            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+            handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+        } else {
+            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
+            if (autoCaptureEnabled) scheduleNextAutoCapture()
+        }
         // V3.10: 弃牌后重置识别状态 — 防止同rank不同suit的手牌锁定残留
         if (action == "fold") {
             try {
@@ -1431,20 +1365,19 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             setBackgroundColor(0x00000000)
             setOnClickListener {
                 if (bleManager?.isConnected == true) {
-                    // 已连接，点击发送tap测试
-                    try { DiagnosticLogger.logEsp32Tap("manual_test", 540, 1172, "testTap", "bleIconClick") } catch (_: Exception) {}
-                    bleManager?.sendTap(540, 1172, 50)
+                    try { DiagnosticLogger.logEsp32Tap("manual_test", 540, 1172, "testTap", "tcpIconClick") } catch (_: Exception) {}
+                    Thread {
+                        val ok = bleManager?.sendTap(540, 1172, 50) ?: false
+                        handler.post { tvStatus?.text = if (ok) "tap测试成功" else "tap测试失败" }
+                    }.start()
                     tvStatus?.text = "发送tap测试..."
                 } else {
-                    // 未连接，开始扫描连接
-                    bleManager?.startScan()
-                    tvStatus?.text = "扫描ESP32..."
+                    tvStatus?.text = "等待ESP32 WiFi连接..."
                 }
             }
             setOnLongClickListener {
-                // 长按断开连接
                 bleManager?.disconnect()
-                tvStatus?.text = "BLE已断开"
+                tvStatus?.text = "ESP32已断开"
                 true
             }
         }
@@ -2247,17 +2180,13 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             val shape = ball.background as? GradientDrawable ?: return
             val density = resources.displayMetrics.density
             val stroke = (3 * density).toInt()
-            val color = when (_bleHeartbeatState) {
-                1 -> 0xFF4ade80.toInt()  // 绿 - 已连接+心跳正常
-                2 -> 0xFFFFEB3B.toInt()  // 黄 - 已连接+心跳超时
+            // V2.9.546: 基于TCP连接状态
+            val color = when {
+                bleManager?.isConnected == true && _lastRssi > -70 -> 0xFF4ade80.toInt()  // 绿
+                bleManager?.isConnected == true -> 0xFFFFEB3B.toInt()  // 黄
                 else -> 0xFFFF5252.toInt()  // 红 - 未连接
             }
             shape.setStroke(stroke, color)
-            // V2.9.240: 悬浮球显示RSSI信号强度（已连接时）
-            if (_bleHeartbeatState != 0 && _lastRssi != 0) {
-                val rssiText = "$_lastRssi dBm"
-                Log.d(TAG, "updateBleIndicator: state=$_bleHeartbeatState, rssi=$rssiText")
-            }
         } catch (e: Exception) {
             Log.w(TAG, "updateBleIndicator error", e)
         }
@@ -2356,12 +2285,12 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                     startBallSignal(0)
                 }
             }
-            // V1.0.35: 覆盖边框颜色为BLE心跳状态色（绿=正常/黄=超时/红=断开）
+            // V2.9.546: 覆盖边框颜色为TCP连接状态色
             try {
-                val bleColor = when (_bleHeartbeatState) {
-                    1 -> 0xFF4ade80.toInt()  // 绿
-                    2 -> 0xFFFFEB3B.toInt()  // 黄
-                    else -> 0xFFFF5252.toInt()  // 红
+                val bleColor = when {
+                    bleManager?.isConnected == true && _lastRssi > -70 -> 0xFF4ade80.toInt()
+                    bleManager?.isConnected == true -> 0xFFFFEB3B.toInt()
+                    else -> 0xFFFF5252.toInt()
                 }
                 shape.setStroke(stroke, bleColor)
             } catch (_: Exception) {}
@@ -2705,14 +2634,19 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                                 try {
                                     val (ix, iy) = GameModeConfig.getInsuranceDeclinePosition(screenWidth, screenHeight)
                                     try { DiagnosticLogger.logEsp32Tap("insurance_decline", ix, iy, "insuranceBtn", "autoCapture") } catch (_: Exception) {}
-                                    bleManager?.sendTap(ix, iy, 50)
-                                    // P0-fix #3: 使用BLE乐观确认替代立即判定成功
-                                    startBleExecWithAckTimeout()
-                                    // V2.9.503: pipeline耗时记录（insurance路径）
+                                    val tapOk = bleManager?.sendTap(ix, iy, 50) ?: false
                                     _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
                                     _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
                                     _pipelineLastAction = "insurance_decline"
                                     try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, _pipelineLastAction) } catch (_: Exception) {}
+                                    if (tapOk) {
+                                        cancelBleAckTimeout()
+                                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                                        handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+                                    } else {
+                                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
+                                        if (autoCaptureEnabled) scheduleNextAutoCapture()
+                                    }
                                     updateAdviceNotification("Insurance", "已自动拒绝")
                                     updateBallAdvice("COLOR:CHECK|SIGNAL:INSURANCE|REASON:自动拒绝")
                                     Log.d(TAG, "★ Insurance declined at ($ix, $iy)")
