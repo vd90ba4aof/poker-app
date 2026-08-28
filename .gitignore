@@ -57,3 +57,4 @@ verification_output/
 *.bak
 *.bak_*
 app/src/main/assets/poker_helper_v*_backup.html
+firmware-v2.0.0/

@@ -156,7 +156,7 @@ class FloatingService : Service() {
     private var _shotClockRunnable: Runnable? = null
     // P0-fix #6: 截屏超时兜底——MediaProjection不回调时强制恢复
     private var _screenshotTimeoutRunnable: Runnable? = null
-    // V2.9.546: 保留变量仅用于cancelBleAckTimeout()安全清理（TCP同步ACK后不再schedule）
+    // V2.9.547: 保留变量仅用于cancelBleAckTimeout()安全清理（USB同步ACK后不再schedule）
     private var _bleAckTimeoutRunnable: Runnable? = null
     // P0-fix #8: 截屏串行化门闩——防止自动/手动截屏并发覆盖回调
     private val _screenshotGate = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -217,8 +217,8 @@ class FloatingService : Service() {
         } catch (_: Exception) {}
     }
 
-    // V2.9.546: WiFi TCP ESP32连接（替代BLE）
-    private var bleManager: Esp32TcpManager? = null
+    // V2.9.547: USB直连ESP32（替代WiFi TCP/BLE）
+    private var bleManager: Esp32UsbManager? = null
     private var tvBle: TextView? = null
     private var tvBleStatus: TextView? = null
     private var bleStatusPending = false
@@ -338,8 +338,8 @@ class FloatingService : Service() {
         showFloatingWindow()
         showFloatingBall()
 
-        // V2.9.546: 初始化WiFi TCP管理器（替代BLE）
-        bleManager = Esp32TcpManager()
+        // V2.9.547: 初始化USB直连管理器（替代WiFi TCP）
+        bleManager = Esp32UsbManager(this)
         setupBleCallbacks()
         bleManager?.start()
     }
@@ -349,7 +349,7 @@ class FloatingService : Service() {
             try { DiagnosticLogger.setBleConnected(connected) } catch (_: Exception) {}
             handler.post {
                 try {
-                    Log.i(TAG, "ESP32 TCP: connected=$connected, msg=$message")
+                    Log.i(TAG, "ESP32 USB: connected=$connected, msg=$message")
                     tvBle?.text = if (connected) "🔗 ${_lastRssi}dBm" else "📡"
                     tvBle?.setTextColor(if (connected) {
                         when {
@@ -378,20 +378,20 @@ class FloatingService : Service() {
                         _lastRssi = 0
                         _bleConnectTime = 0L
                         updateBleIndicator()
-                        // V2.9.546: TCP断连不杀自动模式——ESP32会自动重连
+                        // V2.9.547: USB断连不杀自动模式，等USB重新插入
                         // FSM如果在EXECUTING状态，强制RESET避免卡死
                         val fsmState = pipelineFSM.getCurrentState()
                         if (fsmState != PipelineStateMachine.PipelineState.IDLE &&
                             fsmState != PipelineStateMachine.PipelineState.COOLDOWN &&
                             fsmState != PipelineStateMachine.PipelineState.ERROR_RECOVERY) {
-                            Log.w(TAG, "★ TCP断连时FSM在$fsmState，强制RESET→IDLE")
+                            Log.w(TAG, "★ USB断连时FSM在$fsmState，强制RESET→IDLE")
                             cancelBleAckTimeout()
                             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
                         }
-                        updateAdviceNotification("⚠️ ESP32断开", "等待WiFi重连...")
+                        updateAdviceNotification("⚠️ ESP32断开", "请检查USB连接...")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "ESP32 TCP onStatusChanged error", e)
+                    Log.e(TAG, "ESP32 USB onStatusChanged error", e)
                 }
             }
         }
@@ -415,7 +415,7 @@ class FloatingService : Service() {
         bleManager?.onCommandResult = { result ->
             handler.post {
                 try {
-                    Log.d(TAG, "ESP32 TCP result: ${result.take(200)}")
+                    Log.d(TAG, "ESP32 USB result: ${result.take(200)}")
                     bleStatusPending = false
                     if (result.startsWith("ok:")) {
                         // 取消可能存在的乐观超时
@@ -437,7 +437,7 @@ class FloatingService : Service() {
                     } else if (result.startsWith("err:")) {
                         Log.w(TAG, "ESP32 error: $result")
                         if (result.contains("not_connected") || result.contains("disconnected")) {
-                            // TCP断连，ESP32会自动重连，不杀自动模式
+                            // USB已断开，请重新插入，不杀自动模式
                             updateAdviceNotification("⚠️ ESP32断开", "等待重连...")
                         }
                         tvStatus?.text = "ESP32: $result"
@@ -491,8 +491,8 @@ class FloatingService : Service() {
         // 重新初始化语音识别
         initSpeechRecognizer()
         
-        // V2.9.546: 重新初始化WiFi TCP
-        bleManager = Esp32TcpManager()
+        // V2.9.547: 重新初始化USB直连
+        bleManager = Esp32UsbManager(this)
         setupBleCallbacks()
         bleManager?.start()
 
@@ -521,8 +521,8 @@ class FloatingService : Service() {
         ballSignalHandler = null
         speechRecognizer?.destroy()
 
-        // V2.9.546: 断开WiFi TCP连接
-        bleManager?.disconnect()
+        // V2.9.547: 停止USB管理器（注销广播+释放连接）
+        bleManager?.stop()
         bleManager = null
         removeFloatingBall()
         try {
@@ -1068,7 +1068,7 @@ class FloatingService : Service() {
 
     // V2.9.200: 回退动态坐标——使用GameModeConfig根据当前平台自动适配
     private fun executeAutoTapFallback(action: String) {
-        // V2.9.546: ESP32 TCP连接检查
+        // V2.9.546: ESP32 USB连接检查
         if (bleManager?.isConnected != true) {
             Log.w(TAG, "★ autoTapFallback跳过: ESP32未连接 (action=$action)")
             try { DiagnosticLogger.logEsp32Tap("fallback_${action}_SKIPPED", 0, 0, action, "NOT_CONNECTED") } catch (_: Exception) {}
@@ -1365,14 +1365,14 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             setBackgroundColor(0x00000000)
             setOnClickListener {
                 if (bleManager?.isConnected == true) {
-                    try { DiagnosticLogger.logEsp32Tap("manual_test", 540, 1172, "testTap", "tcpIconClick") } catch (_: Exception) {}
+                    try { DiagnosticLogger.logEsp32Tap("manual_test", 540, 1172, "testTap", "usbIconClick") } catch (_: Exception) {}
                     Thread {
                         val ok = bleManager?.sendTap(540, 1172, 50) ?: false
                         handler.post { tvStatus?.text = if (ok) "tap测试成功" else "tap测试失败" }
                     }.start()
                     tvStatus?.text = "发送tap测试..."
                 } else {
-                    tvStatus?.text = "等待ESP32 WiFi连接..."
+                    tvStatus?.text = "等待ESP32 USB连接..."
                 }
             }
             setOnLongClickListener {
@@ -2180,7 +2180,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             val shape = ball.background as? GradientDrawable ?: return
             val density = resources.displayMetrics.density
             val stroke = (3 * density).toInt()
-            // V2.9.546: 基于TCP连接状态
+            // V2.9.546: 基于USB连接状态
             val color = when {
                 bleManager?.isConnected == true && _lastRssi > -70 -> 0xFF4ade80.toInt()  // 绿
                 bleManager?.isConnected == true -> 0xFFFFEB3B.toInt()  // 黄
@@ -2285,7 +2285,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                     startBallSignal(0)
                 }
             }
-            // V2.9.546: 覆盖边框颜色为TCP连接状态色
+            // V2.9.546: 覆盖边框颜色为USB连接状态色
             try {
                 val bleColor = when {
                     bleManager?.isConnected == true && _lastRssi > -70 -> 0xFF4ade80.toInt()
