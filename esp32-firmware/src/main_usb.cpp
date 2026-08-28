@@ -175,6 +175,60 @@ public:
         return sizeof(touch_report_descriptor);
     }
 
+    // 主机通过SET_REPORT(Feature)发送命令：report_id=2
+    // 运行在TinyUSB回调上下文（main task），可以安全使用critical section
+    void _onSetFeature(uint8_t report_id, const uint8_t* buffer, uint16_t len) override {
+        if (report_id != REPORT_ID_COMMAND || len == 0) return;
+
+        // framework传入的buffer是否带report ID前缀：
+        // arduino-esp32直接透传TinyUSB的buffer，首字节为report ID
+        const uint8_t* data = buffer;
+        uint16_t dataLen = len;
+        if (buffer[0] == REPORT_ID_COMMAND) {
+            data = buffer + 1;
+            dataLen = len - 1;
+        }
+        if (dataLen == 0) return;
+
+        portENTER_CRITICAL(&cmdMux);
+        size_t copyLen = dataLen < CMD_BUF_SIZE ? dataLen : CMD_BUF_SIZE;
+        memcpy((void*)cmdBuf, data, copyLen);
+        ((uint8_t*)cmdBuf)[copyLen] = 0;
+        cmdPending = true;
+        respReady = false;
+        memset((void*)respBuf, 0, CMD_BUF_SIZE + 1);
+        portEXIT_CRITICAL(&cmdMux);
+
+        Serial.printf("[USB-CMD] RX(%d): %s\n", (int)copyLen, (const char*)cmdBuf);
+    }
+
+    // 主机通过GET_REPORT(Feature)读取ACK：report_id=2
+    // 返回写入buffer的字节数；framework会把返回值作为control transfer响应长度
+    uint16_t _onGetFeature(uint8_t report_id, uint8_t* buffer, uint16_t reqlen) override {
+        if (report_id != REPORT_ID_COMMAND) return 0;
+
+        uint16_t respLen = 0;
+        portENTER_CRITICAL(&cmdMux);
+        if (respReady) {
+            // respBuf[1]已由setResponse写入状态字节('O'成功/'E'错误), [2:]=响应文本
+            respLen = (uint16_t)(strlen((const char*)respBuf + 2) + 2);
+            if (respLen > reqlen) respLen = reqlen;
+            buffer[0] = REPORT_ID_COMMAND;
+            buffer[1] = respBuf[1];
+            memcpy(buffer + 2, (const void*)(respBuf + 2), respLen - 2);
+        } else if (cmdPending) {
+            buffer[0] = REPORT_ID_COMMAND;
+            buffer[1] = 'P';  // processing
+            respLen = 2;
+        } else {
+            buffer[0] = REPORT_ID_COMMAND;
+            buffer[1] = 'I';  // idle
+            respLen = 2;
+        }
+        portEXIT_CRITICAL(&cmdMux);
+        return respLen;
+    }
+
     bool sendTouchReport(const TouchReport& r) {
         yield();
         if (!hid.ready()) { _failCount++; _lastFailReason = "not_ready"; return false; }
@@ -218,75 +272,10 @@ public:
 static USBHIDTouchpad touchpad;
 
 // ============================================================================
-// TinyUSB HID 回调（接收SET_REPORT / 响应GET_REPORT）
-// arduino-esp32的USBHID后端把tud_hid_*_report_cb定义为weak，
-// 我们在sketch里override它们。
-// ============================================================================
-extern "C" {
-
-// 主机通过SET_REPORT(Feature/Output)发送命令：report_id=2
-void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
-                           hid_report_type_t report_type,
-                           const uint8_t* buffer, uint16_t size) {
-    if (report_id != REPORT_ID_COMMAND) return;
-    // 接受Feature和Output类型（主机→设备的命令通道）
-    if (report_type != HID_REPORT_TYPE_OUTPUT &&
-        report_type != HID_REPORT_TYPE_FEATURE) {
-        return;
-    }
-
-    // buffer第0字节是report ID（取决于TinyUSB配置）
-    // 为安全起见，自动跳过开头的report ID
-    const uint8_t* data = buffer;
-    uint16_t dataLen = size;
-    if (size > 0 && buffer[0] == REPORT_ID_COMMAND) {
-        data = buffer + 1;
-        dataLen = size - 1;
-    }
-
-    if (dataLen == 0) return;
-
-    portENTER_CRITICAL(&cmdMux);
-    size_t copyLen = dataLen < CMD_BUF_SIZE ? dataLen : CMD_BUF_SIZE;
-    memcpy((void*)cmdBuf, data, copyLen);
-    ((uint8_t*)cmdBuf)[copyLen] = 0;
-    cmdPending = true;
-    respReady = false;
-    memset((void*)respBuf, 0, CMD_BUF_SIZE + 1);
-    portEXIT_CRITICAL(&cmdMux);
-
-    Serial.printf("[USB-CMD] RX(%d): %s\n", copyLen, (const char*)cmdBuf);
-}
-
-// 主机通过GET_REPORT(Feature)读取ACK：report_id=2
-uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
-                               hid_report_type_t report_type,
-                               uint8_t* buffer, uint16_t reqlen) {
-    if (report_id != REPORT_ID_COMMAND) return 0;
-
-    uint16_t respLen = 0;
-    portENTER_CRITICAL(&cmdMux);
-    if (respReady) {
-        respBuf[1] = 'O';  // [0]=report ID, [1]=status
-        respLen = strlen((const char*)respBuf + 1) + 2;
-        if (respLen > reqlen) respLen = reqlen;
-        buffer[0] = REPORT_ID_COMMAND;
-        memcpy(buffer + 1, (const void*)(respBuf + 1), respLen - 1);
-    } else if (cmdPending) {
-        buffer[0] = REPORT_ID_COMMAND;
-        buffer[1] = 'P';  // processing
-        respLen = 2;
-    } else {
-        buffer[0] = REPORT_ID_COMMAND;
-        buffer[1] = 'I';  // idle
-        respLen = 2;
-    }
-    portEXIT_CRITICAL(&cmdMux);
-    return respLen;
-}
-
-} // extern "C"
-
+// Feature Report 命令通道说明
+// arduino-esp32 2.0.x的USBHID后端把tud_hid_set_report_cb/tud_hid_get_report_cb
+// 定义为强符号，内部按report ID路由到USBHIDDevice的_onSetFeature/_onGetFeature。
+// 因此命令通道的收发在USBHIDTouchpad类内override这两个虚函数实现，见上方。
 // ============================================================================
 // 命令处理（在main loop中执行，不阻塞USB ISR）
 // ============================================================================
@@ -298,8 +287,9 @@ static void setResponse(const char* fmt, ...) {
     portENTER_CRITICAL(&cmdMux);
     size_t len = strlen(buf);
     if (len >= CMD_BUF_SIZE - 1) len = CMD_BUF_SIZE - 2;
-    // respBuf[0]保留给report ID，由get_report_cb填充
-    respBuf[1] = '?';  // 临时状态
+    // respBuf布局: [0]保留给report ID(由_onGetFeature填充), [1]=状态字节, [2:]=响应文本
+    // 状态字节: 文本以"err:"开头→'E'，否则→'O'
+    respBuf[1] = (buf[0]=='e' && buf[1]=='r' && buf[2]=='r' && buf[3]==':') ? 'E' : 'O';
     memcpy((void*)(respBuf + 2), buf, len);
     ((uint8_t*)respBuf)[2 + len] = 0;
     respReady = true;
