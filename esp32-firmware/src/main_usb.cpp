@@ -224,15 +224,15 @@ static USBHIDTouchpad touchpad;
 // ============================================================================
 extern "C" {
 
-// 主机通过SET_REPORT(Output)发送命令：report_id=2
-uint16_t tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
-                               hid_report_type_t report_type,
-                               const uint8_t* buffer, uint16_t size) {
-    if (report_id != REPORT_ID_COMMAND) return size;  // 忽略其他report
-    // 只处理Output类型（主机→设备的命令通道）
+// 主机通过SET_REPORT(Feature/Output)发送命令：report_id=2
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
+                           hid_report_type_t report_type,
+                           const uint8_t* buffer, uint16_t size) {
+    if (report_id != REPORT_ID_COMMAND) return;
+    // 接受Feature和Output类型（主机→设备的命令通道）
     if (report_type != HID_REPORT_TYPE_OUTPUT &&
         report_type != HID_REPORT_TYPE_FEATURE) {
-        return size;
+        return;
     }
 
     // buffer第0字节是report ID（取决于TinyUSB配置）
@@ -244,7 +244,7 @@ uint16_t tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
         dataLen = size - 1;
     }
 
-    if (dataLen == 0) return size;
+    if (dataLen == 0) return;
 
     portENTER_CRITICAL(&cmdMux);
     size_t copyLen = dataLen < CMD_BUF_SIZE ? dataLen : CMD_BUF_SIZE;
@@ -256,7 +256,6 @@ uint16_t tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     portEXIT_CRITICAL(&cmdMux);
 
     Serial.printf("[USB-CMD] RX(%d): %s\n", copyLen, (const char*)cmdBuf);
-    return size;
 }
 
 // 主机通过GET_REPORT(Feature)读取ACK：report_id=2

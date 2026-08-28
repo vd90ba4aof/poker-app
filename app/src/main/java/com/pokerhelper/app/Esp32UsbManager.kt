@@ -43,6 +43,9 @@ class Esp32UsbManager(private val context: Context) {
         // wValue = (reportType << 8) | reportId
         private const val WVALUE_SET = (HID_REPORT_TYPE_FEATURE shl 8) or REPORT_ID_COMMAND
         private const val WVALUE_GET = WVALUE_SET
+        // bmRequestType: Class + Interface + IN/OUT
+        private const val BREQ_SET = 0x21  // OUT | CLASS | INTERFACE = 0x00|0x20|0x01
+        private const val BREQ_GET = 0xA1  // IN  | CLASS | INTERFACE = 0x80|0x20|0x01
     }
 
     @Volatile var isConnected = false
@@ -254,7 +257,7 @@ class Esp32UsbManager(private val context: Context) {
         val buf = ByteArray(REPORT_SIZE)
         while (System.currentTimeMillis() < deadline) {
             val r = sendControlTransfer(
-                UsbConstants.USB_DIR_IN or UsbConstants.USB_TYPE_CLASS or UsbConstants.USB_RECIP_INTERFACE,
+                BREQ_GET,
                 HID_REQ_GET_REPORT,
                 WVALUE_GET,
                 interfaceIndex,
@@ -293,7 +296,7 @@ class Esp32UsbManager(private val context: Context) {
         System.arraycopy(bytes, 0, report, 1, copyLen)
 
         val r = sendControlTransfer(
-            UsbConstants.USB_TYPE_CLASS or UsbConstants.USB_RECIP_INTERFACE,
+            BREQ_SET,
             HID_REQ_SET_REPORT,
             WVALUE_SET,
             interfaceIndex,
