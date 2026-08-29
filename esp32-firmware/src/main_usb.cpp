@@ -30,10 +30,11 @@
 #include "soc/rtc_cntl_reg.h"
 #include "esp_random.h"
 // v3.0.2: USB PHY强制切换——见setup()中forcePhyToOtg()
+// 只用寄存器宏（soc/*_reg.h 纯整数BIT宏，C++安全）；不 include hal/usb_phy_ll.h，
+// 因为该头在 IDF4.4/arduino-2.0.8 下含 volatile 结构体拷贝，C++(.cpp)编译必炸。
 #include "driver/usb_serial_jtag.h"
-#include "hal/usb_phy_ll.h"
-#include "soc/usb_wrap_struct.h"
-#include "soc/usb_serial_jtag_struct.h"
+#include "soc/usb_wrap_reg.h"
+#include "soc/usb_serial_jtag_reg.h"
 
 // ============================================================================
 // 常量
@@ -374,32 +375,38 @@ static void processCommand(const char* cmd) {
 //   (RTCCNTL.usb_conf.sw_usb_phy_sel) 选择：0=JTAG，1=OTG。
 // PIO 预编译 sdkconfig 默认开启 secondary console
 //   (CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y)，开机时 JTAG 驱动调用
-//   usb_phy_ll_int_jtag_enable() 把 mux 钉到 JTAG 侧 (sw_usb_phy_sel=0)。
-//   而 TinyUSB 0.13 的 dcd_init / arduino-esp32 2.0.8 的 tinyusb_driver_install
-//   全程不切换该 mux（默认 PHY 已在 OTG 侧）。
-// 结果：TinyUSB 操作 OTG 寄存器但 PHY 在 JTAG 侧，主机只枚举到 JTAG(303a:1001)，
-//   HID(303a:8266) 永远起不来 → usb=NO hid=NO fails=0，App 报"USB写失败"。
-// 修复：USB.begin() 前，卸载 JTAG 驱动、断开 JTAG pad，再用 IDF 官方 HAL
-//   usb_phy_ll_int_otg_enable() 把 mux 硬切到 OTG 并使能 OTG pad。
+//   usb_phy_ll_int_jtag_enable() 占用 PHY，并把 CONF0 的 usb_pad_enable/dp_pullup
+//   置位——JTAG 控制器始终占着 D+/D- pad 和 D+ 上拉。
+// 虽然 tinyusb_driver_install() 内部 usb_hal_init()→usb_ll_int_phy_enable() 会把
+//   RTC mux 切到 OTG，但 JTAG 驱动未卸载、pad 仍被其占用，OTG 信号到不了物理层，
+//   主机只枚举到 JTAG(303a:1001)，HID(303a:8266) 永远起不来
+//   → usb=NO hid=NO fails=0，App 报"USB写失败"。
+// 修复：USB.begin() 前，卸载 JTAG 驱动、清掉 JTAG 的 pad/上拉占用，再把 mux 硬切
+//   OTG 并使能 OTG pad。寄存器操作与官方 usb_ll_int_phy_enable() 逐位等价
+//   (IDF v4.4 components/hal/esp32s3/include/hal/usb_ll.h)。
 // ============================================================================
 static void forcePhyToOtg() {
     // 1. 卸载 secondary console 注册的 USB-Serial-JTAG VFS 驱动（释放中断/控制器）
     //    未安装时返回 ESP_ERR_INVALID_STATE，忽略即可
     usb_serial_jtag_driver_uninstall();
 
-    // 2. 断开 JTAG 控制器对 USB pad(D+/D-) 的占用并关闭其 D+ 上拉，避免与 OTG 冲突
-    USB_SERIAL_JTAG.conf0.usb_pad_enable = 0;
-    USB_SERIAL_JTAG.conf0.dp_pullup = 0;
+    // 2. 断开 JTAG 控制器对 USB pad(D+/D-) 的占用并关闭其 D+ 上拉（bit14/bit9），
+    //    让出物理层，避免与 OTG 冲突
+    CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG,
+                        USB_SERIAL_JTAG_USB_PAD_ENABLE | USB_SERIAL_JTAG_DP_PULLUP);
 
-    // 3. 用 IDF 官方 HAL 把共享 PHY 硬切到 USB-OTG（internal PHY）：
-    //    USB_WRAP.otg_conf.phy_sel=0(内部PHY)；
-    //    RTCCNTL.usb_conf.sw_hw_usb_phy_sel=1, sw_usb_phy_sel=1 → PHY 接 OTG
-    usb_phy_ll_int_otg_enable(&USB_WRAP);
+    // 3. 把共享 PHY 硬切到 USB-OTG（internal PHY）：
+    //    USB_WRAP.otg_conf.pad_enable=1(OTG pad使能, bit18)、phy_sel=0(内部PHY, bit2)；
+    //    RTC sw_hw_usb_phy_sel=1(bit20) + sw_usb_phy_sel=1(bit19) → PHY 接 OTG；
+    //    RTC usb_pad_enable=1(bit12) 打开 RTC 侧 USB pad 通路（与 OTG pad_enable 双保险）
+    SET_PERI_REG_MASK(USB_WRAP_OTG_CONF_REG,
+                      USB_WRAP_USB_PAD_ENABLE);
+    CLEAR_PERI_REG_MASK(USB_WRAP_OTG_CONF_REG, USB_WRAP_PHY_SEL);
+    SET_PERI_REG_MASK(RTC_CNTL_USB_CONF_REG,
+                      RTC_CNTL_SW_HW_USB_PHY_SEL | RTC_CNTL_SW_USB_PHY_SEL |
+                      RTC_CNTL_USB_PAD_ENABLE);
 
-    // 4. 使能 OTG 内部 PHY 到 D+/D- pad 的连接
-    usb_phy_ll_usb_wrap_pad_enable(&USB_WRAP, true);
-
-    // 5. 稍等让总线稳定（主机检测到一次断开/重连）
+    // 4. 稍等让总线稳定（主机检测到一次断开/重连）
     delay(50);
 }
 
