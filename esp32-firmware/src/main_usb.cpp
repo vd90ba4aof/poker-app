@@ -29,11 +29,17 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "esp_random.h"
+// v3.0.2: USB PHY强制切换——见setup()中forcePhyToOtg()
+#include "driver/usb_serial_jtag.h"
+#include "hal/usb_phy_ll.h"
+#include "soc/usb_wrap_struct.h"
+#include "soc/usb_serial_jtag_struct.h"
 
 // ============================================================================
 // 常量
 // ============================================================================
-#define FW_VERSION "v3.0.1"  // v3.0.1: 修复GET_REPORT响应字节布局（TinyUSB已填report ID前缀，固件不重复写）
+#define FW_VERSION "v3.0.2"  // v3.0.2: 修复USB PHY被JTAG抢占导致TinyUSB HID无法枚举（卸载JTAG驱动+硬切PHY到OTG）
+                            // v3.0.1: 修复GET_REPORT响应字节布局（TinyUSB已填report ID前缀，固件不重复写）
 
 #define SCREEN_WIDTH  1080
 #define SCREEN_HEIGHT 2344
@@ -362,10 +368,47 @@ static void processCommand(const char* cmd) {
 }
 
 // ============================================================================
+// v3.0.2: USB PHY 强制切换到 OTG
+// ----------------------------------------------------------------------------
+// 根因：ESP32-S3 的 USB-Serial-JTAG 与 USB-OTG 共用一颗内部 PHY，由 RTC mux
+//   (RTCCNTL.usb_conf.sw_usb_phy_sel) 选择：0=JTAG，1=OTG。
+// PIO 预编译 sdkconfig 默认开启 secondary console
+//   (CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y)，开机时 JTAG 驱动调用
+//   usb_phy_ll_int_jtag_enable() 把 mux 钉到 JTAG 侧 (sw_usb_phy_sel=0)。
+//   而 TinyUSB 0.13 的 dcd_init / arduino-esp32 2.0.8 的 tinyusb_driver_install
+//   全程不切换该 mux（默认 PHY 已在 OTG 侧）。
+// 结果：TinyUSB 操作 OTG 寄存器但 PHY 在 JTAG 侧，主机只枚举到 JTAG(303a:1001)，
+//   HID(303a:8266) 永远起不来 → usb=NO hid=NO fails=0，App 报"USB写失败"。
+// 修复：USB.begin() 前，卸载 JTAG 驱动、断开 JTAG pad，再用 IDF 官方 HAL
+//   usb_phy_ll_int_otg_enable() 把 mux 硬切到 OTG 并使能 OTG pad。
+// ============================================================================
+static void forcePhyToOtg() {
+    // 1. 卸载 secondary console 注册的 USB-Serial-JTAG VFS 驱动（释放中断/控制器）
+    //    未安装时返回 ESP_ERR_INVALID_STATE，忽略即可
+    usb_serial_jtag_driver_uninstall();
+
+    // 2. 断开 JTAG 控制器对 USB pad(D+/D-) 的占用并关闭其 D+ 上拉，避免与 OTG 冲突
+    USB_SERIAL_JTAG.conf0.usb_pad_enable = 0;
+    USB_SERIAL_JTAG.conf0.dp_pullup = 0;
+
+    // 3. 用 IDF 官方 HAL 把共享 PHY 硬切到 USB-OTG（internal PHY）：
+    //    USB_WRAP.otg_conf.phy_sel=0(内部PHY)；
+    //    RTCCNTL.usb_conf.sw_hw_usb_phy_sel=1, sw_usb_phy_sel=1 → PHY 接 OTG
+    usb_phy_ll_int_otg_enable(&USB_WRAP);
+
+    // 4. 使能 OTG 内部 PHY 到 D+/D- pad 的连接
+    usb_phy_ll_usb_wrap_pad_enable(&USB_WRAP, true);
+
+    // 5. 稍等让总线稳定（主机检测到一次断开/重连）
+    delay(50);
+}
+
+// ============================================================================
 // setup / loop
 // ============================================================================
 void setup() {
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+    forcePhyToOtg();  // v3.0.2: 必须在 USB.begin() 之前把共享 PHY 切到 OTG
     Serial.begin(115200);
     delay(1500);
 
@@ -389,7 +432,7 @@ void setup() {
     USB.manufacturerName("QingYun");
     USB.productName("QingYun Touch Screen");
     USB.serialNumber("QY000001");
-    USB.firmwareVersion(0x0300);
+    USB.firmwareVersion(0x0302);  // v3.0.2 bcdDevice=0x0302
     touchpad.begin();
     USB.begin();
 
