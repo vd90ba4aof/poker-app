@@ -1380,7 +1380,14 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                     }.start()
                     tvStatus?.text = "发送tap测试..."
                 } else {
-                    tvStatus?.text = "等待ESP32 USB连接..."
+                    // V2.9.549: 点📡主动重新枚举，并把总线上所有USB设备显示出来
+                    val mgr = bleManager as? Esp32UsbManager
+                    val bus = try { mgr?.enumerateBus() } catch (_: Exception) { null }
+                    tvStatus?.text = if (bus.isNullOrEmpty() || bus == "总线上无USB设备")
+                        "等待ESP32 USB连接...（总线上无USB设备：检查OTG线/供电/插紧）"
+                    else
+                        "未找到ESP32，USB总线设备:\n$bus"
+                    mgr?.startScan()
                 }
             }
             setOnLongClickListener {

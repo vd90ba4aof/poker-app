@@ -109,7 +109,11 @@ class Esp32UsbManager(private val context: Context) {
     // 兼容旧接口
     fun startHeartbeatMonitor() {}
     fun stopHeartbeatMonitor() {}
-    fun startScan() { tryConnect() }
+    fun startScan() {
+        if (isConnected) return
+        tryConnect()
+        // 枚举不到时tryConnect已notifyStatus带总线信息
+    }
     fun disconnect() { closeConnection(); notifyStatus(false, "已断开") }
 
     private fun registerReceiver() {
@@ -139,11 +143,32 @@ class Esp32UsbManager(private val context: Context) {
         return dev.vendorId == ESP32_VID && dev.productId == ESP32_PID
     }
 
+    /**
+     * V2.9.549: 枚举USB总线上所有设备，用于诊断ESP32是否枚举/枚举成什么
+     * 返回形如 "303a:8266(iface=1,cls=3)" 或 "无USB设备"
+     */
+    fun enumerateBus(): String {
+        val list = usbManager.deviceList.values
+        if (list.isEmpty()) return "总线上无USB设备"
+        return list.joinToString(" | ") { d ->
+            val cls = if (d.interfaceCount > 0) d.getInterface(0).interfaceClass else -1
+            "%04x:%04x(iface=%d,cls=%d,name=%s)".format(
+                d.vendorId, d.productId, d.interfaceCount, cls,
+                d.deviceName.substringAfterLast('/'))
+        }
+    }
+
     private fun tryConnect() {
         if (isConnected) return
         val dev = usbManager.deviceList.values.firstOrNull { isOurDevice(it) }
         if (dev == null) {
-            notifyStatus(false, "未检测到ESP32")
+            // V2.9.549: 把总线上所有USB设备列出来，区分：
+            //  303a:1001 = ESP32卡在下载模式(bootloader)，需重新刷固件/复位
+            //  其他VID:PID = 固件枚举异常
+            //  无设备 = USB线/OTG/供电问题
+            val bus = enumerateBus()
+            Log.w(TAG, "ESP32 not found. USB bus: $bus")
+            notifyStatus(false, "未检测到ESP32 [$bus]")
             return
         }
         if (!usbManager.hasPermission(dev)) {
