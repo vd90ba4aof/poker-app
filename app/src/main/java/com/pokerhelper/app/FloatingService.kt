@@ -436,11 +436,19 @@ class FloatingService : Service() {
                         }
                     } else if (result.startsWith("err:")) {
                         Log.w(TAG, "ESP32 error: $result")
-                        if (result.contains("not_connected") || result.contains("disconnected")) {
+                        if (result.contains("old_firmware")) {
+                            // ESP32里是旧固件（v2.x WiFi版），Feature通道不存在，必须刷v3.0.0
+                            bleStatusPending = false
+                            tvBleStatus?.text = "⚠️ ESP32固件过旧\n请用ESPFlasher刷入v3.0.0固件\n(当前${result.substringAfter("(").substringBefore(")")})"
+                            tvBleStatus?.visibility = View.VISIBLE
+                            tvStatus?.text = "ESP32固件需升级到v3.0.0"
+                        } else if (result.contains("not_connected") || result.contains("disconnected")) {
                             // USB已断开，请重新插入，不杀自动模式
                             updateAdviceNotification("⚠️ ESP32断开", "等待重连...")
+                            tvStatus?.text = "ESP32: $result"
+                        } else {
+                            tvStatus?.text = "ESP32: $result"
                         }
-                        tvStatus?.text = "ESP32: $result"
                     } else if (result.startsWith("hb:")) {
                         // 心跳，不显示
                     } else if (result.startsWith("hello:")) {

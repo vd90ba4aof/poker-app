@@ -185,6 +185,12 @@ class Esp32UsbManager(private val context: Context) {
                 return
             }
 
+            // 读设备描述符里的bcdDevice字段（固件版本）：v3.0.0=0x0300, v2.0.0=0x0200
+            val bcd = readFirmwareBcd(conn)
+            val fwVer = String.format("%x.%02x", (bcd shr 8) and 0xFF, bcd and 0xFF)
+            val isV3 = bcd >= 0x0300
+            Log.i(TAG, "★ ESP32 bcdDevice=0x${String.format("%04x", bcd)} (firmware v$fwVer)")
+
             // claimInterface但不抢占内核驱动（force=false），触摸屏继续工作
             // 我们只用Endpoint 0 control transfer
             val claimed = conn.claimInterface(iface, false)
@@ -195,9 +201,16 @@ class Esp32UsbManager(private val context: Context) {
             interfaceIndex = ifIdx
             isConnected = true
 
-            val ver = conn.rawDescriptors?.let { "descriptor_ok" } ?: "no_descriptor"
-            Log.i(TAG, "★ ESP32 USB connected: ${dev.deviceName}, iface=$ifIdx, $ver")
-            notifyStatus(true, "USB已连接")
+            val ifaceInfo = "iface=$ifIdx(cls=${iface.interfaceClass},eps=${iface.endpointCount}),claim=$claimed"
+            Log.i(TAG, "★ ESP32 USB connected: ${dev.deviceName}, $ifaceInfo, fw=v$fwVer")
+
+            // 固件版本直接决定Feature命令通道是否可用：v3.0.0才有Report ID 2
+            if (!isV3) {
+                notifyStatus(true, "USB已连接，但固件是v$fwVer，需刷v3.0.0固件")
+                onCommandResult?.invoke("err:old_firmware(v$fwVer),need_v3.0.0")
+                return
+            }
+            notifyStatus(true, "USB已连接(fw v$fwVer,claim=$claimed)")
 
             // 发送status命令验证命令通道（在后台线程，避免ANR）
             Thread {
@@ -255,6 +268,9 @@ class Esp32UsbManager(private val context: Context) {
 
         val deadline = System.currentTimeMillis() + timeoutMs
         val buf = ByteArray(REPORT_SIZE)
+        var diagCount = 0
+        var stallCount = 0
+        var shortCount = 0
         while (System.currentTimeMillis() < deadline) {
             val r = sendControlTransfer(
                 BREQ_GET,
@@ -265,6 +281,15 @@ class Esp32UsbManager(private val context: Context) {
                 REPORT_SIZE,
                 100
             )
+            // 前3次轮询记录原始返回，用于区分 STALL(-1)/短包(0-1)/正常(>=2)
+            if (diagCount < 3) {
+                val hex = if (r >= 2) (0 until minOf(r, 8)).joinToString(" ") {
+                    "%02x".format(buf[it].toInt() and 0xFF)
+                } else ""
+                Log.i(TAG, "GET_REPORT poll#$diagCount r=$r head=[$hex]")
+                diagCount++
+            }
+            if (r < 0) stallCount++ else if (r < 2) shortCount++
             if (r >= 2) {
                 val status = buf[1].toInt().toChar()
                 if (status == 'O' || status == 'E') {
@@ -279,6 +304,7 @@ class Esp32UsbManager(private val context: Context) {
             }
             try { Thread.sleep(POLL_INTERVAL_MS) } catch (_: InterruptedException) { return null }
         }
+        Log.w(TAG, "ACK timeout: stall=$stallCount short=$shortCount polled=$diagCount cmd=${cmd.take(20)}")
         return null
     }
 
@@ -323,6 +349,32 @@ class Esp32UsbManager(private val context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "controlTransfer error: ${e.message}")
             -1
+        }
+    }
+
+    /**
+     * 读取USB设备描述符的bcdDevice字段（固件版本）。
+     * GET_DESCRIPTOR(DEVICE) 是标准请求，不需要claim接口，v2/v3固件都会正常响应。
+     * 返回BCD编码的版本，如 0x0300 = v3.00；读不到返回0。
+     */
+    private fun readFirmwareBcd(conn: UsbDeviceConnection): Int {
+        return try {
+            val desc = ByteArray(18)
+            // bmRequestType=0x80(IN|STANDARD|DEVICE), bRequest=0x06(GET_DESCRIPTOR),
+            // wValue=0x0100(device descriptor,index0), wIndex=0
+            val r = conn.controlTransfer(0x80, 0x06, 0x0100, 0, desc, 18, 500)
+            if (r >= 18 && desc[0] == 0x12.toByte() && desc[1] == 0x01.toByte()) {
+                // bcdDevice在offset 12-13（小端）
+                val bcd = (desc[12].toInt() and 0xFF) or ((desc[13].toInt() and 0xFF) shl 8)
+                Log.i(TAG, "GET_DESCRIPTOR(device) r=$r bcdDevice=0x${String.format("%04x", bcd)}")
+                bcd
+            } else {
+                Log.w(TAG, "GET_DESCRIPTOR(device) r=$r, head=${desc[0]},${desc[1]}")
+                0
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "readFirmwareBcd error: ${e.message}")
+            0
         }
     }
 
