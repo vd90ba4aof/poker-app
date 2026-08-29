@@ -14,38 +14,41 @@ import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * ESP32 USB直连通信管理器 (v3.0.0)
+ * ESP32 USB直连通信管理器 (v3.1.0)
  *
- * ESP32-S3通过USB OTG线连手机，表现为单接口USB HID触摸屏。
- * 命令走HID Feature Report（Endpoint 0 control transfer）：
- *   - SET_REPORT(Feature, ID=2) 发送命令文本
- *   - GET_REPORT(Feature, ID=2) 读取ACK响应
+ * ESP32-S3通过USB OTG线连手机，枚举为双接口复合设备：
+ *   - 接口0：HID触摸屏（class=3），系统 usbhid 自动绑定（屏幕有鼠标光标），
+ *     App 不 claim、不使用
+ *   - 接口1：Vendor专用接口（class=0xFF），App 命令通道走 Endpoint 0
+ *     VENDOR 类型控制传输：
+ *       OUT bmRequestType=0x41 bRequest=0x01 wIndex=vendor接口 → 发命令文本
+ *       IN  bmRequestType=0xC1 bRequest=0x02 wIndex=vendor接口 → 读ACK
+ *     响应载荷：[0]=状态字节('O'/'E'/'P'/'I')，[1:]=响应文本
  *
- * 不需要root，不需要claimInterface抢占触摸屏。
- * 控制传输走Endpoint 0，与触摸屏输入通道（Interrupt IN）完全正交。
+ * 为什么不用HID Feature Report（v3.0.0~v3.0.2已证伪）：
+ *   SET_REPORT/GET_REPORT 是 class类型+接口定向，Linux内核 devio.c
+ *   check_ctrlrecip 强制 checkintf——接口必须被本进程claim；class=3 的HID
+ *   接口被内核 usbhid 占用，无root抢不到（-EBUSY），controlTransfer 直接-1。
+ *   vendor类型请求在 devio.c 中明文豁免（不查claim/驱动/配置态），免root。
  */
 class Esp32UsbManager(private val context: Context) {
     companion object {
         private const val TAG = "Esp32Usb"
         private const val ESP32_VID = 0x303A
         private const val ESP32_PID = 0x8266
-        private const val REPORT_ID_COMMAND = 2
-        private const val REPORT_SIZE = 64       // 1字节report ID + 63字节数据
+        private const val REPORT_SIZE = 64       // vendor EP0控制传输载荷
+        private const val MIN_FW_BCD = 0x0310   // v3.1.0起才有vendor命令通道
         private const val ACK_TIMEOUT_MS = 3000L
         private const val FAST_TIMEOUT_MS = 200L
         private const val POLL_INTERVAL_MS = 5L
         private const val ACTION_USB_PERMISSION = "com.pokerhelper.app.USB_PERMISSION"
 
-        // HID class request constants
-        private const val HID_REQ_SET_REPORT = 0x09
-        private const val HID_REQ_GET_REPORT = 0x01
-        private const val HID_REPORT_TYPE_FEATURE = 0x03
-        // wValue = (reportType << 8) | reportId
-        private const val WVALUE_SET = (HID_REPORT_TYPE_FEATURE shl 8) or REPORT_ID_COMMAND
-        private const val WVALUE_GET = WVALUE_SET
-        // bmRequestType: Class + Interface + IN/OUT
-        private const val BREQ_SET = 0x21  // OUT | CLASS | INTERFACE = 0x00|0x20|0x01
-        private const val BREQ_GET = 0xA1  // IN  | CLASS | INTERFACE = 0x80|0x20|0x01
+        // v3.1.0 Vendor控制传输常量
+        private const val VENDOR_REQ_WRITE_CMD = 0x01
+        private const val VENDOR_REQ_READ_ACK = 0x02
+        // bmRequestType: VENDOR(0x40) | INTERFACE(0x01) | IN/OUT(0x80)
+        private const val BREQ_SET = 0x41  // OUT | VENDOR | INTERFACE
+        private const val BREQ_GET = 0xC1  // IN  | VENDOR | INTERFACE
     }
 
     @Volatile var isConnected = false
@@ -189,17 +192,26 @@ class Esp32UsbManager(private val context: Context) {
 
     private fun openDevice(dev: UsbDevice) {
         try {
-            // 查找HID接口
+            // 查找Vendor专用接口（v3.1.0固件：if1, class=0xFF）。
+            // vendor接口无内核驱动绑定，claimInterface必成功（不需要root）。
             var iface: android.hardware.usb.UsbInterface? = null
             var ifIdx = -1
             for (i in 0 until dev.interfaceCount) {
                 val itf = dev.getInterface(i)
-                if (itf.interfaceClass == UsbConstants.USB_CLASS_HID) {
+                if (itf.interfaceClass == UsbConstants.USB_CLASS_VENDOR_SPEC) {
                     iface = itf; ifIdx = i; break
                 }
             }
             if (iface == null) {
-                // 退而求其次：用接口0（ESP32-S3只有一个接口）
+                // 旧固件兼容回退：HID接口（v3.0.x单接口设备；vendor通道不可用）
+                for (i in 0 until dev.interfaceCount) {
+                    val itf = dev.getInterface(i)
+                    if (itf.interfaceClass == UsbConstants.USB_CLASS_HID) {
+                        iface = itf; ifIdx = i; break
+                    }
+                }
+            }
+            if (iface == null) {
                 iface = dev.getInterface(0)
                 ifIdx = 0
             }
@@ -210,16 +222,16 @@ class Esp32UsbManager(private val context: Context) {
                 return
             }
 
-            // 读设备描述符里的bcdDevice字段（固件版本）：v3.0.0=0x0300, v2.0.0=0x0200
+            // 读设备描述符里的bcdDevice字段（固件版本）：v3.1.0=0x0310
             val bcd = readFirmwareBcd(conn)
             val fwVer = String.format("%x.%02x", (bcd shr 8) and 0xFF, bcd and 0xFF)
-            val isV3 = bcd >= 0x0300
+            val isV310 = bcd >= MIN_FW_BCD
             Log.i(TAG, "★ ESP32 bcdDevice=0x${String.format("%04x", bcd)} (firmware v$fwVer)")
 
-            // claimInterface但不抢占内核驱动（force=false），触摸屏继续工作
-            // 我们只用Endpoint 0 control transfer
+            // claim vendor接口（force=false即可：该接口无内核驱动占用）。
+            // vendor类型控制传输内核本就不查claim，claim主要为合法占用接口
             val claimed = conn.claimInterface(iface, false)
-            Log.i(TAG, "claimInterface($ifIdx, force=false)=$claimed")
+            Log.i(TAG, "claimInterface($ifIdx,cls=${iface.interfaceClass},force=false)=$claimed")
 
             connection = conn
             device = dev
@@ -229,10 +241,10 @@ class Esp32UsbManager(private val context: Context) {
             val ifaceInfo = "iface=$ifIdx(cls=${iface.interfaceClass},eps=${iface.endpointCount}),claim=$claimed"
             Log.i(TAG, "★ ESP32 USB connected: ${dev.deviceName}, $ifaceInfo, fw=v$fwVer")
 
-            // 固件版本直接决定Feature命令通道是否可用：v3.0.0才有Report ID 2
-            if (!isV3) {
-                notifyStatus(true, "USB已连接，但固件是v$fwVer，需刷v3.0.0固件")
-                onCommandResult?.invoke("err:old_firmware(v$fwVer),need_v3.0.0")
+            // 固件版本决定vendor命令通道是否可用：v3.1.0(bcd>=0x0310)才有
+            if (!isV310) {
+                notifyStatus(true, "USB已连接，但固件是v$fwVer，需刷v3.1.0固件")
+                onCommandResult?.invoke("err:old_firmware(v$fwVer),need_v3.1.0")
                 return
             }
             notifyStatus(true, "USB已连接(fw v$fwVer,claim=$claimed)")
@@ -297,32 +309,33 @@ class Esp32UsbManager(private val context: Context) {
         var stallCount = 0
         var shortCount = 0
         while (System.currentTimeMillis() < deadline) {
+            // vendor IN控制传输：0xC1, bRequest=0x02, wIndex=vendor接口号, wValue=0
             val r = sendControlTransfer(
                 BREQ_GET,
-                HID_REQ_GET_REPORT,
-                WVALUE_GET,
+                VENDOR_REQ_READ_ACK,
+                0,
                 interfaceIndex,
                 buf,
                 REPORT_SIZE,
                 100
             )
-            // 前3次轮询记录原始返回，用于区分 STALL(-1)/短包(0-1)/正常(>=2)
+            // 前3次轮询记录原始返回，用于区分 STALL(-1)/短包(0)/正常(>=1)
             if (diagCount < 3) {
-                val hex = if (r >= 2) (0 until minOf(r, 8)).joinToString(" ") {
+                val hex = if (r >= 1) (0 until minOf(r, 8)).joinToString(" ") {
                     "%02x".format(buf[it].toInt() and 0xFF)
                 } else ""
-                Log.i(TAG, "GET_REPORT poll#$diagCount r=$r head=[$hex]")
+                Log.i(TAG, "VENDOR_READ poll#$diagCount r=$r head=[$hex]")
                 diagCount++
             }
-            if (r < 0) stallCount++ else if (r < 2) shortCount++
-            if (r >= 2) {
-                val status = buf[1].toInt().toChar()
+            if (r < 0) stallCount++ else if (r < 1) shortCount++
+            if (r >= 1) {
+                // vendor响应布局：[0]=状态字节，[1:]=响应文本
+                val status = buf[0].toInt().toChar()
                 if (status == 'O' || status == 'E') {
-                    val end = minOf(r, REPORT_SIZE - 1)
-                    // 从buf[2]开始是响应文本
-                    var len = 2
+                    val end = minOf(r, REPORT_SIZE)
+                    var len = 1
                     while (len < end && buf[len].toInt() != 0) len++
-                    val resp = String(buf, 2, len - 2)
+                    val resp = String(buf, 1, len - 1)
                     Log.d(TAG, "ACK($status): $resp")
                     return if (status == 'E') "err:$resp" else resp
                 }
@@ -340,23 +353,26 @@ class Esp32UsbManager(private val context: Context) {
         val conn = connection ?: return false
         if (!isConnected) return false
 
-        val report = ByteArray(REPORT_SIZE)
-        report[0] = REPORT_ID_COMMAND.toByte()
+        // vendor OUT控制传输：载荷首字节起即命令文本（无report ID前缀），
+        // 发64字节定长（zero-fill），固件按wLength截断
+        val buf = ByteArray(REPORT_SIZE)
         val bytes = cmd.toByteArray()
-        val copyLen = minOf(bytes.size, REPORT_SIZE - 1)
-        System.arraycopy(bytes, 0, report, 1, copyLen)
+        val copyLen = minOf(bytes.size, REPORT_SIZE - 1)  // 留1字节给固件补null
+        System.arraycopy(bytes, 0, buf, 0, copyLen)
 
+        // bmRequestType=0x41(OUT|VENDOR|INTERFACE), bRequest=0x01,
+        // wValue=0, wIndex=vendor接口号；length必须等于wLength=64
         val r = sendControlTransfer(
             BREQ_SET,
-            HID_REQ_SET_REPORT,
-            WVALUE_SET,
+            VENDOR_REQ_WRITE_CMD,
+            0,
             interfaceIndex,
-            report,
+            buf,
             REPORT_SIZE,
             500
         )
         if (r < 0) {
-            Log.w(TAG, "SET_REPORT failed ($r) for cmd=$cmd")
+            Log.w(TAG, "VENDOR_WRITE failed ($r) for cmd=$cmd")
             handleDisconnect("USB写失败")
             return false
         }

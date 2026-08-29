@@ -1,23 +1,28 @@
 /**
  * ============================================================================
- * 青云扑克 ESP32-S3 - USB直连 + HID触摸屏 固件 (v3.0.0)
+ * 青云扑克 ESP32-S3 - USB直连 固件 (v3.1.0)
  * ============================================================================
  *
- * v3.0.0：WiFi TCP → USB直连（HID Feature Report）
- *   - 删除WiFi/TCP全部代码
- *   - 单接口HID触摸屏：Report ID 1 = 触摸输入，Report ID 2 = Feature命令通道
- *   - 命令通道走Endpoint 0 control transfer（SET_REPORT/GET_REPORT）
- *   - 不新增USB接口/端点，对外只表现为普通USB触摸屏
- *   - 手机端不需要root，用Android UsbManager API
+ * v3.1.0：双接口架构——HID触摸屏接口 + Vendor专用接口
+ *   - 接口0：HID触摸屏（class=3），Report ID 1=触摸输入。系统 usbhid 自动绑定，
+ *     鼠标光标/触摸功能照常，App 完全不去 claim 它
+ *   - 接口1：Vendor专用接口（class=0xFF，arduino USBVendor类，bulk端点不使用）
+ *     命令通道走 Endpoint 0 的 VENDOR 类型控制传输：
+ *       OUT bmRequestType=0x41 bRequest=0x01 wIndex=vendor接口号 → 写命令文本
+ *       IN  bmRequestType=0xC1 bRequest=0x02 wIndex=vendor接口号 → 读ACK响应
  *
- * 命令协议（Report ID = 0x02，64字节，首字节为report ID）：
- *   SET_REPORT: 手机→ESP32 发送命令文本（如 "tap:540,1172,50"）
- *   GET_REPORT: 手机←ESP32 读取ACK响应（如 "ok:tap(540,1172,50ms)"）
+ * 为什么v3.0.0~v3.0.2的HID Feature通道走不通（Linux/Android内核证据）：
+ *   SET_REPORT/GET_REPORT = class类型 + interface定向，Linux devio.c
+ *   check_ctrlrecip()(L909) 强制 checkintf()(L816)——接口必须被本进程claim；
+ *   而 class=3 的HID接口被内核 usbhid 驱动自动绑定，App无root抢不到claim
+ *   （claimintf 返回 -EBUSY）→ controlTransfer 返回-1 → "USB写失败"。
+ *   devio.c L866-867：bmRequestType 的 type=VENDOR(0x40) 时直接 return 0，
+ *   不查claim/不查驱动/不查配置态——vendor类型控制传输是内核明文豁免通道，
+ *   免root、不与usbhid冲突。这是USB厂商私有控制通道的标准做法。
  *
- *   状态字节约定（GET_REPORT第2字节）：
- *     'P' = processing，命令还在执行
- *     'O' = ok，响应就绪
- *     'E' = error，响应就绪
+ * Vendor响应字节契约（64字节）：
+ *   [0]=状态字节 'O'=ok / 'E'=error / 'P'=processing / 'I'=idle
+ *   [1:]=响应文本（如 "ok:tap(540,1172,50ms)"）
  *
  * 硬件：ESP32-S3 N16R8，USB OTG线连扑克手机
  * ============================================================================
@@ -26,6 +31,7 @@
 #include <Arduino.h>
 #include <USB.h>
 #include <USBHID.h>
+#include <USBVendor.h>   // v3.1.0: Vendor专用接口(class=0xFF)命令通道，需 -DCONFIG_TINYUSB_VENDOR_ENABLED=1
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "esp_random.h"
@@ -39,7 +45,8 @@
 // ============================================================================
 // 常量
 // ============================================================================
-#define FW_VERSION "v3.0.2"  // v3.0.2: 修复USB PHY被JTAG抢占导致TinyUSB HID无法枚举（卸载JTAG驱动+硬切PHY到OTG）
+#define FW_VERSION "v3.1.0"  // v3.1.0: 双接口架构，命令通道改走Vendor接口控制传输(0x41/0xC1)，绕开usbhid claim冲突
+                            // v3.0.2: PHY假说已证伪（usb_hal_init本就切PHY），该方向作废
                             // v3.0.1: 修复GET_REPORT响应字节布局（TinyUSB已填report ID前缀，固件不重复写）
 
 #define SCREEN_WIDTH  1080
@@ -48,10 +55,14 @@
 #define JITTER_PX  5
 #define JITTER_MS  20
 
-// Report IDs
+// Report IDs（HID触摸屏接口，Report ID 2 Feature仅保留描述符兼容，v3.1.0不再使用）
 #define REPORT_ID_TOUCH    0x01
 #define REPORT_ID_COMMAND  0x02
-#define CMD_BUF_SIZE       63   // 64字节report减去1字节report ID
+#define CMD_BUF_SIZE       63   // 64字节report减去1字节report ID；vendor载荷同为64字节
+
+// v3.1.0 Vendor控制传输协议（bmRequestType低5位recipient=INTERFACE=1）
+#define VENDOR_REQ_WRITE_CMD  0x01  // OUT(0x41): 主机写命令文本
+#define VENDOR_REQ_READ_ACK   0x02  // IN (0xC1): 主机读ACK响应
 
 // ============================================================================
 // HID 报告描述符
@@ -276,10 +287,107 @@ public:
 static USBHIDTouchpad touchpad;
 
 // ============================================================================
-// Feature Report 命令通道说明
+// v3.1.0: Vendor专用接口（class=0xFF）——命令通道
+// ----------------------------------------------------------------------------
+// 全局实例构造时即向TinyUSB注册vendor接口（USBVendor构造函数内
+// tinyusb_enable_interface(USB_INTERFACE_VENDOR,...)）。描述符装配顺序按枚举
+// USB_INTERFACE_HID(2) < USB_INTERFACE_VENDOR(3)（esp32-hal-tinyusb.h），
+// 故配置描述符里 HID=接口0、Vendor=接口1。
+//
+// 命令/响应数据通路（EP0 vendor类型控制传输，与HID Feature Report无关）：
+//   主机 OUT 0x41 bReq=0x01 wLength=N：SETUP阶段固件用tud_control_xfer挂接收
+//     buffer（见vendorControlCallback），DATA阶段主机命令文本落入该buffer，
+//     ACK阶段置cmdPending，main loop取出执行processCommand()；
+//   主机 IN  0xC1 bReq=0x02 wLength=64：SETUP阶段固件把[状态字节+文本]填入
+//     respVendor并sendResponse，DATA阶段主机收走。
+// vendor类型请求在TinyUSB usbd.c process_control_request()中不分recipient、
+// 不做类驱动查找，直接路由到tud_vendor_control_xfer_cb→本回调；主机侧Linux
+// devio.c对vendor类型同样不查claim/配置态——双向都是内核明文豁免。
+// ============================================================================
+static USBVendor vendorIface;
+
+// vendor通道专用接收/响应缓冲（64字节EP0载荷；与HID Feature通道的cmdBuf/respBuf分离，
+// 避免任何布局耦合）。响应布局即App收到的字节：[0]=状态字节, [1:]=文本
+static uint8_t vendorRxBuf[64];
+static uint8_t respVendor[64];
+static volatile uint16_t respVendorLen = 0;
+
+// vendor控制请求回调（运行在TinyUSB usbd任务上下文，与HID回调同上下文）
+// 返回false → TinyUSB对该请求STALL；返回true → 请求已接管
+bool vendorControlCallback(uint8_t rhport, uint8_t stage,
+                           arduino_usb_control_request_t const* request) {
+    // 只处理 vendor类型 + interface定向 的两个私有请求；其余一律STALL
+    if (request->bmRequestType != REQUEST_TYPE_VENDOR ||
+        request->bmRequestRecipient != REQUEST_RECIPIENT_INTERFACE) {
+        return false;
+    }
+
+    if (request->bmRequestDirection == REQUEST_DIRECTION_OUT &&
+        request->bRequest == VENDOR_REQ_WRITE_CMD) {
+        // 主机→固件 写命令
+        if (stage == REQUEST_STAGE_SETUP) {
+            // 挂上接收buffer，DATA阶段主机命令文本落入vendorRxBuf。
+            // OUT方向给tud_control_xfer传buffer=接收区（官方USBVendor example
+            // SET_LINE_CODING同款用法，sendResponse内部即tud_control_xfer）
+            (void)vendorIface.sendResponse(rhport, request, vendorRxBuf, sizeof(vendorRxBuf));
+            return true;
+        }
+        if (stage == REQUEST_STAGE_ACK) {
+            // 数据已接收完成。主机短包（wLength<64）时尾部为未初始化字节，
+            // App发送前已zero-fill，且这里强制截断+补null
+            uint16_t n = request->wLength;
+            if (n > CMD_BUF_SIZE) n = CMD_BUF_SIZE;  // 命令文本上限63字节
+            portENTER_CRITICAL(&cmdMux);
+            memcpy((void*)cmdBuf, vendorRxBuf, n);
+            ((uint8_t*)cmdBuf)[n] = 0;
+            cmdPending = true;
+            respReady = false;
+            memset((void*)respBuf, 0, CMD_BUF_SIZE + 1);
+            portEXIT_CRITICAL(&cmdMux);
+            Serial.printf("[VENDOR-CMD] RX(%u): %s\n", n, (const char*)cmdBuf);
+            return true;
+        }
+        return true;  // DATA阶段：传输进行中，无需动作
+    }
+
+    if (request->bmRequestDirection == REQUEST_DIRECTION_IN &&
+        request->bRequest == VENDOR_REQ_READ_ACK) {
+        // 固件→主机 读ACK
+        if (stage == REQUEST_STAGE_SETUP) {
+            portENTER_CRITICAL(&cmdMux);
+            if (respReady) {
+                // respBuf[1]=状态字节, respBuf[2:]=文本（setResponse布局，与HID时代一致）
+                size_t textLen = strlen((const char*)respBuf + 2);
+                if (textLen > sizeof(respVendor) - 1) textLen = sizeof(respVendor) - 1;
+                respVendor[0] = respBuf[1];
+                memcpy(respVendor + 1, (const void*)(respBuf + 2), textLen);
+                respVendorLen = (uint16_t)(1 + textLen);
+            } else if (cmdPending) {
+                respVendor[0] = 'P';  // processing
+                respVendorLen = 1;
+            } else {
+                respVendor[0] = 'I';  // idle
+                respVendorLen = 1;
+            }
+            portEXIT_CRITICAL(&cmdMux);
+            // 发送响应（DATA阶段主机收走）；长度取min(固件响应, 主机wLength)
+            uint16_t sendLen = respVendorLen;
+            if (sendLen > request->wLength) sendLen = request->wLength;
+            (void)vendorIface.sendResponse(rhport, request, respVendor, sendLen);
+            return true;
+        }
+        return true;  // DATA/ACK阶段无需动作
+    }
+
+    return false;  // 未识别的vendor请求 → STALL
+}
+
+// ============================================================================
+// （历史）Feature Report 命令通道说明 —— v3.1.0起命令走Vendor接口，见上方回调。
+// HID描述符中的Report ID 2 Feature保留在描述符中（不影响枚举，系统不会访问），
+// _onSetFeature/_onGetFeature不再会被主机调用。
 // arduino-esp32 2.0.x的USBHID后端把tud_hid_set_report_cb/tud_hid_get_report_cb
 // 定义为强符号，内部按report ID路由到USBHIDDevice的_onSetFeature/_onGetFeature。
-// 因此命令通道的收发在USBHIDTouchpad类内override这两个虚函数实现，见上方。
 // ============================================================================
 // 命令处理（在main loop中执行，不阻塞USB ISR）
 // ============================================================================
@@ -422,8 +530,8 @@ void setup() {
 
     qlog("");
     qlog("========================================================");
-    qlog("  QingYun ESP32-S3 USB直连 HID Firmware " FW_VERSION);
-    qlog("  Single-Interface HID Touch Screen + Feature Cmd Channel");
+    qlog("  QingYun ESP32-S3 USB Firmware " FW_VERSION);
+    qlog("  Dual-Interface: HID Touch Screen (if0) + Vendor Cmd (if1)");
     qlog("========================================================");
     qlogf("  Chip Rev %d | %d MHz | %d cores | SDK %s",
           ESP.getChipRevision(), ESP.getCpuFreqMHz(),
@@ -434,13 +542,18 @@ void setup() {
           ESP.getFreePsram()/1048576.0f,
           ESP.getFreeHeap()/1024.0f);
 
-    // USB HID初始化
+    // USB初始化：HID触摸屏接口 + Vendor命令接口
+    // vendorIface.onRequest/begin 必须在 USB.begin() 之前（构造时接口已注册，
+    // begin()建接收队列，onRequest挂控制请求回调）
+    vendorIface.onRequest(vendorControlCallback);
+    vendorIface.begin();
+
     USB.VID(0x303A);
     USB.PID(0x8266);
     USB.manufacturerName("QingYun");
     USB.productName("QingYun Touch Screen");
     USB.serialNumber("QY000001");
-    USB.firmwareVersion(0x0302);  // v3.0.2 bcdDevice=0x0302
+    USB.firmwareVersion(0x0310);  // v3.1.0 bcdDevice=0x0310
     touchpad.begin();
     USB.begin();
 
@@ -452,7 +565,7 @@ void setup() {
     memset((void*)respBuf, 0, sizeof(respBuf));
 
     qlog("[USB] Waiting for host... (USB plug-in detection)");
-    qlog("  Commands via HID Feature Report ID 2:");
+    qlog("  Commands via Vendor iface(if1) EP0 ctrl: OUT 0x41 req=0x01 / IN 0xC1 req=0x02");
     qlog("    tap:x,y,ms | status | selftest | ping | log[:offset]");
 }
 
