@@ -1,28 +1,32 @@
 /**
  * ============================================================================
- * 青云扑克 ESP32-S3 - USB直连 固件 (v3.1.0)
+ * 青云扑克 ESP32-S3 - USB直连 固件 (v3.2.0)
  * ============================================================================
  *
- * v3.1.0：双接口架构——HID触摸屏接口 + Vendor专用接口
+ * v3.2.0：双接口架构——HID触摸屏接口 + Vendor专用接口，命令走 Vendor bulk 端点
  *   - 接口0：HID触摸屏（class=3），Report ID 1=触摸输入。系统 usbhid 自动绑定，
- *     鼠标光标/触摸功能照常，App 完全不去 claim 它
- *   - 接口1：Vendor专用接口（class=0xFF，arduino USBVendor类，bulk端点不使用）
- *     命令通道走 Endpoint 0 的 VENDOR 类型控制传输：
- *       OUT bmRequestType=0x41 bRequest=0x01 wIndex=vendor接口号 → 写命令文本
- *       IN  bmRequestType=0xC1 bRequest=0x02 wIndex=vendor接口号 → 读ACK响应
+ *     鼠标光标/触摸功能照常，App 完全不去 claim 它（触摸路径与v3.1.0一致，一字未动）
+ *   - 接口1：Vendor专用接口（class=0xFF，arduino USBVendor类，TUD_VENDOR_DESCRIPTOR
+ *     自带一对 bulk 端点：ep=OUT、0x80|ep=IN，64字节）。命令通道走 bulk 端点：
+ *       App bulk OUT 发 64 字节定长帧：[0:]=命令文本，尾部 zero-fill
+ *       固件 bulk IN  回 64 字节定长帧：[0]=状态字节('O'/'E')，[1:]=响应文本，zero-fill
+ *     固件 RX：tud_vendor_rx_cb → rx_queue(256B) → loop() 里 vendorIface.read()；
+ *     固件 TX：processCommand() 产响应 → vendorIface.write() → IN bulk。
+ *     这是 USBVendor 类的主数据流（官方 USBVendor example loop() 即用
+ *     Vendor.write()/read() 透传；onRequest 控制回调仅应付 WebUSB 握手）。
  *
- * 为什么v3.0.0~v3.0.2的HID Feature通道走不通（Linux/Android内核证据）：
- *   SET_REPORT/GET_REPORT = class类型 + interface定向，Linux devio.c
- *   check_ctrlrecip()(L909) 强制 checkintf()(L816)——接口必须被本进程claim；
- *   而 class=3 的HID接口被内核 usbhid 驱动自动绑定，App无root抢不到claim
- *   （claimintf 返回 -EBUSY）→ controlTransfer 返回-1 → "USB写失败"。
- *   devio.c L866-867：bmRequestType 的 type=VENDOR(0x40) 时直接 return 0，
- *   不查claim/不查驱动/不查配置态——vendor类型控制传输是内核明文豁免通道，
- *   免root、不与usbhid冲突。这是USB厂商私有控制通道的标准做法。
+ * 版本沿革（均已废弃，仅供考古）：
+ *   v3.0.0~v3.0.2：HID Feature Report 命令通道——class+接口定向控制传输被内核
+ *     强制 check claim，usbhid 占用 HID 接口 → -EBUSY。证伪。
+ *   v3.1.0：Vendor 接口 EP0 vendor 类型控制传输(0x41/0xC1)——枚举/claim/bcd 读取
+ *     全正常，但 vendor 控制传输 OUT 即失败、IN 无响应、固件回调不触发，源码理论
+ *     全通而实测黑洞。弃用。改走 bulk：Android USB host 最成熟 API（claim 后
+ *     bulkTransfer），无控制传输三阶段时序/WebUSB 拦截等坑。
  *
- * Vendor响应字节契约（64字节）：
- *   [0]=状态字节 'O'=ok / 'E'=error / 'P'=processing / 'I'=idle
- *   [1:]=响应文本（如 "ok:tap(540,1172,50ms)"）
+ * Vendor bulk 响应字节契约（64字节定长帧）：
+ *   [0]=状态字节 'O'=ok / 'E'=error
+ *   [1:]=响应文本（如 "ok:tap(540,1172,50ms)"），尾部 zero-fill
+ *   文本上限 63 字节（单包 64 字节内发完，不分包）
  *
  * 硬件：ESP32-S3 N16R8，USB OTG线连扑克手机
  * ============================================================================
@@ -31,7 +35,7 @@
 #include <Arduino.h>
 #include <USB.h>
 #include <USBHID.h>
-#include <USBVendor.h>   // v3.1.0: Vendor专用接口(class=0xFF)命令通道，需 -DCONFIG_TINYUSB_VENDOR_ENABLED=1
+#include <USBVendor.h>   // v3.2.0: Vendor专用接口(class=0xFF) bulk命令通道，需 -DCONFIG_TINYUSB_VENDOR_ENABLED=1
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "esp_random.h"
@@ -45,7 +49,9 @@
 // ============================================================================
 // 常量
 // ============================================================================
-#define FW_VERSION "v3.1.0"  // v3.1.0: 双接口架构，命令通道改走Vendor接口控制传输(0x41/0xC1)，绕开usbhid claim冲突
+#define FW_VERSION "v3.2.0"  // v3.2.0: 命令通道改走Vendor接口bulk端点（官方example主数据流）
+                            // v3.1.0: Vendor EP0控制传输(0x41/0xC1)实测黑洞（枚举/claim/bcd正常，
+                            //         控制传输OUT即失败、IN无响应、回调不触发），弃用
                             // v3.0.2: PHY假说已证伪（usb_hal_init本就切PHY），该方向作废
                             // v3.0.1: 修复GET_REPORT响应字节布局（TinyUSB已填report ID前缀，固件不重复写）
 
@@ -55,14 +61,11 @@
 #define JITTER_PX  5
 #define JITTER_MS  20
 
-// Report IDs（HID触摸屏接口，Report ID 2 Feature仅保留描述符兼容，v3.1.0不再使用）
+// Report IDs（HID触摸屏接口；Report ID 2 Feature仅保留描述符兼容，v3.1.0起不再使用）
 #define REPORT_ID_TOUCH    0x01
 #define REPORT_ID_COMMAND  0x02
-#define CMD_BUF_SIZE       63   // 64字节report减去1字节report ID；vendor载荷同为64字节
-
-// v3.1.0 Vendor控制传输协议（bmRequestType低5位recipient=INTERFACE=1）
-#define VENDOR_REQ_WRITE_CMD  0x01  // OUT(0x41): 主机写命令文本
-#define VENDOR_REQ_READ_ACK   0x02  // IN (0xC1): 主机读ACK响应
+#define VENDOR_FRAME_SIZE  64   // bulk端点定长帧：64字节
+#define CMD_BUF_SIZE       63   // 命令文本上限63字节（bulk帧64字节，文本从[0]起）；HID report同为63
 
 // ============================================================================
 // HID 报告描述符
@@ -287,105 +290,38 @@ public:
 static USBHIDTouchpad touchpad;
 
 // ============================================================================
-// v3.1.0: Vendor专用接口（class=0xFF）——命令通道
+// v3.2.0: Vendor专用接口（class=0xFF）——bulk 命令通道
 // ----------------------------------------------------------------------------
 // 全局实例构造时即向TinyUSB注册vendor接口（USBVendor构造函数内
 // tinyusb_enable_interface(USB_INTERFACE_VENDOR,...)）。描述符装配顺序按枚举
 // USB_INTERFACE_HID(2) < USB_INTERFACE_VENDOR(3)（esp32-hal-tinyusb.h），
 // 故配置描述符里 HID=接口0、Vendor=接口1。
+// TUD_VENDOR_DESCRIPTOR 自带一对 bulk 端点（ep_num=OUT, 0x80|ep_num=IN, 64B）。
 //
-// 命令/响应数据通路（EP0 vendor类型控制传输，与HID Feature Report无关）：
-//   主机 OUT 0x41 bReq=0x01 wLength=N：SETUP阶段固件用tud_control_xfer挂接收
-//     buffer（见vendorControlCallback），DATA阶段主机命令文本落入该buffer，
-//     ACK阶段置cmdPending，main loop取出执行processCommand()；
-//   主机 IN  0xC1 bReq=0x02 wLength=64：SETUP阶段固件把[状态字节+文本]填入
-//     respVendor并sendResponse，DATA阶段主机收走。
-// vendor类型请求在TinyUSB usbd.c process_control_request()中不分recipient、
-// 不做类驱动查找，直接路由到tud_vendor_control_xfer_cb→本回调；主机侧Linux
-// devio.c对vendor类型同样不查claim/配置态——双向都是内核明文豁免。
+// 命令/响应数据通路（bulk 端点，USBVendor 主数据流）：
+//   RX：主机 bulk OUT 发64B帧 → TinyUSB tud_vendor_rx_cb → USBVendor._onRX
+//       → rx_queue(256B) → loop() 里 vendorIface.read(vendorRxBuf,64) 排空，
+//       按null截断入cmdBuf、置cmdPending → processCommand()；
+//   TX：processCommand() 经setResponse()把响应写入respBuf（内部布局不变：
+//       [1]=状态字节, [2:]=文本），loop() 随后平移成bulk帧respVendor
+//       （[0]=状态, [1:]=文本, zero-fill到64）→ vendorIface.write(,64)
+//       → tud_vendor_n_write → 主机 bulk IN 读走。
+//   不挂 onRequest 控制回调：v3.2.0不使用EP0 vendor控制传输；主机若误发
+//   vendor控制请求，USBVendor _onRequest 无cb返回false → TinyUSB STALL，无害。
 // ============================================================================
 static USBVendor vendorIface;
 
-// vendor通道专用接收/响应缓冲（64字节EP0载荷；与HID Feature通道的cmdBuf/respBuf分离，
-// 避免任何布局耦合）。响应布局即App收到的字节：[0]=状态字节, [1:]=文本
-static uint8_t vendorRxBuf[64];
-static uint8_t respVendor[64];
-static volatile uint16_t respVendorLen = 0;
-
-// vendor控制请求回调（运行在TinyUSB usbd任务上下文，与HID回调同上下文）
-// 返回false → TinyUSB对该请求STALL；返回true → 请求已接管
-bool vendorControlCallback(uint8_t rhport, uint8_t stage,
-                           arduino_usb_control_request_t const* request) {
-    // 只处理 vendor类型 + interface定向 的两个私有请求；其余一律STALL
-    if (request->bmRequestType != REQUEST_TYPE_VENDOR ||
-        request->bmRequestRecipient != REQUEST_RECIPIENT_INTERFACE) {
-        return false;
-    }
-
-    if (request->bmRequestDirection == REQUEST_DIRECTION_OUT &&
-        request->bRequest == VENDOR_REQ_WRITE_CMD) {
-        // 主机→固件 写命令
-        if (stage == REQUEST_STAGE_SETUP) {
-            // 挂上接收buffer，DATA阶段主机命令文本落入vendorRxBuf。
-            // OUT方向给tud_control_xfer传buffer=接收区（官方USBVendor example
-            // SET_LINE_CODING同款用法，sendResponse内部即tud_control_xfer）
-            (void)vendorIface.sendResponse(rhport, request, vendorRxBuf, sizeof(vendorRxBuf));
-            return true;
-        }
-        if (stage == REQUEST_STAGE_ACK) {
-            // 数据已接收完成。主机短包（wLength<64）时尾部为未初始化字节，
-            // App发送前已zero-fill，且这里强制截断+补null
-            uint16_t n = request->wLength;
-            if (n > CMD_BUF_SIZE) n = CMD_BUF_SIZE;  // 命令文本上限63字节
-            portENTER_CRITICAL(&cmdMux);
-            memcpy((void*)cmdBuf, vendorRxBuf, n);
-            ((uint8_t*)cmdBuf)[n] = 0;
-            cmdPending = true;
-            respReady = false;
-            memset((void*)respBuf, 0, CMD_BUF_SIZE + 1);
-            portEXIT_CRITICAL(&cmdMux);
-            Serial.printf("[VENDOR-CMD] RX(%u): %s\n", n, (const char*)cmdBuf);
-            return true;
-        }
-        return true;  // DATA阶段：传输进行中，无需动作
-    }
-
-    if (request->bmRequestDirection == REQUEST_DIRECTION_IN &&
-        request->bRequest == VENDOR_REQ_READ_ACK) {
-        // 固件→主机 读ACK
-        if (stage == REQUEST_STAGE_SETUP) {
-            portENTER_CRITICAL(&cmdMux);
-            if (respReady) {
-                // respBuf[1]=状态字节, respBuf[2:]=文本（setResponse布局，与HID时代一致）
-                size_t textLen = strlen((const char*)respBuf + 2);
-                if (textLen > sizeof(respVendor) - 1) textLen = sizeof(respVendor) - 1;
-                respVendor[0] = respBuf[1];
-                memcpy(respVendor + 1, (const void*)(respBuf + 2), textLen);
-                respVendorLen = (uint16_t)(1 + textLen);
-            } else if (cmdPending) {
-                respVendor[0] = 'P';  // processing
-                respVendorLen = 1;
-            } else {
-                respVendor[0] = 'I';  // idle
-                respVendorLen = 1;
-            }
-            portEXIT_CRITICAL(&cmdMux);
-            // 发送响应（DATA阶段主机收走）；长度取min(固件响应, 主机wLength)
-            uint16_t sendLen = respVendorLen;
-            if (sendLen > request->wLength) sendLen = request->wLength;
-            (void)vendorIface.sendResponse(rhport, request, respVendor, sendLen);
-            return true;
-        }
-        return true;  // DATA/ACK阶段无需动作
-    }
-
-    return false;  // 未识别的vendor请求 → STALL
-}
+// bulk通道帧缓冲（64字节定长；与HID Feature时代的cmdBuf/respBuf内部布局分离）
+static uint8_t vendorRxBuf[VENDOR_FRAME_SIZE];
+static uint8_t respVendor[VENDOR_FRAME_SIZE];
+static volatile bool bulkRespPending = false;  // respVendor有帧待发（IN FIFO满时loop重试）
 
 // ============================================================================
-// （历史）Feature Report 命令通道说明 —— v3.1.0起命令走Vendor接口，见上方回调。
+// （历史）Feature Report 命令通道说明 —— v3.1.0起命令走Vendor接口（v3.2.0走
+// bulk端点，见上方注释）。
 // HID描述符中的Report ID 2 Feature保留在描述符中（不影响枚举，系统不会访问），
-// _onSetFeature/_onGetFeature不再会被主机调用。
+// _onSetFeature/_onGetFeature override 必须保留（虚函数实现，否则编译失败），
+// 但运行期不会再被主机调用。
 // arduino-esp32 2.0.x的USBHID后端把tud_hid_set_report_cb/tud_hid_get_report_cb
 // 定义为强符号，内部按report ID路由到USBHIDDevice的_onSetFeature/_onGetFeature。
 // ============================================================================
@@ -399,8 +335,10 @@ static void setResponse(const char* fmt, ...) {
     portENTER_CRITICAL(&cmdMux);
     size_t len = strlen(buf);
     if (len >= CMD_BUF_SIZE - 1) len = CMD_BUF_SIZE - 2;
-    // respBuf布局(固件内部): [0]未用(TinyUSB在GET_REPORT响应时自动填report ID前缀),
-    //   [1]=状态字节, [2:]=响应文本。App端收到: [0]=report ID(2),[1]=状态,[2:]=文本
+    // respBuf内部布局（自HID时代沿用，v3.2.0不变）：
+    //   [0]未用, [1]=状态字节, [2:]=响应文本
+    // HID时代GET_REPORT由TinyUSB在[0]填report ID；v3.2.0 bulk在loop()里把
+    //   [1]/[2:]平移成帧respVendor[0]/[1:]发出（见loop bulk TX段）。
     // 状态字节: 文本以"err:"开头→'E'，否则→'O'
     respBuf[1] = (buf[0]=='e' && buf[1]=='r' && buf[2]=='r' && buf[3]==':') ? 'E' : 'O';
     memcpy((void*)(respBuf + 2), buf, len);
@@ -435,15 +373,13 @@ static void processCommand(const char* cmd) {
         }
 
     } else if (strcmp(cmd, "status") == 0) {
-        setResponse("ok:ver=%s,heap=%u,psram=%u,usb=%s,hid=%s,ever=%s,fails=%d,reason=%s,uptime=%lus",
+        // v3.2.0: 响应必须在单bulk包内（文本≤63字节），字段精简
+        setResponse("ok:ver=%s,heap=%u,usb=%s,hid=%s,fails=%d,up=%lus",
                     FW_VERSION,
                     ESP.getFreeHeap(),
-                    (unsigned)ESP.getFreePsram(),
                     ((bool)USB) ? "ok" : "no",
                     touchpad.ready() ? "ok" : "no",
-                    touchpad.wasEverMounted() ? "yes" : "no",
                     touchpad.hidFailCount(),
-                    touchpad.hidLastFailReason(),
                     (unsigned long)(millis() / 1000));
 
     } else if (strcmp(cmd, "selftest") == 0) {
@@ -458,14 +394,15 @@ static void processCommand(const char* cmd) {
         setResponse("pong:uptime=%lus,heap=%u", (unsigned long)(millis()/1000), ESP.getFreeHeap());
 
     } else if (strncmp(cmd, "log", 3) == 0) {
-        // log:<offset> — 分段读取日志，每段60字节
+        // log:<offset> — 分段读取日志；v3.2.0单bulk包文本≤63字节，
+        // 前缀"ok:log:"占7字节，chunk=54 → 整帧 ≤ 1(状态)+7+54 = 62字节
         int offset = 0;
         if (strlen(cmd) > 4) offset = atoi(cmd + 4);
         if (offset < 0) offset = 0;
         if (offset >= (int)log_buf.length()) {
             setResponse("ok:log_end");
         } else {
-            int chunk = 60;
+            int chunk = 54;
             if (offset + chunk > (int)log_buf.length()) chunk = log_buf.length() - offset;
             String part = log_buf.substring(offset, offset + chunk);
             setResponse("ok:log:%s", part.c_str());
@@ -531,7 +468,7 @@ void setup() {
     qlog("");
     qlog("========================================================");
     qlog("  QingYun ESP32-S3 USB Firmware " FW_VERSION);
-    qlog("  Dual-Interface: HID Touch Screen (if0) + Vendor Cmd (if1)");
+    qlog("  Dual-Interface: HID Touch (if0) + Vendor bulk Cmd (if1)");
     qlog("========================================================");
     qlogf("  Chip Rev %d | %d MHz | %d cores | SDK %s",
           ESP.getChipRevision(), ESP.getCpuFreqMHz(),
@@ -543,9 +480,8 @@ void setup() {
           ESP.getFreeHeap()/1024.0f);
 
     // USB初始化：HID触摸屏接口 + Vendor命令接口
-    // vendorIface.onRequest/begin 必须在 USB.begin() 之前（构造时接口已注册，
-    // begin()建接收队列，onRequest挂控制请求回调）
-    vendorIface.onRequest(vendorControlCallback);
+    // vendorIface.begin() 建rx_queue（256B），必须在 USB.begin() 之前。
+    // v3.2.0 不挂 onRequest：命令走 bulk 端点，EP0 vendor 控制传输不再使用
     vendorIface.begin();
 
     USB.VID(0x303A);
@@ -553,7 +489,7 @@ void setup() {
     USB.manufacturerName("QingYun");
     USB.productName("QingYun Touch Screen");
     USB.serialNumber("QY000001");
-    USB.firmwareVersion(0x0310);  // v3.1.0 bcdDevice=0x0310
+    USB.firmwareVersion(0x0320);  // v3.2.0 bcdDevice=0x0320
     touchpad.begin();
     USB.begin();
 
@@ -565,12 +501,38 @@ void setup() {
     memset((void*)respBuf, 0, sizeof(respBuf));
 
     qlog("[USB] Waiting for host... (USB plug-in detection)");
-    qlog("  Commands via Vendor iface(if1) EP0 ctrl: OUT 0x41 req=0x01 / IN 0xC1 req=0x02");
+    qlog("  Commands via Vendor iface(if1) bulk endpoints (64B frames):");
+    qlog("    OUT->[cmd text, zero-fill] / IN<-[status byte, text, zero-fill]");
     qlog("    tap:x,y,ms | status | selftest | ping | log[:offset]");
 }
 
 void loop() {
-    // 处理来自USB的待执行命令
+    // ===== v3.2.0 bulk RX：从 Vendor 接口 OUT bulk 端点收命令帧 =====
+    // App 发 64 字节定长帧：[0:]=命令文本，尾部 zero-fill。
+    // available()<0 = rx_queue未建（begin未调用，不应发生）；read(buf,64)
+    // 排空rx_queue返回字节数（一帧64B由tud_vendor_rx_cb整包入队，一次排空）。
+    int avail = vendorIface.available();
+    if (avail > 0) {
+        // read返回int：>=0为字节数，-1为rx_queue异常（avail>0时不会发生）
+        int n = (int)vendorIface.read(vendorRxBuf, VENDOR_FRAME_SIZE);
+        if (n > 0) {
+            // App已zero-fill；这里按null截断并强制补null，命令文本上限63字节
+            vendorRxBuf[VENDOR_FRAME_SIZE - 1] = 0;
+            size_t cmdLen = strnlen((const char*)vendorRxBuf, VENDOR_FRAME_SIZE);
+            if (cmdLen > CMD_BUF_SIZE) cmdLen = CMD_BUF_SIZE;
+            portENTER_CRITICAL(&cmdMux);
+            memcpy((void*)cmdBuf, vendorRxBuf, cmdLen);
+            ((uint8_t*)cmdBuf)[cmdLen] = 0;
+            cmdPending = true;
+            respReady = false;
+            bulkRespPending = false;  // 丢弃尚未发出的上一帧（仅在IN FIFO满时可能存在）
+            memset((void*)respBuf, 0, CMD_BUF_SIZE + 1);
+            portEXIT_CRITICAL(&cmdMux);
+            Serial.printf("[BULK-CMD] RX(%u): %s\n", (unsigned)cmdLen, (const char*)cmdBuf);
+        }
+    }
+
+    // ===== 命令执行（main loop，不阻塞USB） =====
     if (cmdPending) {
         char cmdLocal[CMD_BUF_SIZE + 1];
         portENTER_CRITICAL(&cmdMux);
@@ -581,7 +543,34 @@ void loop() {
 
         if (strlen(cmdLocal) > 0) {
             processCommand(cmdLocal);
+            // 组装 bulk IN 响应帧：respBuf[1]=状态, [2:]=文本（setResponse布局）
+            // → respVendor[0]=状态, [1:]=文本，尾部zero-fill，交loop下方TX段发出
+            portENTER_CRITICAL(&cmdMux);
+            if (respReady) {
+                size_t textLen = strlen((const char*)respBuf + 2);
+                if (textLen > VENDOR_FRAME_SIZE - 1) textLen = VENDOR_FRAME_SIZE - 1;
+                respVendor[0] = respBuf[1];
+                memcpy(respVendor + 1, (const void*)(respBuf + 2), textLen);
+                memset(respVendor + 1 + textLen, 0, VENDOR_FRAME_SIZE - 1 - textLen);
+                bulkRespPending = true;
+            }
+            portEXIT_CRITICAL(&cmdMux);
         }
+    }
+
+    // ===== v3.2.0 bulk TX：把响应帧从 Vendor IN bulk 端点发出 =====
+    // write(,64) 非阻塞：IN FIFO（TinyUSB vendor TX buffer，64B）满时返回0，
+    // 帧留在respVendor里下个loop重试；FIFO空时整包64B入队（全有或全无）。
+    // 已知边角：sendTapFast连发且App不读IN时，FIFO里最多积1帧，新命令到来会
+    // 丢弃未发帧（上方RX段 bulkRespPending=false）——fast点击不读ACK，无影响。
+    if (bulkRespPending && vendorIface.mounted()) {
+        size_t w = vendorIface.write(respVendor, VENDOR_FRAME_SIZE);
+        if (w == VENDOR_FRAME_SIZE) {
+            bulkRespPending = false;
+            Serial.printf("[BULK-CMD] TX: %c %s\n",
+                          respVendor[0], (const char*)(respVendor + 1));
+        }
+        // w==0：IN FIFO满，下轮重试，不阻塞
     }
 
     // USB挂载监控（首挂载时自检）
