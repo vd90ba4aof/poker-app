@@ -49,7 +49,8 @@
 // ============================================================================
 // 常量
 // ============================================================================
-#define FW_VERSION "v3.2.0"  // v3.2.0: 命令通道改走Vendor接口bulk端点（官方example主数据流）
+#define FW_VERSION "v3.2.1"  // v3.2.1: tap非阻塞化（down即ACK，up由loop补发），连发吞吐~5ms/个
+                            // v3.2.0: 命令通道走Vendor接口bulk端点（官方example主数据流）
                             // v3.1.0: Vendor EP0控制传输(0x41/0xC1)实测黑洞（枚举/claim/bcd正常，
                             //         控制传输OUT即失败、IN无响应、回调不触发），弃用
                             // v3.0.2: PHY假说已证伪（usb_hal_init本就切PHY），该方向作废
@@ -176,6 +177,9 @@ private:
     bool _everMounted = false;
     int  _failCount = 0;
     const char* _lastFailReason = "none";
+    // v3.2.1: 非阻塞tap状态——down立即发出，up由loop里servicePendingTapUp()到点补发
+    bool     _tapUpPending = false;
+    uint32_t _tapUpAtMs = 0;
 
 public:
     USBHIDTouchpad() : hid() {
@@ -274,16 +278,31 @@ public:
         r.flags = 0x00;
         return sendTouchReport(r);
     }
-    bool tap(uint16_t sx, uint16_t sy, uint32_t durMs) {
+    // v3.2.1: 非阻塞tap——down立即发出并返回，up由loop的servicePendingTapUp()补发。
+    // 连发tap时先补发悬挂up，保证Android看到完整的down→up序列（点与点间距正常）。
+    // 按压时长durMs在down成功后即记录，up时刻=down时刻+durMs（±loop粒度10ms）。
+    bool tapAsync(uint16_t sx, uint16_t sy, uint32_t durMs) {
+        servicePendingTapUp();  // 先抬起上一个（若悬挂且未到点，也立即up——连发场景）
         int16_t jx = (int16_t)(esp_random() % (JITTER_PX * 2 + 1)) - JITTER_PX;
         int16_t jy = (int16_t)(esp_random() % (JITTER_PX * 2 + 1)) - JITTER_PX;
         int16_t ax = (int16_t)sx + jx; if (ax < 0) ax = 0; if (ax >= SCREEN_WIDTH) ax = SCREEN_WIDTH - 1;
         int16_t ay = (int16_t)sy + jy; if (ay < 0) ay = 0; if (ay >= SCREEN_HEIGHT) ay = SCREEN_HEIGHT - 1;
         int32_t ad = (int32_t)durMs + ((int32_t)(esp_random() % (JITTER_MS * 2 + 1)) - JITTER_MS);
         if (ad < 10) ad = 10;
-        if (!touchDown((uint16_t)ax, (uint16_t)ay)) return false;
-        delay(ad);
-        return touchUp();
+        if (!touchDown((uint16_t)ax, (uint16_t)ay)) { _tapUpPending = false; return false; }
+        _tapUpAtMs = millis() + (uint32_t)ad;  // millis()回绕安全：无符号差值比较
+        _tapUpPending = true;
+        return true;
+    }
+
+    // loop每个周期调用：到点补发up（非阻塞，SendReport重试在sendTouchReport内部，
+    // 最坏5×delay(5)=25ms只在USB故障时出现；正常一次即成功）
+    void servicePendingTapUp() {
+        if (!_tapUpPending) return;
+        if ((int32_t)(millis() - _tapUpAtMs) >= 0) {
+            _tapUpPending = false;
+            if (!touchUp()) { _failCount++; _lastFailReason = "up_failed"; }
+        }
     }
 };
 
@@ -364,7 +383,8 @@ static void processCommand(const char* cmd) {
             setResponse("err:coords(%d,%d)", x, y);
             return;
         }
-        bool ok = touchpad.tap((uint16_t)x, (uint16_t)y, (uint32_t)dur);
+        // v3.2.1: 非阻塞——down成功即回ACK，up由loop在durMs后补发（不阻塞命令通道）
+        bool ok = touchpad.tapAsync((uint16_t)x, (uint16_t)y, (uint32_t)dur);
         if (ok) {
             setResponse("ok:tap(%d,%d,%dms)", x, y, dur);
         } else {
@@ -384,6 +404,7 @@ static void processCommand(const char* cmd) {
 
     } else if (strcmp(cmd, "selftest") == 0) {
         if (!touchpad.ready()) { setResponse("err:hid_not_ready"); return; }
+        touchpad.servicePendingTapUp();  // v3.2.1: 先清掉可能悬挂的非阻塞up，避免序列交错
         bool down = touchpad.touchDown(540, 1172);
         delay(50);
         bool up = touchpad.touchUp();
@@ -489,7 +510,7 @@ void setup() {
     USB.manufacturerName("QingYun");
     USB.productName("QingYun Touch Screen");
     USB.serialNumber("QY000001");
-    USB.firmwareVersion(0x0320);  // v3.2.0 bcdDevice=0x0320
+    USB.firmwareVersion(0x0321);  // v3.2.1 bcdDevice=0x0321（tap非阻塞；App门槛0x0320不变，兼容v3.2.0）
     touchpad.begin();
     USB.begin();
 
@@ -507,6 +528,10 @@ void setup() {
 }
 
 void loop() {
+    // ===== v3.2.1: 非阻塞tap抬起服务（每loop先跑，≤10ms粒度）=====
+    // 到点补发touchUp，不阻塞命令通道；连发时由tapAsync()自行提前补发。
+    touchpad.servicePendingTapUp();
+
     // ===== v3.2.0 bulk RX：从 Vendor 接口 OUT bulk 端点收命令帧 =====
     // App 发 64 字节定长帧：[0:]=命令文本，尾部 zero-fill。
     // available()<0 = rx_queue未建（begin未调用，不应发生）；read(buf,64)

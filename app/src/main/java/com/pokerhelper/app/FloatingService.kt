@@ -931,8 +931,8 @@ class FloatingService : Service() {
                             // 先点击下注预设按钮
                             executeAutoTapFallback(betBtnAction)
                         }
-                        // 延迟200ms后点击加注按钮确认
-                        try { Thread.sleep(200) } catch (_: InterruptedException) {}
+                        // 延迟150ms后点击加注按钮确认（v3.2.1: 固件非阻塞后200→150ms）
+                        try { Thread.sleep(150) } catch (_: InterruptedException) {}
                         handler.post {
                             try {
                                 executeAutoTapFallback("raise")
@@ -1036,7 +1036,7 @@ class FloatingService : Service() {
                     try { DiagnosticLogger.logEsp32Tap("exactBet_backspace", bsX, bsY, "backspace", "executeExactBet") } catch (_: Exception) {}
                     repeat(10) { // 最多清10位，覆盖绝大多数下注金额
                         bleManager?.sendTapFast(bsX, bsY, 40)
-                        Thread.sleep(40)
+                        Thread.sleep(25)  // v3.2.1: 固件tap非阻塞后连发间隔60→25ms
                     }
                     Log.d(TAG, "精确输入: 已清空旧值 (backspace x10)")
                 }
@@ -1053,7 +1053,7 @@ class FloatingService : Service() {
                 Log.d(TAG, "executeExactBet step2[$idx]: 点击 '$ch' ($kx, $ky)")
                 try { DiagnosticLogger.logEsp32Tap("exactBet_digit_$ch", kx, ky, ch.toString(), "executeExactBet") } catch (_: Exception) {}
                 bleManager?.sendTapFast(kx, ky, 40)
-                Thread.sleep(60) // 按键间隔
+                Thread.sleep(30) // v3.2.1: 固件tap非阻塞，按键间隔60→30ms
             }
             // 3. 点击确认
             val cx = ((confirm[0] + confirm[2]) / 2 * sx).toInt()

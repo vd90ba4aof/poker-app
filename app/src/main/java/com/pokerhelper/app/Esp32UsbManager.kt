@@ -39,8 +39,7 @@ class Esp32UsbManager(private val context: Context) {
         private const val ESP32_PID = 0x8266
         private const val FRAME_SIZE = 64        // bulk端点定长帧
         private const val MIN_FW_BCD = 0x0320   // v3.2.0起命令走bulk端点
-        private const val ACK_TIMEOUT_MS = 3000L
-        private const val FAST_TIMEOUT_MS = 200L
+        private const val ACK_TIMEOUT_MS = 800L   // v3.2.1: 固件tap非阻塞，ACK正常~30ms；800ms留足余量，丢帧异常不再卡3s
         private const val POLL_INTERVAL_MS = 5L
         private const val ACTION_USB_PERMISSION = "com.pokerhelper.app.USB_PERMISSION"
     }
