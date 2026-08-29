@@ -33,7 +33,7 @@
 // ============================================================================
 // 常量
 // ============================================================================
-#define FW_VERSION "v3.0.0"
+#define FW_VERSION "v3.0.1"  // v3.0.1: 修复GET_REPORT响应字节布局（TinyUSB已填report ID前缀，固件不重复写）
 
 #define SCREEN_WIDTH  1080
 #define SCREEN_HEIGHT 2344
@@ -177,22 +177,15 @@ public:
 
     // 主机通过SET_REPORT(Feature)发送命令：report_id=2
     // 运行在TinyUSB回调上下文（main task），可以安全使用critical section
+    // 注意：TinyUSB在调用前已剥除report ID前缀（hid_device.c SET_REPORT分支：
+    // report_id==report_buf[0]时report_buf++/report_len--），
+    // 因此buffer首字节即命令文本，len为文本长度（不含report ID前缀）
     void _onSetFeature(uint8_t report_id, const uint8_t* buffer, uint16_t len) override {
         if (report_id != REPORT_ID_COMMAND || len == 0) return;
 
-        // framework传入的buffer是否带report ID前缀：
-        // arduino-esp32直接透传TinyUSB的buffer，首字节为report ID
-        const uint8_t* data = buffer;
-        uint16_t dataLen = len;
-        if (buffer[0] == REPORT_ID_COMMAND) {
-            data = buffer + 1;
-            dataLen = len - 1;
-        }
-        if (dataLen == 0) return;
-
         portENTER_CRITICAL(&cmdMux);
-        size_t copyLen = dataLen < CMD_BUF_SIZE ? dataLen : CMD_BUF_SIZE;
-        memcpy((void*)cmdBuf, data, copyLen);
+        size_t copyLen = len < CMD_BUF_SIZE ? len : CMD_BUF_SIZE;
+        memcpy((void*)cmdBuf, buffer, copyLen);
         ((uint8_t*)cmdBuf)[copyLen] = 0;
         cmdPending = true;
         respReady = false;
@@ -203,27 +196,31 @@ public:
     }
 
     // 主机通过GET_REPORT(Feature)读取ACK：report_id=2
-    // 返回写入buffer的字节数；framework会把返回值作为control transfer响应长度
+    // ★字节布局契约（TinyUSB hid_device.c GET_REPORT分支）：
+    //   TinyUSB已在响应首字节填入report ID（*report_buf++ = report_id; xferlen++），
+    //   本回调写入的buffer[0]对应主机收到的第2字节，reqlen已减去1字节前缀。
+    //   主机(App)最终收到：[0]=report ID(2, TinyUSB填), [1]=状态字节, [2:]=响应文本
+    // 返回写入buffer的payload字节数（不含report ID前缀）
     uint16_t _onGetFeature(uint8_t report_id, uint8_t* buffer, uint16_t reqlen) override {
         if (report_id != REPORT_ID_COMMAND) return 0;
 
-        uint16_t respLen = 0;
+        uint16_t respLen = 1;  // payload至少1字节状态
         portENTER_CRITICAL(&cmdMux);
         if (respReady) {
-            // respBuf[1]已由setResponse写入状态字节('O'成功/'E'错误), [2:]=响应文本
-            respLen = (uint16_t)(strlen((const char*)respBuf + 2) + 2);
-            if (respLen > reqlen) respLen = reqlen;
-            buffer[0] = REPORT_ID_COMMAND;
-            buffer[1] = respBuf[1];
-            memcpy(buffer + 2, (const void*)(respBuf + 2), respLen - 2);
+            // respBuf[1]=状态字节('O'成功/'E'错误), respBuf[2:]=响应文本
+            size_t textLen = strlen((const char*)respBuf + 2);
+            if (reqlen < 1) {
+                respLen = 0;  // 不可能发生：TinyUSB保证req_len>1才调用
+            } else {
+                if (textLen + 1 > reqlen) textLen = reqlen - 1;
+                buffer[0] = respBuf[1];
+                memcpy(buffer + 1, (const void*)(respBuf + 2), textLen);
+                respLen = (uint16_t)(1 + textLen);
+            }
         } else if (cmdPending) {
-            buffer[0] = REPORT_ID_COMMAND;
-            buffer[1] = 'P';  // processing
-            respLen = 2;
+            buffer[0] = 'P';  // processing，命令还在执行
         } else {
-            buffer[0] = REPORT_ID_COMMAND;
-            buffer[1] = 'I';  // idle
-            respLen = 2;
+            buffer[0] = 'I';  // idle，无待处理命令
         }
         portEXIT_CRITICAL(&cmdMux);
         return respLen;
@@ -287,7 +284,8 @@ static void setResponse(const char* fmt, ...) {
     portENTER_CRITICAL(&cmdMux);
     size_t len = strlen(buf);
     if (len >= CMD_BUF_SIZE - 1) len = CMD_BUF_SIZE - 2;
-    // respBuf布局: [0]保留给report ID(由_onGetFeature填充), [1]=状态字节, [2:]=响应文本
+    // respBuf布局(固件内部): [0]未用(TinyUSB在GET_REPORT响应时自动填report ID前缀),
+    //   [1]=状态字节, [2:]=响应文本。App端收到: [0]=report ID(2),[1]=状态,[2:]=文本
     // 状态字节: 文本以"err:"开头→'E'，否则→'O'
     respBuf[1] = (buf[0]=='e' && buf[1]=='r' && buf[2]=='r' && buf[3]==':') ? 'E' : 'O';
     memcpy((void*)(respBuf + 2), buf, len);
