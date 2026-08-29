@@ -386,8 +386,9 @@ static void processCommand(const char* cmd) {
 //   (IDF v4.4 components/hal/esp32s3/include/hal/usb_ll.h)。
 // ============================================================================
 static void forcePhyToOtg() {
-    // 1. 卸载 secondary console 注册的 USB-Serial-JTAG VFS 驱动（释放中断/控制器）
-    //    未安装时返回 ESP_ERR_INVALID_STATE，忽略即可
+    // 1. 卸载 USB-Serial-JTAG 驱动（若有）：关中断、释放 ISR/缓冲。
+    //    官方 IDF4.4 注释明确：uninstall 故意不停模块时钟、不清 usb_pad_enable，
+    //    PHY/pad 交由调用者处理；未安装时返回 ESP_OK。故下面手动清 pad。
     usb_serial_jtag_driver_uninstall();
 
     // 2. 断开 JTAG 控制器对 USB pad(D+/D-) 的占用并关闭其 D+ 上拉（bit14/bit9），
