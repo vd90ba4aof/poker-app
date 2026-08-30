@@ -91,10 +91,10 @@ class ScreenOptService : AccessibilityService() {
                 onScreenshotReady = { success ->
                     if (callbackGeneration != myGen) {
                         android.util.Log.w("ScreenOptService", "R9-9: 迟到帧到达，代次已变($callbackGeneration!=$myGen)，空转丢弃")
-                        return@let
+                    } else {
+                        result = success
+                        latch.countDown()
                     }
-                    result = success
-                    latch.countDown()
                 }
             }
             svc.performCapture()
