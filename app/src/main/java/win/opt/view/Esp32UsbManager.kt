@@ -340,12 +340,16 @@ class Esp32UsbManager(private val context: Context) {
     fun sendCommandWaitAck(cmd: String, timeoutMs: Long): String? {
         // R5-fix: 全程持ioLock——发命令+等ACK原子化，防止fast tap残留帧串扰
         synchronized(ioLock) {
+        // R5-fix-v2: drain必须在发送【之前】清残留帧——固件ACK回得很快，
+        // 若先发后清，本命令自己的ACK会被drain当残留吞掉（曾导致status无响应/tap测试失败）
+        val conn0 = connection ?: return null
+        if (!isConnected) return null
+        val inEp0 = epIn ?: return null
+        drainInputPipe(conn0, inEp0)
         if (!sendCommandOnly(cmd)) return null
 
-        val conn = connection ?: return null
-        val inEp = epIn ?: return null
-        // R5-fix: 发送本命令前，读空IN端点残留帧（上一批sendTapFast的ok响应）
-        drainInputPipe(conn, inEp)
+        val conn = conn0
+        val inEp = inEp0
         val deadline = System.currentTimeMillis() + timeoutMs
         val buf = ByteArray(FRAME_SIZE)
         var diagCount = 0
@@ -386,14 +390,18 @@ class Esp32UsbManager(private val context: Context) {
      * 用于sendTapFast连发后清管道，防止残留ok帧被下次sendTap误当ACK
      */
     private fun drainInputPipe(conn: UsbDeviceConnection, inEp: android.hardware.usb.UsbEndpoint) {
-        val buf = ByteArray(FRAME_SIZE)
-        var drained = 0
-        while (drained < 32) {  // 上限32帧，防异常固件刷屏
-            val r = conn.bulkTransfer(inEp, buf, FRAME_SIZE, 10)
-            if (r < 1) break
-            drained++
+        try {
+            val buf = ByteArray(FRAME_SIZE)
+            var drained = 0
+            while (drained < 32) {  // 上限32帧，防异常固件刷屏
+                val r = conn.bulkTransfer(inEp, buf, FRAME_SIZE, 10)
+                if (r < 1) break
+                drained++
+            }
+            if (drained > 0) Log.d(TAG, "R5 drainInputPipe: 清掉残留帧$drained")
+        } catch (e: Exception) {
+            Log.w(TAG, "R5 drainInputPipe异常（可能连接已关闭）: ${e.message}")
         }
-        if (drained > 0) Log.d(TAG, "R5 drainInputPipe: 清掉残留帧$drained")
     }
 
     /**
