@@ -1,4 +1,4 @@
-package com.pokerhelper.app
+package win.opt.view
 
 import android.app.Activity
 import android.content.Context
@@ -42,14 +42,6 @@ class MainActivity : AppCompatActivity() {
     private var isRunning = false
     private var prefs: SharedPreferences? = null
     private var floatingPrefs: SharedPreferences? = null
-
-    private val audioPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (!granted) {
-            Toast.makeText(this, "语音识别需要麦克风权限", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     // V2.9.39: 通知权限请求（Android 13+必须，否则通知不显示）
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -139,12 +131,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                }
-            }
-
             btnHelper.setOnClickListener {
                 try {
                     tryLaunchFloatingHelper()
@@ -209,7 +195,7 @@ class MainActivity : AppCompatActivity() {
                 startService(intent)
             }
             val stealthMode = floatingPrefs?.getBoolean("stealth_mode", false) ?: false
-            val modeText = if (stealthMode) "🥷 隐身模式！" else "📱 青云已启动！"
+            val modeText = if (stealthMode) "🥷 隐身模式！" else "📱 优化服务已启动！"
             Toast.makeText(this, modeText, Toast.LENGTH_LONG).show()
 
             val homeIntent = Intent(Intent.ACTION_MAIN).apply {
@@ -246,7 +232,7 @@ class MainActivity : AppCompatActivity() {
 
             isRunning = true
             updateUI()
-            Toast.makeText(this, "📱 青云启动中...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "📱 优化服务启动中...", Toast.LENGTH_SHORT).show()
 
             tryLaunchFloatingHelper()
         } catch (e: Exception) {
@@ -275,8 +261,7 @@ class MainActivity : AppCompatActivity() {
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ) ?: return false
             return enabledServices.contains("$packageName/.ScreenOptService") ||
-                   enabledServices.contains("$packageName/com.pokerhelper.app.ScreenOptService") ||
-                   enabledServices.contains("com.pokerhelper.app/com.pokerhelper.app.ScreenOptService") ||
+                   enabledServices.contains("$packageName/win.opt.view.ScreenOptService") ||
                    enabledServices.contains("win.opt.view/com.pokerhelper.app.ScreenOptService")
         } catch (e: Exception) {
             return false
@@ -312,7 +297,7 @@ class MainActivity : AppCompatActivity() {
                 btnStart.text = "⏹ 停止"
                 btnHelper.visibility = View.VISIBLE
                 val stealthMode = floatingPrefs?.getBoolean("stealth_mode", false) ?: false
-                btnHelper.text = if (stealthMode) "🥷 隐身模式运行中" else "📱 打开青云"
+                btnHelper.text = if (stealthMode) "🥷 隐身模式运行中" else "📱 打开优化"
                 tvHint.text = if (stealthMode) "👇 通知栏点🎯截屏识别" else "👇 切到游戏 → 点🎯截屏识别"
                 tvHint.setTextColor(getColor(android.R.color.holo_orange_dark))
             } else {

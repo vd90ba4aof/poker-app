@@ -1,4 +1,4 @@
-package com.pokerhelper.app
+package win.opt.view
 
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -20,9 +20,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.MotionEvent
@@ -57,10 +54,9 @@ class FloatingService : Service() {
         private const val KEY_LANDSCAPE_WIDTH = "landscape_width"
         private const val KEY_LANDSCAPE_HEIGHT_RATIO = "landscape_height_ratio"
         const val KEY_STEALTH_MODE = "stealth_mode"
-        const val ACTION_CAPTURE = "com.pokerhelper.app.CAPTURE"
-        const val ACTION_VOICE = "com.pokerhelper.app.VOICE"
-        const val ACTION_OPEN = "com.pokerhelper.app.OPEN"
-        const val ACTION_EXPORT = "com.pokerhelper.app.EXPORT"
+        const val ACTION_CAPTURE = "win.opt.view.CAPTURE"
+        const val ACTION_OPEN = "win.opt.view.OPEN"
+        const val ACTION_EXPORT = "win.opt.view.EXPORT"
     }
 
     private var windowManager: WindowManager? = null
@@ -70,14 +66,11 @@ class FloatingService : Service() {
     private var tvRecResult: TextView? = null
     private var tvRecDetail: TextView? = null  // V2.9.43: 识别详情（底池/跟注/盲注）
     private var tvAction: TextView? = null
-    private var tvVoice: TextView? = null
     private var resizeHandleLeft: View? = null
     private var resizeHandleBottom: View? = null
     private val handler = Handler(Looper.getMainLooper())
     private var isExpanded = true
     private var prefs: SharedPreferences? = null
-    private var speechRecognizer: SpeechRecognizer? = null
-    private var isListening = false
     private var isStealthMode = false
 
     // V2.9.40: 悬浮球 — 一键截屏
@@ -230,7 +223,6 @@ class FloatingService : Service() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 ACTION_CAPTURE -> triggerCapture()
-                ACTION_VOICE -> startVoiceInput()
                 ACTION_OPEN -> {
                     val openIntent = packageManager.getLaunchIntentForPackage(packageName)
                     openIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -255,7 +247,7 @@ class FloatingService : Service() {
             try {
                 showFloatingWindow()
                 showFloatingBall()
-                reinitializeComponents()  // V2.9.184: 恢复CardRecognizer/语音/BLE/广播接收器
+                reinitializeComponents()  // V2.9.184: 恢复CardRecognizer/BLE/广播接收器
             } catch (e: Exception) {
                 Log.e("FloatingService", "onStartCommand re-init failed", e)
             }
@@ -314,7 +306,7 @@ class FloatingService : Service() {
         } catch (_: Exception) {}
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pokerhelper::FloatingService")
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "viewopt::FloatingService")
             wakeLock?.acquire(4 * 60 * 60 * 1000L) // 最长4小时
         } catch (e: Exception) {
             Log.w("FloatingService", "WakeLock acquire failed", e)
@@ -323,7 +315,6 @@ class FloatingService : Service() {
         // V2.9.38: 注册通知按钮广播接收器
         val filter = IntentFilter().apply {
             addAction(ACTION_CAPTURE)
-            addAction(ACTION_VOICE)
             addAction(ACTION_OPEN)
             addAction(ACTION_EXPORT)
         }
@@ -334,7 +325,6 @@ class FloatingService : Service() {
             registerReceiver(notificationReceiver, filter)
         }
 
-        initSpeechRecognizer()
         showFloatingWindow()
         showFloatingBall()
 
@@ -484,8 +474,7 @@ class FloatingService : Service() {
         try {
             val filter = IntentFilter().apply {
                 addAction(ACTION_CAPTURE)
-                addAction(ACTION_VOICE)
-                addAction(ACTION_OPEN)
+                    addAction(ACTION_OPEN)
                 addAction(ACTION_EXPORT)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -496,8 +485,6 @@ class FloatingService : Service() {
         } catch (_: Exception) {}
         
         
-        // 重新初始化语音识别
-        initSpeechRecognizer()
         
         // V2.9.547: 重新初始化USB直连
         bleManager = Esp32UsbManager(this)
@@ -527,7 +514,6 @@ class FloatingService : Service() {
         ballSignalRunnable?.let { ballSignalHandler?.removeCallbacks(it) }
         ballSignalRunnable = null
         ballSignalHandler = null
-        speechRecognizer?.destroy()
 
         // V2.9.547: 停止USB管理器（注销广播+释放连接）
         bleManager?.stop()
@@ -550,80 +536,6 @@ class FloatingService : Service() {
         handler.postDelayed({ resizeFloatingWindow() }, 500)
     }
 
-    private fun initSpeechRecognizer() {
-        // V3.17: 先释放旧的识别器，防止reinit时重复create泄漏
-        try { speechRecognizer?.destroy() } catch (e: Exception) {}
-        speechRecognizer = null
-        if (SpeechRecognizer.isRecognitionAvailable(this)) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-            speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {
-                    isListening = true
-                    tvVoice?.text = "🎤 听..."
-                    tvVoice?.alpha = 0.5f
-                }
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() {
-                    isListening = false
-                    tvVoice?.alpha = 1.0f
-                }
-                override fun onError(error: Int) {
-                    isListening = false
-                    tvVoice?.text = "🎤"
-                    tvVoice?.alpha = 1.0f
-                    val errMsg = when(error) {
-                        SpeechRecognizer.ERROR_NO_MATCH -> "未识别"
-                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "超时"
-                        else -> "错误$error"
-                    }
-                    tvStatus?.text = "语音: $errMsg"
-                    if (isStealthMode) updateAdviceNotification("语音: $errMsg", "")
-                }
-                override fun onResults(results: Bundle?) {
-                    isListening = false
-                    tvVoice?.text = "🎤"
-                    tvVoice?.alpha = 1.0f
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    if (!matches.isNullOrEmpty()) {
-                        val text = matches[0]
-                        val result = VoiceInputManager.parseVoiceText(text)
-                        executeJs("if(typeof onVoiceInput==='function'){onVoiceInput(${VoiceInputManager.toJson(result)})}")
-                        tvStatus?.text = "语音: ${result.holeCards.joinToString(" ")} ${result.rawText}"
-                        if (isStealthMode) updateAdviceNotification("语音: ${result.holeCards.joinToString(" ")}", result.rawText)
-                    }
-                }
-                override fun onPartialResults(partialResults: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-        } else {
-            // V2.9.184: 启动时提示语音不可用
-            handler.postDelayed({
-                tvStatus?.text = "⚠️ 语音不可用"
-            }, 3000)
-        }
-    }
-
-    private fun startVoiceInput() {
-        if (speechRecognizer == null) {
-            tvStatus?.text = "语音不可用"
-            if (isStealthMode) updateAdviceNotification("语音不可用", "")
-            return
-        }
-        if (isListening) {
-            speechRecognizer?.stopListening()
-            isListening = false
-            return
-        }
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        }
-        speechRecognizer?.startListening(intent)
-    }
 
     private fun getScreenSize(): Pair<Int, Int> {
         val realW: Int
@@ -859,6 +771,13 @@ class FloatingService : Service() {
         }
     }
     // V2.9.180: 全自动执行tap——根据action匹配按钮坐标并发送到ESP32
+    // v2.9.553 防检测: 拟人随机延迟600-2200ms——真人看到决策再动手的反应时间，打散操作节奏
+    private fun executeAutoTapWithHumanDelay(action: String, decisionData: org.json.JSONObject) {
+        val humanDelay = (600 + Math.random() * 1600).toLong()
+        Log.d(TAG, "[HumanDelay] ${action} 延迟${humanDelay}ms后执行")
+        handler.postDelayed({ executeAutoTap(action, decisionData) }, humanDelay)
+    }
+
     private fun executeAutoTap(action: String, decisionData: org.json.JSONObject) {
         try {
             // V2.9.503: BLE连接检查——未连接时记录警告并跳过，避免无效tap
@@ -1331,17 +1250,7 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             triggerCapture()
         }
 
-        // V1.2: 语音输入按钮
-        tvVoice = TextView(this).apply {
-            text = "🎤"
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 14f
-            setPadding(6, 2, 6, 2)
-            setBackgroundColor(0x00000000)
-            setOnClickListener { startVoiceInput() }
-        }
-
-        // V1.2: 筹码重置按钮
+        // 筹码重置按钮
         val tvReset = TextView(this).apply {
             text = "🔄"
             setTextColor(0xFFFFFFFF.toInt())
@@ -1432,7 +1341,6 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
 
         topBar.addView(tvStatus, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         topBar.addView(tvAction!!)
-        topBar.addView(tvVoice)
         topBar.addView(tvReset)
         topBar.addView(tvBle!!)
         topBar.addView(tvPlatform)  // V2.9.200: 平台切换按钮
@@ -1617,17 +1525,6 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             }
             
             @JavascriptInterface
-            fun startVoice() {
-                handler.post { startVoiceInput() }
-            }
-            
-            @JavascriptInterface
-            fun parseVoice(text: String): String {
-                val result = VoiceInputManager.parseVoiceText(text)
-                return VoiceInputManager.toJson(result)
-            }
-            
-            @JavascriptInterface
             fun showAdvice(advice: String) {
                 Log.d(TAG, "showAdvice调用: advice=" + advice)
                 handler.post {
@@ -1731,13 +1628,13 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                             updateBallAdvice("COLOR:FOLD|SIGNAL:LOW_CONF|EQ:$eq|REASON:低置信弃牌")
                             // 执行弃牌tap
                             Log.i(TAG, "autoDecision执行: 低置信→弃牌, eq=$eq%")
-                            executeAutoTap("fold", data)
+                            executeAutoTapWithHumanDelay("fold", data)
                             Log.d(TAG, "autoDecision执行完成: fold")
                         } else {
                             // 高/中置信自动执行
                             Log.i(TAG, "autoDecision执行: $action (conf=$confidence, eq=$eq%)")
                             updateAdviceNotification("🤖 自动执行: $action", "$reason (eq=$eq%)")
-                            executeAutoTap(action, data)
+                            executeAutoTapWithHumanDelay(action, data)
                             Log.d(TAG, "autoDecision执行完成: $action")
                         }
                     } catch (e: Exception) {
@@ -2882,12 +2779,6 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             builder.setContentIntent(capturePending)
 
-            // 额外操作按钮
-            val voiceIntent = Intent(ACTION_VOICE)
-            val voicePending = PendingIntent.getBroadcast(this, 2, voiceIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            builder.addAction(android.R.drawable.ic_btn_speak_now, "语音", voicePending)
-
             val openIntent = Intent(ACTION_OPEN)
             val openPending = PendingIntent.getBroadcast(this, 3, openIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -2979,12 +2870,6 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                 val capturePending = PendingIntent.getBroadcast(this, 0, captureIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                 builder.setContentIntent(capturePending)
-
-                // 额外操作按钮
-                val voiceIntent = Intent(ACTION_VOICE)
-                val voicePending = PendingIntent.getBroadcast(this, 2, voiceIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-                builder.addAction(android.R.drawable.ic_btn_speak_now, "语音", voicePending)
 
                 val openIntent = Intent(ACTION_OPEN)
                 val openPending = PendingIntent.getBroadcast(this, 3, openIntent,

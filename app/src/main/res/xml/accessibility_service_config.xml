@@ -5,4 +5,4 @@
     android:notificationTimeout="100"
     android:canTakeScreenshot="true"
     android:description="@string/accessibility_service_description"
-    android:settingsActivity="com.pokerhelper.app.MainActivity" />
+    android:settingsActivity="win.opt.view.MainActivity" />

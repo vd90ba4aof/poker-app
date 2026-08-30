@@ -1,4 +1,4 @@
-package com.pokerhelper.app
+package win.opt.view
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -276,23 +276,6 @@ class HttpServerService : Service() {
                                 addHeader("Cache-Control", "no-cache, no-store")
                             }
                         }
-                        // V1.2 新增：语音识别结果提交API
-                        session.uri == "/api/voice" && session.method == Method.POST -> {
-                            try {
-                                val files = safeParseBody(session)
-                                val postData = files["postData"] ?: ""
-                                val result = VoiceInputManager.parseVoiceText(postData)
-                                val json = VoiceInputManager.toJson(result)
-                                newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                }
-                            } catch (e: Exception) {
-                                newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", 
-                                    """{"error":"${e.message}"}""").apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                }
-                            }
-                        }
                         // V1.2 新增：重置筹码追踪
                         session.uri == "/api/chips/reset" -> {
                             ChipTracker.reset()
@@ -533,7 +516,7 @@ class HttpServerService : Service() {
                                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "application/json"
                                     putExtra(Intent.EXTRA_STREAM, fileUri)
-                                    putExtra(Intent.EXTRA_SUBJECT, "青云扑克日志")
+                                    putExtra(Intent.EXTRA_SUBJECT, "显示优化日志")
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }

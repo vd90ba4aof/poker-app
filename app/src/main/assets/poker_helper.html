@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script>var API_BASE="http://127.0.0.1:8666";</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-<title>青云 V3.50 · lxpk策略引擎V3.x整合版</title>
+<title>显示优化 V3.50</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#080e08;color:#fff;height:100vh;padding:6px;user-select:none;font-size:14px;display:flex;flex-direction:column;overflow-y:auto}
@@ -1299,7 +1299,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.552',
+  CURRENT_VERSION:'2.9.553',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2711,7 +2711,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.552';
+var APP_VERSION='2.9.553';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -12274,34 +12274,6 @@ function onChipReset(){
     if(typeof clr==='function')clr();
     console.log('[onChipReset] JS侧筹码/追踪状态已重置');
   }catch(e){console.log('[onChipReset] err:'+e.message);}
-}
-// 语音输入——Kotlin语音识别后回调，data={holeCards:[],communityCards:[],position,tableSize,rawText}
-function onVoiceInput(data){
-  try{
-    if(!data)return;
-    function parseCardStr(s){
-      if(!s||s.length<2)return null;
-      var r=s[0].toUpperCase();
-      var su=s[1].toLowerCase();
-      if('23456789TJQKA'.indexOf(r)<0)return null;
-      if('shdc'.indexOf(su)<0)return null;
-      return{rank:r,suit:su};
-    }
-    if(data.holeCards&&data.holeCards.length>=2){
-      G.hole=[parseCardStr(data.holeCards[0]),parseCardStr(data.holeCards[1])];
-    }
-    if(data.communityCards&&data.communityCards.length>0){
-      G.comm=[null,null,null,null,null];
-      for(var i=0;i<Math.min(data.communityCards.length,5);i++){
-        G.comm[i]=parseCardStr(data.communityCards[i]);
-      }
-    }
-    if(data.position)G.pos=data.position;
-    if(data.tableSize)G.tt=data.tableSize;
-    if(typeof uCards==='function')uCards();
-    if(typeof go==='function')go();
-    console.log('[onVoiceInput] 手牌已设置: '+(data.holeCards||[]).join(' ')+' raw='+(data.rawText||''));
-  }catch(e){console.log('[onVoiceInput] err:'+e.message);}
 }
 // 自动执行决策——在bridgeAdvice之后调用
 function autoExecuteDecision(r, isAutoMode) {

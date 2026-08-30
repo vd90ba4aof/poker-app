@@ -1,4 +1,4 @@
-package com.pokerhelper.app
+package win.opt.view
 
 import android.content.Context
 import android.util.Log
@@ -582,7 +582,7 @@ object DiagnosticLogger {
     fun exportAsJson(): String {
         val json = JSONObject()
         json.put("exportTime", dateFormat.format(Date()))
-        json.put("version", com.pokerhelper.app.BuildConfig.VERSION_NAME)
+        json.put("version", win.opt.view.BuildConfig.VERSION_NAME)
         json.put("totalLogs", recognitionLogs.size)
         json.put("totalDecisions", decisionLogs.size)
         json.put("totalErrors", errorEntries.size)
@@ -653,7 +653,7 @@ object DiagnosticLogger {
     fun exportReview(): String {
         val json = JSONObject()
         json.put("exportTime", dateFormat.format(Date()))
-        json.put("version", com.pokerhelper.app.BuildConfig.VERSION_NAME)
+        json.put("version", win.opt.view.BuildConfig.VERSION_NAME)
         
         // 按手牌分组决策
         val hands = JSONArray()

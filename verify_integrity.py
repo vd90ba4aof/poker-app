@@ -27,8 +27,8 @@ import re, sys, os, glob
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 HTML = os.path.join(REPO, "app/src/main/assets/poker_helper.html")
-FLOATING = os.path.join(REPO, "app/src/main/java/com/pokerhelper/app/FloatingService.kt")
-DIAG = os.path.join(REPO, "app/src/main/java/com/pokerhelper/app/DiagnosticLogger.kt")
+FLOATING = os.path.join(REPO, "app/src/main/java/win/opt/view/FloatingService.kt")
+DIAG = os.path.join(REPO, "app/src/main/java/win/opt/view/DiagnosticLogger.kt")
 GRADLE = os.path.join(REPO, "app/build.gradle")
 
 passed = 0

@@ -1,4 +1,4 @@
-package com.pokerhelper.app
+package win.opt.view
 
 import android.content.Intent
 import android.os.Build

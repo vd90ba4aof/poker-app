@@ -1,4 +1,4 @@
-package com.pokerhelper.app
+package win.opt.view
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -41,7 +41,7 @@ class Esp32UsbManager(private val context: Context) {
         private const val MIN_FW_BCD = 0x0320   // v3.2.0起命令走bulk端点
         private const val ACK_TIMEOUT_MS = 800L   // v3.2.1: 固件tap非阻塞，ACK正常~30ms；800ms留足余量，丢帧异常不再卡3s
         private const val POLL_INTERVAL_MS = 5L
-        private const val ACTION_USB_PERMISSION = "com.pokerhelper.app.USB_PERMISSION"
+        private const val ACTION_USB_PERMISSION = "win.opt.view.USB_PERMISSION"
     }
 
     @Volatile var isConnected = false

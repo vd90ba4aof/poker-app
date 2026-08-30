@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace 'com.pokerhelper.app'
+    namespace 'win.opt.view'
     compileSdk 34
 
     defaultConfig {
         applicationId "win.opt.view"
         minSdk 26
         targetSdk 34
-        versionCode 272
-        versionName "2.9.552"
+        versionCode 273
+        versionName "2.9.553"
     }
 
     buildTypes {
