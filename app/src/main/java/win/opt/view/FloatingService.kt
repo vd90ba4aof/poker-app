@@ -345,14 +345,10 @@ class FloatingService : Service() {
             handler.post {
                 try {
                     Log.i(TAG, "ESP32 USB: connected=$connected, msg=$message")
-                    tvBle?.text = if (connected) "🔗 ${_lastRssi}dBm" else "📡"
-                    tvBle?.setTextColor(if (connected) {
-                        when {
-                            _lastRssi > -50 -> 0xFF4ade80.toInt()
-                            _lastRssi >= -70 -> 0xFFFFEB3B.toInt()
-                            else -> 0xFFFF5252.toInt()
-                        }
-                    } else 0xFFBDBDBD.toInt())
+                    // R10-fix: USB直连没有RSSI概念（Esp32UsbManager.onRssiUpdate为no-op从不回调），
+                    // 旧BLE遗留的"0dBm"显示让豪哥误判信号差；改为显示USB链接状态，连通即绿色
+                    tvBle?.text = if (connected) "🔗 USB" else "📡"
+                    tvBle?.setTextColor(if (connected) 0xFF4ade80.toInt() else 0xFFBDBDBD.toInt())
                     tvStatus?.text = "ESP32: $message"
                     if (connected) {
                         _bleConnectTime = System.currentTimeMillis()
@@ -775,7 +771,7 @@ class FloatingService : Service() {
             floatingBall?.visibility = android.view.View.VISIBLE
         } catch (_: Exception) {}
     }
-    fun onAutoCaptureVisionDone(success:Boolean){val state=pipelineFSM.getCurrentState();when(state){PipelineStateMachine.PipelineState.ERROR_RECOVERY->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)};PipelineStateMachine.PipelineState.STRATEGY_COMPUTING->{};PipelineStateMachine.PipelineState.EXECUTING->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)};else->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)}};if(success)autoConsecutiveErrors=0 else{autoConsecutiveErrors++;checkAutoErrors()};if(success)executeJs("if(typeof FrameDiffEngine!=='undefined')FrameDiffEngine.onAutoFrameDone()");scheduleNextAutoCapture()}  // V3.50: state-aware FSM (Bug#2)
+    fun onAutoCaptureVisionDone(success:Boolean){val state=pipelineFSM.getCurrentState();when(state){PipelineStateMachine.PipelineState.ERROR_RECOVERY->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RECOVERY_DONE)};PipelineStateMachine.PipelineState.STRATEGY_COMPUTING->{};PipelineStateMachine.PipelineState.EXECUTING->{/* R10-fix: verify完成时primary已进入EXECUTING等待tap ACK——若此处抢先转BLE_EXEC_OK→COOLDOWN，tap ACK的EXECUTING→COOLDOWN转换变非法(COOLDOWN无BLE_EXEC_OK)，1.5s收尾调度endCooldownAndScheduleNext丢失，COOLDOWN死锁。EXECUTING→COOLDOWN只能由tap ACK/fallback回调独占 */};else->{pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)}};if(success)autoConsecutiveErrors=0 else{autoConsecutiveErrors++;checkAutoErrors()};if(success)executeJs("if(typeof FrameDiffEngine!=='undefined')FrameDiffEngine.onAutoFrameDone()");scheduleNextAutoCapture()}  // V3.50: state-aware FSM (Bug#2); R10-fix: EXECUTING分支不动FSM
     // V2.9.546: BLE乐观确认已移除——sendTap()同步等ACK，不再需要2s超时
     private fun cancelBleAckTimeout() {
         _bleAckTimeoutRunnable?.let { handler.removeCallbacks(it) }
@@ -1735,6 +1731,13 @@ class FloatingService : Service() {
                         Log.d(TAG, "★ autoDecision收到决策: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq% json=${jsonData.take(200)} | state=${pipelineFSM.getCurrentState()}")
 
                         // R7-fix: 必须校验转换结果——迟到/重复回调时转换非法（状态不变），不得继续点击
+                        // R10-fix: transition()非法时返回的是当前态本身，newState!=EXECUTING判断虽能拦截
+                        //   "不在EXECUTING"，但语义不够硬；显式校验前置态==STRATEGY_COMPUTING，
+                        //   保险起见两道判断并列（RECOGNIZING_LOCAL等态绝不可直接点击）
+                        if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
+                            Log.w(TAG, "★ R7守卫: autoDecision前置态非STRATEGY_COMPUTING(当前=${pipelineFSM.getCurrentState()})，丢弃不点击 action=$action")
+                            return@post
+                        }
                         val newState = pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)  // STRATEGY_COMPUTING→EXECUTING
                         if (newState != PipelineStateMachine.PipelineState.EXECUTING) {
                             Log.w(TAG, "★ R7守卫: autoDecision迟到/重复(当前=$newState)，丢弃不点击 action=$action")
@@ -2681,12 +2684,23 @@ class FloatingService : Service() {
                     Log.d(TAG, "★ 场景数据已缓存: pot=$cachedPotSize toCall=$cachedToCall")
                     // V2.9.207: 移除旧的手牌重置逻辑——handStartTime在executeAutoTap决策后重置，不再这里重置
                     // V2.9.206: 特殊状态处理——Insurance自动拒绝 / 搓牌等待
+                    // R10-fix: verify帧(多帧第二拍)是辅助确认帧——FSM推进/物理点击/等待全部归primary主链路，
+                    // 这里绝不能介入（否则verify截到保险弹窗会发"拒绝保险"物理点击、甚至与主决策双点）
                     val skipStrategyCalc: Boolean = when {
+                        isMultiFrame2 -> {
+                            Log.d(TAG, "★ R10: verify帧跳过特殊状态处理(Insurance/Squeeze)，仅投递JS做共识合并")
+                            false
+                        }
                         result.isInsurance && autoCaptureEnabled -> {
                             Log.d(TAG, "★ Insurance detected, auto-declining")
                             // P0-fix #5: Insurance路径补充FSM流转——STRATEGY_COMPUTING→EXECUTING→COOLDOWN→IDLE
                             // R7-fix(复核): 必须校验转换结果——过期保险帧（FSM已被硬超时/新帧带走）时转换非法，
                             // 绝不发物理点击（与autoDecision的R7守卫一致）
+                            // R10-fix: 显式校验前置态——STRATEGY_READY仅在STRATEGY_COMPUTING合法，
+                            // verify帧已在上方skipStrategyCalc提前分流，此处双保险防任何异常帧误点保险按钮
+                            if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
+                                Log.w(TAG, "★ R7守卫: Insurance前置态非STRATEGY_COMPUTING(当前=${pipelineFSM.getCurrentState()})，跳过自动拒绝点击")
+                            } else {
                             val insState = pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)  // →EXECUTING
                             if (insState != PipelineStateMachine.PipelineState.EXECUTING) {
                                 Log.w(TAG, "★ R7守卫: Insurance过期帧(当前=$insState)，跳过自动拒绝点击")
@@ -2724,6 +2738,7 @@ class FloatingService : Service() {
                                 }
                             }.start()
                             }  // R7-fix: insState==EXECUTING 才点击
+                            }  // R10-fix: 前置态==STRATEGY_COMPUTING 才允许转换
                             true
                         }
                         result.suitUncertain && autoCaptureEnabled -> {
@@ -2744,6 +2759,10 @@ class FloatingService : Service() {
                     val frameTag=when{isMultiFrame2->",_frameTag:'verify'";isMultiFrame1->",_frameTag:'primary'";isAutoCapture->",_frameTag:'auto'";else->""}
                     // V2.9.125: 策略超时保险——8秒超时+灰色等待（非红色FOLD）
                     // 7000+行JS首次加载+MC模拟2-3秒，5秒根本不够
+                    // R10-fix: verify帧不建立策略生命周期——不重置_strategyReceived、不推进代次（会误杀
+                    // primary在途autoDecision的R8比对）、不重挂8s定时器（primary的定时器/26s硬超时继续兜底）。
+                    // verify帧JS端autoCaptureVisionComplete(true)直接return，本就不回调autoDecision。
+                    if (!isMultiFrame2) {
                     _strategyReceived = false
                     // 先取消之前的超时定时器（防止重复截图时叠加）
                     _strategyTimeoutRunnable?.let { handler.removeCallbacks(it) }
@@ -2782,6 +2801,7 @@ class FloatingService : Service() {
                     }
                     _strategyTimeoutRunnable = timeoutRunnable
                     handler.postDelayed(timeoutRunnable, 8000)
+                    }  // R10-fix: !isMultiFrame2 策略生命周期结束（verify帧跳过）
                     handler.post {
                         val taggedJson=if(frameTag.isNotEmpty()) resultJson.dropLast(1)+frameTag+"}" else resultJson
                         // V3.3: 摊牌结果检测 — 记录赢/输到HudLearner (EV闭环)
@@ -2821,9 +2841,23 @@ class FloatingService : Service() {
                         executeJs("(function(){try{if(typeof onVisionResult==='function'){onVisionResult($taggedJson);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.confirmVisionReceived){AndroidBridge.confirmVisionReceived()}}else{console.log('[V2.9.125] onVisionResult不存在,尝试重载HTML');if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:策略引擎未加载');}setTimeout(function(){location.reload();},1000);}}catch(e){console.log('[V2.9.125] onVisionResult异常:'+e.message);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:JS异常:'+e.message.substring(0,30));}}})()")
                         tvAction?.alpha = 1.0f
                         Log.d(TAG, "★ onVisionResult已调用")
-                        // V3.50: API结果已发给JS → 进入策略计算状态
-                        // (之前用isVisionInProgress=false标记完成,现在用FSM精确追踪到STRATEGY_COMPUTING)
-                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.API_RECOG_OK)  // V3.50: RECOGNIZING_API→STRATEGY_COMPUTING
+                        // V3.50: 结果已发给JS → 进入策略计算状态
+                        // R10-fix(2026-08-30豪哥实测三手全部26s硬超时fold): V2.9.541本地CV为主后，
+                        // 截屏成功走的是CAPTURING→RECOGNIZING_LOCAL，此处若发API_RECOG_OK：
+                        //   RECOGNIZING_LOCAL+API_RECOG_OK 为非法转换（转换表只接受LOCAL_RECOG_OK），
+                        //   FSM卡在RECOGNIZING_LOCAL → JS回autoDecision时STRATEGY_READY非法被R7守卫丢弃
+                        //   → 决策到了也不点击、不取消26s硬超时 → 每手都被误fold。
+                        // 修复：按当前FSM状态选择合法事件（RECOGNIZING_LOCAL→LOCAL_RECOG_OK / RECOGNIZING_API→API_RECOG_OK；
+                        //       verify帧时FSM已在分析/执行态，两事件均非法→保持不变，符合verify不驱动主FSM设计）
+                        val preStrategyState = pipelineFSM.getCurrentState()
+                        when (preStrategyState) {
+                            PipelineStateMachine.PipelineState.RECOGNIZING_LOCAL ->
+                                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.LOCAL_RECOG_OK)   // →STRATEGY_COMPUTING
+                            PipelineStateMachine.PipelineState.RECOGNIZING_API ->
+                                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.API_RECOG_OK)     // →STRATEGY_COMPUTING
+                            else ->
+                                Log.d(TAG, "★ R10: 跳过→STRATEGY_COMPUTING转换(当前=$preStrategyState，verify帧/重复帧)")
+                        }
                         autoConsecutiveErrors = 0
                         // V2.9.70: 正常识别→停止闪烁
                         isBlinkingError = false
