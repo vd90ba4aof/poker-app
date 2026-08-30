@@ -10754,6 +10754,8 @@ function detectSceneFromButtons(buttons, street, activePlayers) {
 // V1.3: API视觉识别结果回调 - 自动填入牌面+策略分析
 function onVisionResult(data){
   var _tVisionStart=Date.now();
+  // [REV4_DIAG] onVisionResult入口原始数据快照
+  if(data){console.log("[onVisionResult_DIAG_ENTRY] _frameTag="+(data._frameTag||'none')+" pot_size="+data.pot_size+" my_chips="+data.my_chips+" to_call="+data.to_call+" blind_bb="+data.blind_bb+" blind_sb="+data.blind_sb+" is_poker_table="+data.is_poker_table+" hole_cards="+JSON.stringify(data.hole_cards||null));}
   // V2.9.153: Layer1+3
   if(data&&data.is_poker_table!==false&&data.hole_cards&&data.hole_cards.length>=2){var _pv=PostValidation.runAll(data);if(_pv.length>0)console.log('[V2.9.153PV]'+_pv.length);}
   var _ft=data?(data._frameTag||'manual'):'manual';
@@ -11105,6 +11107,8 @@ function onVisionResult(data){
       console.log('[盲注降级] BB='+bbValue+' (从筹码推算，不精确，待锁存)');
     }
   }
+  // [REV4_DIAG] bbValue计算完成后的快照
+  console.log("[bbValue_DIAG] final_bbValue="+bbValue+" data.blind_bb="+data.blind_bb+" data.blind_sb="+data.blind_sb+" G._lockedBB="+(G._lockedBB||'undef')+" data.my_chips="+data.my_chips);
   // V2.9.48: 保存Vision原始值用于调试日志
   window._lastVisionPot=parseInt(data.pot_size)||0;
   window._lastVisionChips=parseInt(data.my_chips)||0;
@@ -11444,6 +11448,9 @@ function onVisionResult(data){
   // 6. 更新UI
   // V2.9.527 FIX: ★ 致命缺口修复 - 将API识别的原始chips值转换为BB赋给策略引擎 ★
   // Android端传的是原始chips，策略引擎用的是BB单位，必须转换否则翻后决策全错
+  // [REV4_DIAG] 进入V2.9.527块前的状态快照
+  console.log("[V2.9.527_DIAG_ENTER] pot_before="+G.pot+" stk_before="+G.stk+" bet_before="+G.bet+" bbValue="+bbValue+" data.pot_size="+data.pot_size+" data.my_chips="+data.my_chips+" data.to_call="+data.to_call+" data.blind_bb="+data.blind_bb+" data.blind_sb="+data.blind_sb+" G._lockedBB="+(G._lockedBB||'undef'));
+  try {
   if(bbValue>0){
     var _rawPot=parseInt(data.pot_size)||0;
     var _rawChips=parseInt(data.my_chips)||0;
@@ -11452,7 +11459,14 @@ function onVisionResult(data){
     if(_rawChips>0){ G.stk=Math.round(_rawChips/bbValue); }
     if(_rawBet>0){ G.bet=Math.round(_rawBet/bbValue); }
     console.log("[V2.9.527 数据链路修复] bbValue="+bbValue+" pot: "+_rawPot+"chips→"+G.pot+"BB | stk: "+_rawChips+"chips→"+G.stk+"BB | bet: "+_rawBet+"chips→"+G.bet+"BB");
+  } else {
+    console.log("[V2.9.527_DIAG_SKIP] bbValue<=0, 块被跳过! bbValue="+bbValue);
   }
+  } catch(_v29527err) {
+    console.log("[V2.9.527_DIAG_EXCEPTION] "+_v29527err.message+" stack="+_v29527err.stack);
+  }
+  // [REV4_DIAG] V2.9.527块后的状态快照
+  console.log("[V2.9.527_DIAG_EXIT] pot_after="+G.pot+" stk_after="+G.stk+" bet_after="+G.bet);
 
   uCards();
   

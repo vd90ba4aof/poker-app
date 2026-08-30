@@ -802,11 +802,13 @@ class FloatingService : Service() {
             // R1守卫1：自动已关（用户暂停）→ 不点
             if (!autoCaptureEnabled) {
                 Log.w(TAG, "★ R1守卫: 延迟点击触发时自动已关，放弃 $action")
+                try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.MEDIUM, "R1守卫拦截: 延迟点击时自动已关", "action=$action") } catch (_: Exception) {}
                 return@Runnable
             }
             // R1守卫2：FSM不在EXECUTING（已被硬超时fold/超时重置/错误恢复带走）→ 不点
             if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.EXECUTING) {
                 Log.w(TAG, "★ R1守卫: 延迟点击触发时FSM=${pipelineFSM.getCurrentState()}非EXECUTING，放弃 $action")
+                try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.MEDIUM, "R1守卫拦截: 延迟点击时FSM=${pipelineFSM.getCurrentState()}非EXECUTING", "action=$action") } catch (_: Exception) {}
                 return@Runnable
             }
             executeAutoTap(action, decisionData)
@@ -943,6 +945,7 @@ class FloatingService : Service() {
                         // R4-fix: 后台等待期间状态可能已变（停自动/新帧接管），非EXECUTING则丢弃结果
                         if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.EXECUTING) {
                             Log.w(TAG, "★ R4守卫: tap($tapAction)回主线程时FSM=${pipelineFSM.getCurrentState()}非EXECUTING，丢弃ACK结果")
+                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.MEDIUM, "R4守卫拦截: tap回主线程时FSM=${pipelineFSM.getCurrentState()}非EXECUTING", "tapAction=$tapAction x=$x y=$y") } catch (_: Exception) {}
                             return@post
                         }
                         _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
@@ -1736,16 +1739,19 @@ class FloatingService : Service() {
                         //   保险起见两道判断并列（RECOGNIZING_LOCAL等态绝不可直接点击）
                         if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
                             Log.w(TAG, "★ R7守卫: autoDecision前置态非STRATEGY_COMPUTING(当前=${pipelineFSM.getCurrentState()})，丢弃不点击 action=$action")
+                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "R7守卫拦截: 前置态非STRATEGY_COMPUTING(当前=${pipelineFSM.getCurrentState()})", "action=$action") } catch (_: Exception) {}
                             return@post
                         }
                         val newState = pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)  // STRATEGY_COMPUTING→EXECUTING
                         if (newState != PipelineStateMachine.PipelineState.EXECUTING) {
                             Log.w(TAG, "★ R7守卫: autoDecision迟到/重复(当前=$newState)，丢弃不点击 action=$action")
+                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "R7守卫拦截: 转换结果非EXECUTING(当前=$newState)", "action=$action") } catch (_: Exception) {}
                             return@post
                         }
                         // R8-fix: FSM进入EXECUTING后再查代次——属于已作废旧帧（超时恢复已推进代次）则RESET回去并丢弃
                         if (gen != _strategyGeneration) {
                             Log.w(TAG, "★ R8守卫: autoDecision代次过期($gen!=$_strategyGeneration)，丢弃 action=$action")
+                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "R8守卫拦截: 代次过期($gen!=$_strategyGeneration)", "action=$action") } catch (_: Exception) {}
                             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
                             return@post
                         }
