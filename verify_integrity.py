@@ -1074,6 +1074,91 @@ else:
 # ============================================================
 print()
 print("=" * 60)
+print("🔍 检查9: ESP32固件 HID 触摸描述符防回归（v3.2.2根因）")
+print("=" * 60)
+
+FW_MAIN = os.path.join(REPO, "esp32-firmware/src/main_usb.cpp")
+if os.path.exists(FW_MAIN):
+    fw = read(FW_MAIN)
+    fw_code = strip_strings_and_comments(fw)
+
+    # 提取 touch_report_descriptor[] 数组里的十六进制字面量字节（花括号配对，数组内无嵌套}）
+    dm = re.search(r'touch_report_descriptor\s*\[\s*\]\s*=\s*\{', fw)
+    desc_bytes = []
+    desc_ok = True
+    if dm:
+        body_start = dm.end()
+        body_end = re.search(r'\n\s*\}\s*;', fw[body_start:]).start() + body_start
+        body = fw[body_start:body_end]
+        # 先按行剥除//注释（注释里可能含逗号，如"Collection (Application)"），再切token
+        code_lines = [ln.split('//')[0] for ln in body.split('\n')]
+        code_body = '\n'.join(code_lines)
+        for tok in code_body.split(','):
+            tok = tok.strip()
+            if not tok:
+                continue
+            mb = re.fullmatch(r'0x([0-9A-Fa-f]{1,2})', tok)
+            if mb:
+                desc_bytes.append(int(mb.group(1), 16))
+            else:
+                desc_ok = False  # 数组里出现宏/表达式，静态校验无法保证字节布局
+    desc = bytes(desc_bytes)
+
+    check("HID描述符数组可静态解析（全0x字面量，无宏/表达式）", dm is not None and desc_ok and len(desc) > 0,
+          "数组含宏或表达式，防回归断言失效" if dm else "未找到touch_report_descriptor数组")
+
+    # v3.2.1根因：Vendor Feature段(06 00 FF)导致Android不注册触摸设备
+    check("HID描述符无Vendor Feature段(0x06,0x00,0xFF)——v3.2.1触摸失效根因，禁止回归",
+          dm is not None and bytes([0x06, 0x00, 0xFF]) not in desc,
+          "发现Vendor Defined Usage Page段，Android将不注册触摸设备")
+    check("HID描述符无Feature Report item(0xB1)",
+          dm is not None and 0xB1 not in desc,
+          "发现Feature item，命令通道必须走Vendor bulk端点而非HID Feature")
+    check("HID描述符无Report ID声明(0x85)",
+          dm is not None and 0x85 not in desc,
+          "发现Report ID声明，触摸报告必须id=0无ID前缀（复刻v1.0.31）")
+
+    # 描述符必须以Digitizer TouchScreen开头、双C0收尾
+    check("HID描述符开头为Digitizer/TouchScreen(05 0D 09 04 A1 01)",
+          desc[:6] == bytes([0x05, 0x0D, 0x09, 0x04, 0xA1, 0x01]),
+          f"实际开头: {desc[:6].hex(' ')}")
+    check("HID描述符以双End Collection(C0 C0)收尾",
+          desc[-2:] == bytes([0xC0, 0xC0]),
+          f"实际结尾: {desc[-2:].hex(' ')}")
+
+    # v1.0.31实测可工作的描述符为68字节
+    check("HID描述符长度=68字节（与实测触摸生效的v1.0.31一致）",
+          len(desc) == 68, f"实际{len(desc)}字节")
+
+    # 触摸报告发送方式：必须id=0整发（id≠0库会前置ID字节，与无Report ID描述符错位）
+    send_calls = re.findall(r'\.SendReport\s*\(\s*([^,]+?),', fw_code)
+    check("触摸报告SendReport第一参数为0（无ID前缀发送）",
+          len(send_calls) > 0 and all(a.strip() == '0' for a in send_calls),
+          f"SendReport调用参数: {send_calls}")
+
+    # TouchReport结构体不得含report_id字段
+    check("TouchReport结构体无report_id字段",
+          not re.search(r'struct\s+__attribute__\(\(packed\)\)\s+TouchReport\s*\{[^}]*report_id', fw, re.S),
+          "结构体残留report_id字段，发送字节布局将错位")
+
+    # 死回调/死宏不得复活
+    check("无_onSetFeature/_onGetFeature死回调（命令通道已走bulk）",
+          '_onSetFeature' not in fw_code and '_onGetFeature' not in fw_code,
+          "HID Feature回调残留")
+    check("无REPORT_ID_TOUCH/REPORT_ID_COMMAND死宏",
+          'REPORT_ID_TOUCH' not in fw_code and 'REPORT_ID_COMMAND' not in fw_code,
+          "Report ID宏残留")
+
+    # bulk命令通道关键符号必须在位（防修HID时误伤）
+    for sym in ['vendorIface', 'vendorRxBuf', 'respVendor', 'bulkRespPending',
+                'cmdBuf', 'respBuf', 'cmdPending', 'respReady', 'setResponse']:
+        check(f"bulk命令通道符号 '{sym}' 保留", sym in fw_code, "修HID时误删bulk通道代码")
+else:
+    check("固件main_usb.cpp存在", False, f"未找到 {FW_MAIN}")
+
+# ============================================================
+print()
+print("=" * 60)
 total = passed + failed
 print(f"📊 验证结果: {passed}/{total} 通过, {failed} 失败, {warnings} 警告")
 print("=" * 60)

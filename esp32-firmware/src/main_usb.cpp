@@ -49,7 +49,9 @@
 // ============================================================================
 // 常量
 // ============================================================================
-#define FW_VERSION "v3.2.1"  // v3.2.1: tap非阻塞化（down即ACK，up由loop补发），连发吞吐~5ms/个
+#define FW_VERSION "v3.2.2"  // v3.2.2: HID触摸描述符复刻v1.0.31（删Vendor Feature段/Report ID，
+                            //         报告id=0无ID前缀发送）——修复Android不注册触摸设备导致点击不生效
+                            // v3.2.1: tap非阻塞化（down即ACK，up由loop补发），连发吞吐~5ms/个
                             // v3.2.0: 命令通道走Vendor接口bulk端点（官方example主数据流）
                             // v3.1.0: Vendor EP0控制传输(0x41/0xC1)实测黑洞（枚举/claim/bcd正常，
                             //         控制传输OUT即失败、IN无响应、回调不触发），弃用
@@ -62,23 +64,20 @@
 #define JITTER_PX  5
 #define JITTER_MS  20
 
-// Report IDs（HID触摸屏接口；Report ID 2 Feature仅保留描述符兼容，v3.1.0起不再使用）
-#define REPORT_ID_TOUCH    0x01
-#define REPORT_ID_COMMAND  0x02
+// v3.2.2: HID触摸描述符不再声明任何Report ID（复刻v1.0.31，触摸报告id=0发送）。
+// 命令通道自v3.2.0起完全走Vendor接口bulk端点，HID Feature Report已删除。
 #define VENDOR_FRAME_SIZE  64   // bulk端点定长帧：64字节
-#define CMD_BUF_SIZE       63   // 命令文本上限63字节（bulk帧64字节，文本从[0]起）；HID report同为63
+#define CMD_BUF_SIZE       63   // 命令文本上限63字节（bulk帧64字节，文本从[0]起）
 
 // ============================================================================
 // HID 报告描述符
-// 单接口触摸屏 + 一个Feature Report（伪装成vendor配置页）
+// v3.2.2: 单接口触摸屏（复刻v1.0.31——当年实测Android触摸注入生效的版本）
 // ============================================================================
 static const uint8_t touch_report_descriptor[] = {
-    // ===== Report ID 1: 触摸屏输入（与v1.0.39~v2.0.0完全一致） =====
+    // ===== 触摸屏输入报告（无Report ID声明，报告id=0发送；与v1.0.31固件二进制逐字节一致） =====
     0x05, 0x0D,             // Usage Page (Digitizers)
     0x09, 0x04,             // Usage (Touch Screen)
     0xA1, 0x01,             // Collection (Application)
-
-    0x85, REPORT_ID_TOUCH,  //   Report ID (1)
 
     0x09, 0x22,             //   Usage (Finger)
     0xA1, 0x02,             //   Collection (Logical)
@@ -115,19 +114,6 @@ static const uint8_t touch_report_descriptor[] = {
     0x81, 0x02,
 
     0xC0,                   //   End Collection (Logical)
-
-    // ===== Report ID 2: Feature Report（双向命令通道，vendor-defined配置） =====
-    // 对外看起来像触摸屏的厂商配置/校准数据通道，工业触摸屏常见做法
-    // SET_REPORT(Feature) = 手机写命令；GET_REPORT(Feature) = 手机读ACK
-    0x06, 0x00, 0xFF,       //   Usage Page (Vendor Defined 0xFF00)
-    0x85, REPORT_ID_COMMAND,//   Report ID (2)
-    0x09, 0x01,             //   Usage (Vendor 1)
-    0x15, 0x00,
-    0x26, 0xFF, 0x00,
-    0x75, 0x08,
-    0x95, CMD_BUF_SIZE,     //   63 bytes
-    0xB1, 0x02,             //   Feature (Data,Var,Abs)
-
     0xC0                    // End Collection (Application)
 };
 
@@ -135,12 +121,11 @@ static const uint8_t touch_report_descriptor[] = {
 // 数据结构
 // ============================================================================
 struct __attribute__((packed)) TouchReport {
-    uint8_t  report_id;
     uint8_t  contact_id;
     uint8_t  flags;
     uint16_t x;
     uint16_t y;
-};
+};  // v3.2.2: 6字节无report_id前缀——描述符未声明Report ID，SendReport(0,...)不前置ID字节
 
 // 命令/响应缓冲区（由USB ISR和main loop共享）
 static volatile uint8_t cmdBuf[CMD_BUF_SIZE + 1];  // +1 for null
@@ -200,62 +185,12 @@ public:
         return sizeof(touch_report_descriptor);
     }
 
-    // 主机通过SET_REPORT(Feature)发送命令：report_id=2
-    // 运行在TinyUSB回调上下文（main task），可以安全使用critical section
-    // 注意：TinyUSB在调用前已剥除report ID前缀（hid_device.c SET_REPORT分支：
-    // report_id==report_buf[0]时report_buf++/report_len--），
-    // 因此buffer首字节即命令文本，len为文本长度（不含report ID前缀）
-    void _onSetFeature(uint8_t report_id, const uint8_t* buffer, uint16_t len) override {
-        if (report_id != REPORT_ID_COMMAND || len == 0) return;
-
-        portENTER_CRITICAL(&cmdMux);
-        size_t copyLen = len < CMD_BUF_SIZE ? len : CMD_BUF_SIZE;
-        memcpy((void*)cmdBuf, buffer, copyLen);
-        ((uint8_t*)cmdBuf)[copyLen] = 0;
-        cmdPending = true;
-        respReady = false;
-        memset((void*)respBuf, 0, CMD_BUF_SIZE + 1);
-        portEXIT_CRITICAL(&cmdMux);
-
-        Serial.printf("[USB-CMD] RX(%d): %s\n", (int)copyLen, (const char*)cmdBuf);
-    }
-
-    // 主机通过GET_REPORT(Feature)读取ACK：report_id=2
-    // ★字节布局契约（TinyUSB hid_device.c GET_REPORT分支）：
-    //   TinyUSB已在响应首字节填入report ID（*report_buf++ = report_id; xferlen++），
-    //   本回调写入的buffer[0]对应主机收到的第2字节，reqlen已减去1字节前缀。
-    //   主机(App)最终收到：[0]=report ID(2, TinyUSB填), [1]=状态字节, [2:]=响应文本
-    // 返回写入buffer的payload字节数（不含report ID前缀）
-    uint16_t _onGetFeature(uint8_t report_id, uint8_t* buffer, uint16_t reqlen) override {
-        if (report_id != REPORT_ID_COMMAND) return 0;
-
-        uint16_t respLen = 1;  // payload至少1字节状态
-        portENTER_CRITICAL(&cmdMux);
-        if (respReady) {
-            // respBuf[1]=状态字节('O'成功/'E'错误), respBuf[2:]=响应文本
-            size_t textLen = strlen((const char*)respBuf + 2);
-            if (reqlen < 1) {
-                respLen = 0;  // 不可能发生：TinyUSB保证req_len>1才调用
-            } else {
-                if (textLen + 1 > reqlen) textLen = reqlen - 1;
-                buffer[0] = respBuf[1];
-                memcpy(buffer + 1, (const void*)(respBuf + 2), textLen);
-                respLen = (uint16_t)(1 + textLen);
-            }
-        } else if (cmdPending) {
-            buffer[0] = 'P';  // processing，命令还在执行
-        } else {
-            buffer[0] = 'I';  // idle，无待处理命令
-        }
-        portEXIT_CRITICAL(&cmdMux);
-        return respLen;
-    }
-
     bool sendTouchReport(const TouchReport& r) {
         yield();
         if (!hid.ready()) { _failCount++; _lastFailReason = "not_ready"; return false; }
         for (int retry = 0; retry < 5; retry++) {
-            if (hid.SendReport(REPORT_ID_TOUCH, (const uint8_t*)&r + 1, sizeof(r) - 1)) return true;
+            // v3.2.2: id=0——描述符无Report ID声明，库不前置ID字节；6字节整发（复刻v1.0.31）
+            if (hid.SendReport(0, (const uint8_t*)&r, sizeof(r))) return true;
             delay(5); yield();
         }
         _failCount++; _lastFailReason = "send_failed";
@@ -264,7 +199,6 @@ public:
 
     bool touchDown(uint16_t sx, uint16_t sy) {
         TouchReport r = {};
-        r.report_id = REPORT_ID_TOUCH;
         r.contact_id = 1;
         r.flags = 0x03;
         r.x = (uint16_t)((uint32_t)sx * HID_MAX / SCREEN_WIDTH);
@@ -273,7 +207,6 @@ public:
     }
     bool touchUp() {
         TouchReport r = {};
-        r.report_id = REPORT_ID_TOUCH;
         r.contact_id = 1;
         r.flags = 0x00;
         return sendTouchReport(r);
@@ -336,13 +269,18 @@ static uint8_t respVendor[VENDOR_FRAME_SIZE];
 static volatile bool bulkRespPending = false;  // respVendor有帧待发（IN FIFO满时loop重试）
 
 // ============================================================================
-// （历史）Feature Report 命令通道说明 —— v3.1.0起命令走Vendor接口（v3.2.0走
-// bulk端点，见上方注释）。
-// HID描述符中的Report ID 2 Feature保留在描述符中（不影响枚举，系统不会访问），
-// _onSetFeature/_onGetFeature override 必须保留（虚函数实现，否则编译失败），
-// 但运行期不会再被主机调用。
-// arduino-esp32 2.0.x的USBHID后端把tud_hid_set_report_cb/tud_hid_get_report_cb
-// 定义为强符号，内部按report ID路由到USBHIDDevice的_onSetFeature/_onGetFeature。
+// v3.2.2 根因记录（教训：历史已修好的坑不得在重写时回归）
+// v3.0.2 曾用 HID Feature Report 做命令通道，描述符里加了 Vendor 页
+// (0x06,0x00,0xFF) + Report ID 2 的 63 字节 Feature 段；v3.2.0 命令通道
+// 迁至 Vendor 接口 bulk 端点后该段未拆，当时注释误判"不影响枚举，系统不会
+// 访问"。实测（v3.2.1，2026-08-30）：bulk 命令通道全通、fails=0、SendReport
+// 返回 true，但 Android 不把 if0 注册为触摸输入设备，触摸注入完全不生效。
+// 机理：Android 枚举触摸设备时 GET_REPORT 访问 Feature，arduino-esp32 2.0.8
+// USBHID 后端 tinyusb_get_device_by_report_id() 未匹配返回 NULL → 回调返回0
+// → TinyUSB STALL，设备注册失败。v1.0.31 描述符无此段、无 Report ID 声明，
+// 当年实测触摸注入正常。v3.2.2 已复刻 v1.0.31：描述符 68 字节纯净触摸段、
+// 报告 id=0 发送、_onSetFeature/_onGetFeature 死回调删除。
+// bulk 命令通道（if1, Vendor class）与 HID 描述符无关，零改动。
 // ============================================================================
 // 命令处理（在main loop中执行，不阻塞USB ISR）
 // ============================================================================
@@ -510,7 +448,7 @@ void setup() {
     USB.manufacturerName("QingYun");
     USB.productName("QingYun Touch Screen");
     USB.serialNumber("QY000001");
-    USB.firmwareVersion(0x0321);  // v3.2.1 bcdDevice=0x0321（tap非阻塞；App门槛0x0320不变，兼容v3.2.0）
+    USB.firmwareVersion(0x0322);  // v3.2.2 bcdDevice=0x0322（HID触摸描述符复刻v1.0.31；App门槛0x0320不变，兼容v3.2.0起bulk协议）
     touchpad.begin();
     USB.begin();
 
