@@ -60,6 +60,9 @@ class Esp32UsbManager(private val context: Context) {
     private var epIn: android.hardware.usb.UsbEndpoint? = null
     private val running = AtomicBoolean(false)
     private val receiverRegistered = AtomicBoolean(false)
+    // R5-fix: bulk收发统一串行化锁——sendTapFast(不等ACK)与sendTap(等ACK)共用端点，
+    // 不加锁会导致残留ok帧被下次ACK误读（ACK张冠李戴）
+    private val ioLock = Any()
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -335,10 +338,14 @@ class Esp32UsbManager(private val context: Context) {
      * 返回 >=1 = 收到帧，[0]=状态字节('O'/'E')，[1:]=响应文本（null截断）。
      */
     fun sendCommandWaitAck(cmd: String, timeoutMs: Long): String? {
+        // R5-fix: 全程持ioLock——发命令+等ACK原子化，防止fast tap残留帧串扰
+        synchronized(ioLock) {
         if (!sendCommandOnly(cmd)) return null
 
         val conn = connection ?: return null
         val inEp = epIn ?: return null
+        // R5-fix: 发送本命令前，读空IN端点残留帧（上一批sendTapFast的ok响应）
+        drainInputPipe(conn, inEp)
         val deadline = System.currentTimeMillis() + timeoutMs
         val buf = ByteArray(FRAME_SIZE)
         var diagCount = 0
@@ -371,12 +378,30 @@ class Esp32UsbManager(private val context: Context) {
         }
         Log.w(TAG, "ACK timeout: in_timeouts=$timeoutCount polled=$diagCount cmd=${cmd.take(20)}")
         return null
+        } // synchronized(ioLock)
+    }
+
+    /**
+     * R5-fix: 读空IN端点残留帧（非阻塞，10ms超时，无数据立即返回）
+     * 用于sendTapFast连发后清管道，防止残留ok帧被下次sendTap误当ACK
+     */
+    private fun drainInputPipe(conn: UsbDeviceConnection, inEp: android.hardware.usb.UsbEndpoint) {
+        val buf = ByteArray(FRAME_SIZE)
+        var drained = 0
+        while (drained < 32) {  // 上限32帧，防异常固件刷屏
+            val r = conn.bulkTransfer(inEp, buf, FRAME_SIZE, 10)
+            if (r < 1) break
+            drained++
+        }
+        if (drained > 0) Log.d(TAG, "R5 drainInputPipe: 清掉残留帧$drained")
     }
 
     /**
      * 只发送命令不等ACK（快速连续点击用）
      */
     fun sendCommandOnly(cmd: String): Boolean {
+        // R5-fix: OUT发送也串行化，避免与sendCommandWaitAck的IN轮询并发
+        synchronized(ioLock) {
         val conn = connection ?: return false
         if (!isConnected) return false
         val outEp = epOut ?: return false
@@ -396,6 +421,7 @@ class Esp32UsbManager(private val context: Context) {
         }
         Log.d(TAG, "TX: $cmd (sent=$r)")
         return true
+        } // synchronized(ioLock)
     }
 
     /**
@@ -425,7 +451,15 @@ class Esp32UsbManager(private val context: Context) {
     }
 
     private fun closeConnection() {
-        try { connection?.releaseInterface(device?.getInterface(interfaceIndex)) } catch (_: Exception) {}
+        // R9-4-fix: interfaceIndex=-1时getInterface(-1)会抛异常导致release被跳过，先判下标
+        try {
+            val conn = connection
+            val dev = device
+            val idx = interfaceIndex
+            if (conn != null && dev != null && idx >= 0) {
+                conn.releaseInterface(dev.getInterface(idx))
+            }
+        } catch (e: Exception) { Log.w(TAG, "releaseInterface异常: ${e.message}") }
         try { connection?.close() } catch (_: Exception) {}
         connection = null
         device = null

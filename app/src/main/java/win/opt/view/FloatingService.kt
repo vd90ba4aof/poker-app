@@ -147,6 +147,11 @@ class FloatingService : Service() {
     private var _strategyTimeoutRunnable: Runnable? = null  // V2.9.125: 策略超时定时器引用
     // V2.9.207: Shot Clock硬超时定时器——16秒强制弃牌（比SHOT_CLOCK_TIMEOUT早2秒，留缓冲）
     private var _shotClockRunnable: Runnable? = null
+    // R1-fix: 拟人延迟点击Runnable引用——延迟窗口(600-2200ms)内停自动/硬超时fold/重初始化时必须撤销，
+    // 否则"停自动后仍点击""超时fold后迟到Runnable双点"
+    private var _pendingTapRunnable: Runnable? = null
+    // R8-fix: 策略回调代次——策略超时恢复后迟到的showAdvice/autoDecision不再生效，消除竞态跳帧
+    @Volatile private var _strategyGeneration = 0L
     // P0-fix #6: 截屏超时兜底——MediaProjection不回调时强制恢复
     private var _screenshotTimeoutRunnable: Runnable? = null
     // V2.9.547: 保留变量仅用于cancelBleAckTimeout()安全清理（USB同步ACK后不再schedule）
@@ -454,21 +459,29 @@ class FloatingService : Service() {
     }
 
     private fun reinitializeComponents() {
-        // R6-fix: 先标记WebView不可用，阻断旧回调的JS调用
+        // R1-fix: 重初始化时撤销所有在途延迟点击/策略回调，旧管线对象全部作废
+        cancelPendingTap()
+        _strategyGeneration++
+        _shotClockRunnable?.let { handler.removeCallbacks(it) }
+        _shotClockRunnable = null
+        _strategyTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        _strategyTimeoutRunnable = null
+        // R3-fix: 必须先stop旧USB管理器——注销旧usbReceiver+释放旧连接，
+        // 否则双接收器注册、双连接claim抢占、ACK串扰
+        try { bleManager?.stop() } catch (_: Exception) {}
+        bleManager = null
+
+        // R6-fix(本次复核): reinit由onStartCommand在showFloatingWindow()之后调用，
+        // WebView是刚重建的新实例，绝不能destroy置null（否则全文件无第二处创建，策略引擎永久空白）。
+        // 旧WebView（若View树已被系统拆）已被showFloatingWindow的新实例替代；这里仅阻断旧回调入队。
         webViewReady = false
-        // P1-R3-3: 先销毁旧WebView，防止内存泄漏和双重回调
-        try {
-            webView?.let { oldWv ->
-                oldWv.stopLoading()
-                oldWv.removeJavascriptInterface("AndroidBridge")
-                oldWv.webViewClient = android.webkit.WebViewClient()
-                oldWv.destroy()
-            }
-        } catch (_: Exception) {}
-        webView = null
         // R6-fix: 清空待发送JS队列，防止旧回调触发后执行已失效的JS
         synchronized(pendingJsCalls) { pendingJsCalls.clear() }
-        
+        // R9-8-fix: 新WebView重试计数归零，防止旧计数耗尽后新页面一次失败就判崩溃
+        _webViewRetryCount = 0
+        // 若WebView存在（新实例），重新加载策略页面确保内容就绪
+        try { webView?.loadUrl("https://appassets.androidplatform.net/assets/poker_helper.html") } catch (_: Exception) {}
+
         // P1-fix: 先反注册再重新注册，防止重复注册导致IllegalArgumentException
         try { unregisterReceiver(notificationReceiver) } catch (_: Exception) {}
         try {
@@ -683,7 +696,7 @@ class FloatingService : Service() {
         }
     }
     private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; pipelineFSM.reset(); autoCaptureInterval=4000L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture() }
-    private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; _screenshotTimeoutRunnable?.let{handler.removeCallbacks(it)}; _screenshotTimeoutRunnable=null; _bleAckTimeoutRunnable?.let{handler.removeCallbacks(it)}; _bleAckTimeoutRunnable=null; _screenshotGate.set(false); handStartTime=0; pipelineFSM.reset(); executeJs("if(typeof disableAutoExec==='function')disableAutoExec()") }
+    private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; _screenshotTimeoutRunnable?.let{handler.removeCallbacks(it)}; _screenshotTimeoutRunnable=null; _bleAckTimeoutRunnable?.let{handler.removeCallbacks(it)}; _bleAckTimeoutRunnable=null; cancelPendingTap(); _screenshotGate.set(false); handStartTime=0; latestButtonPositions=emptyList(); cachedPotSize=0; cachedToCall=0; cachedMinRaise=0; pipelineFSM.reset(); executeJs("if(typeof disableAutoExec==='function')disableAutoExec()") }  // R1-fix: cancelPendingTap撤销延迟点击; R9-7-fix: 清空场景缓存
     private fun scheduleNextAutoCapture() {
         if(!autoCaptureEnabled)return; autoCaptureRunnable?.let{handler.removeCallbacks(it)}
         val r=Runnable{if(!autoCaptureEnabled)return@Runnable;if(pipelineFSM.isPipelineActive()){scheduleNextAutoCapture();return@Runnable};val pm=getSystemService(Context.POWER_SERVICE)as PowerManager;if(!pm.isScreenOn){scheduleNextAutoCapture();return@Runnable};autoCaptureTrigger()}
@@ -772,10 +785,34 @@ class FloatingService : Service() {
     }
     // V2.9.180: 全自动执行tap——根据action匹配按钮坐标并发送到ESP32
     // v2.9.553 防检测: 拟人随机延迟600-2200ms——真人看到决策再动手的反应时间，打散操作节奏
+    // R1-fix: Runnable持引用，触发时刻再校验生命周期/FSM——延迟窗口内状态变化（停自动/
+    // 硬超时fold/重初始化/决策迟到）则放弃点击，杜绝"停自动后仍点"和"fold后双点"
+    private fun cancelPendingTap() {
+        _pendingTapRunnable?.let { handler.removeCallbacks(it) }
+        _pendingTapRunnable = null
+    }
+
     private fun executeAutoTapWithHumanDelay(action: String, decisionData: org.json.JSONObject) {
         val humanDelay = (600 + Math.random() * 1600).toLong()
+        // 新决策入队前，先撤掉上一个尚未触发的延迟点击（同一时刻只允许一个pending tap）
+        cancelPendingTap()
+        val r = Runnable {
+            _pendingTapRunnable = null
+            // R1守卫1：自动已关（用户暂停）→ 不点
+            if (!autoCaptureEnabled) {
+                Log.w(TAG, "★ R1守卫: 延迟点击触发时自动已关，放弃 $action")
+                return@Runnable
+            }
+            // R1守卫2：FSM不在EXECUTING（已被硬超时fold/超时重置/错误恢复带走）→ 不点
+            if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.EXECUTING) {
+                Log.w(TAG, "★ R1守卫: 延迟点击触发时FSM=${pipelineFSM.getCurrentState()}非EXECUTING，放弃 $action")
+                return@Runnable
+            }
+            executeAutoTap(action, decisionData)
+        }
+        _pendingTapRunnable = r
         Log.d(TAG, "[HumanDelay] ${action} 延迟${humanDelay}ms后执行")
-        handler.postDelayed({ executeAutoTap(action, decisionData) }, humanDelay)
+        handler.postDelayed(r, humanDelay)
     }
 
     private fun executeAutoTap(action: String, decisionData: org.json.JSONObject) {
@@ -897,22 +934,33 @@ class FloatingService : Service() {
                     DiagnosticLogger.logEsp32Tap(action, x, y, targetBtn.text.toString(), "sendTap")
                 } catch (_: Exception) {}
                 // V2.9.546: 同步等ACK，确认ESP32真的执行了HID点击
-                val tapOk = bleManager?.sendTap(x, y, 50) ?: false
-                _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
-                _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
-                _pipelineLastAction = action
-                try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, action) } catch (_: Exception) {}
-                handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
-                if (tapOk) {
-                    Log.i(TAG, "★ Pipeline: 截图→ESP32点击=${_pipelineEsp32TapTimeMs}ms ACK=OK")
-                    cancelBleAckTimeout()
-                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
-                    handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
-                } else {
-                    Log.w(TAG, "★ Pipeline: ESP32 tap ACK失败")
-                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
-                    if (autoCaptureEnabled) scheduleNextAutoCapture()
-                }
+                // R4-fix: bulkTransfer最坏阻塞800ms，移后台线程（ExactBet同款模式），ACK回主线程驱动FSM
+                val tapAction = action
+                Thread({
+                    val tapOk = bleManager?.sendTap(x, y, 50) ?: false
+                    handler.post {
+                        // R4-fix: 后台等待期间状态可能已变（停自动/新帧接管），非EXECUTING则丢弃结果
+                        if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.EXECUTING) {
+                            Log.w(TAG, "★ R4守卫: tap($tapAction)回主线程时FSM=${pipelineFSM.getCurrentState()}非EXECUTING，丢弃ACK结果")
+                            return@post
+                        }
+                        _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
+                        _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
+                        _pipelineLastAction = tapAction
+                        try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, tapAction) } catch (_: Exception) {}
+                        handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                        if (tapOk) {
+                            Log.i(TAG, "★ Pipeline: 截图→ESP32点击=${_pipelineEsp32TapTimeMs}ms ACK=OK")
+                            cancelBleAckTimeout()
+                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                            handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+                        } else {
+                            Log.w(TAG, "★ Pipeline: ESP32 tap ACK失败")
+                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
+                            if (autoCaptureEnabled) scheduleNextAutoCapture()
+                        }
+                    }
+                }, "AutoTapThread").start()
             } else {
                 Log.w(TAG, "executeAutoTap: 未匹配按钮 $action, 回退固定位置")
                 executeAutoTapFallback(action)
@@ -1013,22 +1061,33 @@ class FloatingService : Service() {
         val (x, y) = GameModeConfig.getAutoTapFallback(action, sw, sh)
         Log.d(TAG, "★ autoTapFallback: $action → ($x, $y) [screen=${sw}x${sh} platform=${GameModeConfig.currentPlatform}]")
         try { DiagnosticLogger.logEsp32Tap("fallback_$action", x, y, action, "autoTapFallback") } catch (_: Exception) {}
-        // V2.9.546: 同步等ACK
-        val tapOk = bleManager?.sendTap(x, y, 50) ?: false
-        _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
-        _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
-        _pipelineLastAction = "fallback_$action"
-        try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, _pipelineLastAction) } catch (_: Exception) {}
-        handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
-        // V2.9.546: 根据ACK结果驱动FSM
-        if (tapOk) {
-            cancelBleAckTimeout()
-            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
-            handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
-        } else {
-            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
-            if (autoCaptureEnabled) scheduleNextAutoCapture()
-        }
+        // R4-fix: bulkTransfer最坏800ms移后台线程；FSM转换全部回主线程按"回时状态"处理——
+        // 调用方（硬超时fold/异常路径）若已在主线程RESET，这里的迟到ACK不再做任何转换
+        val fbAction = action
+        Thread({
+            val tapOk = bleManager?.sendTap(x, y, 50) ?: false
+            handler.post {
+                _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
+                _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
+                _pipelineLastAction = "fallback_$fbAction"
+                try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, _pipelineLastAction) } catch (_: Exception) {}
+                handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.EXECUTING) {
+                    // 硬超时/异常路径的调用方已自行RESET，迟到ACK不做转换（硬超时fold已调度下一轮）
+                    Log.d(TAG, "★ R4守卫: fallback tap($fbAction)回调时FSM=${pipelineFSM.getCurrentState()}非EXECUTING，不转换")
+                    return@post
+                }
+                // 仅正常决策路径（STRATEGY_READY建立的EXECUTING）走到这里
+                if (tapOk) {
+                    cancelBleAckTimeout()
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                    handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+                } else {
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
+                    if (autoCaptureEnabled) scheduleNextAutoCapture()
+                }
+            }
+        }, "AutoTapFallbackThread").start()
         // V3.10: 弃牌后重置识别状态 — 防止同rank不同suit的手牌锁定残留
         if (action == "fold") {
             try {
@@ -1095,13 +1154,68 @@ class FloatingService : Service() {
         pipelineFSM.transition(PipelineStateMachine.PipelineEvent.START_CAPTURE)  // V3.50: IDLE→CAPTURING
         hideOverlay()  // V2.9.190: 截屏前隐藏悬浮层
         ScreenOptService.setScreenshotCallback { s -> handler.post {
-            // P0-fix #6: 取消截屏超时
+            // P0-fix #6: 取消第一拍超时
             _screenshotTimeoutRunnable?.let { handler.removeCallbacks(it) }; _screenshotTimeoutRunnable = null
-            if(s){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);processScreenshotAndAnalyze(isMultiFrame1=true);handler.postDelayed({if(ScreenOptService.isServiceRunning()){ScreenOptService.setScreenshotCallback { s2 -> handler.post { showOverlay()  // V2.9.190: 第二帧截屏后恢复悬浮层
-_screenshotGate.set(false)  // P0-fix#8: 释放门闩
-if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);processScreenshotAndAnalyze(isMultiFrame2=true)}else pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)}};ScreenOptService.captureScreen()}},multiFrameDelay)}else{showOverlay();_screenshotGate.set(false);pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)}}}  // V3.50: FSM替代isVisionInProgress
-        // P0-fix #6: 截屏超时兜底
-        _screenshotTimeoutRunnable=Runnable{if(pipelineFSM.getCurrentState()==PipelineStateMachine.PipelineState.CAPTURING){Log.w(TAG,"★ P0-fix#6: 多帧截屏超时7s");_screenshotGate.set(false);ScreenOptService.setScreenshotCallback(null);showOverlay();pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)}}
+            if(s){
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK)
+                processScreenshotAndAnalyze(isMultiFrame1=true)
+                // R2-fix: 第二拍（verify帧）——原代码第二拍无独立超时兜底：
+                // 回调一旦丢失，_screenshotGate永久锁死+悬浮层永久隐藏+自动/手动截屏全停摆。
+                // 这里挂第二拍独立7s超时，CAS门闩保证超时与迟到回调只有一方生效。
+                handler.postDelayed({
+                    if (ScreenOptService.isServiceRunning()) {
+                        ScreenOptService.setScreenshotCallback { s2 -> handler.post {
+                            // R2-fix: CAS门闩——若超时恢复已先发生(门闩=false)，迟到帧直接空转丢弃
+                            if (!_screenshotGate.compareAndSet(true, false)) {
+                                Log.w(TAG, "★ R2守卫: 第二拍迟到帧(门闩已释放)，丢弃")
+                                return@post
+                            }
+                            showOverlay()  // V2.9.190: 第二帧截屏后恢复悬浮层
+                            _screenshotTimeoutRunnable?.let { handler.removeCallbacks(it) }
+                            _screenshotTimeoutRunnable = null
+                            if (s2) {
+                                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK)
+                                processScreenshotAndAnalyze(isMultiFrame2=true)
+                            } else {
+                                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)
+                                // R9-1-fix: 第二拍失败也要调度下一轮，否则自动流水线静默停摆
+                                autoConsecutiveErrors++
+                                checkAutoErrors()
+                                if (autoCaptureEnabled) scheduleNextAutoCapture()
+                            }
+                        }}
+                        // R2-fix: 第二拍独立超时——7s无回调则释放门闩+恢复悬浮层+复位FSM+继续调度
+                        _screenshotTimeoutRunnable = Runnable {
+                            if (_screenshotGate.compareAndSet(true, false)) {
+                                Log.w(TAG, "★ R2-fix: 多帧第二拍超时7s无回调，强制恢复(门闩/悬浮层/FSM)")
+                                ScreenOptService.setScreenshotCallback(null)
+                                showOverlay()
+                                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)
+                                autoConsecutiveErrors++
+                                checkAutoErrors()
+                                if (autoCaptureEnabled) scheduleNextAutoCapture()
+                            }
+                        }
+                        handler.postDelayed(_screenshotTimeoutRunnable!!, 7000)
+                        ScreenOptService.captureScreen()
+                    } else {
+                        // 第二拍发起前服务已死：释放门闩恢复现场
+                        _screenshotGate.set(false)
+                        showOverlay()
+                    }
+                }, multiFrameDelay)
+            } else {
+                // R9-1-fix: 第一拍失败也要释放门闩+调度下一轮（原代码缺scheduleNext，自动静默停摆）
+                showOverlay()
+                _screenshotGate.set(false)
+                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)
+                autoConsecutiveErrors++
+                checkAutoErrors()
+                if (autoCaptureEnabled) scheduleNextAutoCapture()
+            }
+        }}  // V3.50: FSM替代isVisionInProgress
+        // P0-fix #6: 第一拍截屏超时兜底
+        _screenshotTimeoutRunnable=Runnable{if(pipelineFSM.getCurrentState()==PipelineStateMachine.PipelineState.CAPTURING){Log.w(TAG,"★ P0-fix#6: 多帧截屏超时7s");_screenshotGate.set(false);ScreenOptService.setScreenshotCallback(null);showOverlay();pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL);autoConsecutiveErrors++;checkAutoErrors();if(autoCaptureEnabled)scheduleNextAutoCapture()}}
         handler.postDelayed(_screenshotTimeoutRunnable!!, 7000)
         handler.postDelayed({ScreenOptService.captureScreen()}, 100)  // V2.9.192: 延迟100ms等View渲染
     }
@@ -1339,16 +1453,18 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             visibility = View.GONE
         }
 
+        // R9-3-fix: 视图刚在本函数内创建，用局部val传递替代成员!!断言——
+        // 初始化中途异常或函数重入时不再命中未赋值视图导致NPE
         topBar.addView(tvStatus, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        topBar.addView(tvAction!!)
+        tvAction?.let { topBar.addView(it) }
         topBar.addView(tvReset)
-        topBar.addView(tvBle!!)
+        tvBle?.let { topBar.addView(it) }
         topBar.addView(tvPlatform)  // V2.9.200: 平台切换按钮
         topBar.addView(tvCollapse)
         container.addView(topBar)
-        container.addView(tvBleStatus!!, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        container.addView(tvRecResult!!, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        container.addView(tvRecDetail!!, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))  // V2.9.43: 详情行
+        tvBleStatus?.let { container.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)) }
+        tvRecResult?.let { container.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)) }
+        tvRecDetail?.let { container.addView(it, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)) }  // V2.9.43: 详情行
 
         // Content row
         val contentRow = LinearLayout(this).apply {
@@ -1439,8 +1555,13 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                 _webViewRetryCount = 0  // P0-fix: 成功加载，重置重试计数
                 if (!webViewReady) {
                     webViewReady = true
-                    val calls = ArrayList(pendingJsCalls)
-                    pendingJsCalls.clear()
+                    // R9-2-fix: copy+clear必须在同一synchronized块内——
+                    // 否则刷新瞬间入队的JS会被clear误伤（漏发）或并发遍历异常
+                    val calls = synchronized(pendingJsCalls) {
+                        val c = ArrayList(pendingJsCalls)
+                        pendingJsCalls.clear()
+                        c
+                    }
                     for (js in calls) {
                         view?.evaluateJavascript(js, null)
                     }
@@ -1594,6 +1715,8 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             // V2.9.180: 全自动决策执行——JS计算置信度后回调
             @JavascriptInterface
             fun autoDecision(jsonData: String) {
+                // R8-fix: 在调用线程捕获当前策略代次（@JavascriptInterface在Binder线程，主线程post前取快照）
+                val gen = _strategyGeneration
                 handler.post {
                     try {
                         val data = org.json.JSONObject(jsonData)
@@ -1603,9 +1726,19 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                         val reason = data.optString("reason", "")
                         val eq = data.optInt("eq", 0)
                         Log.d(TAG, "★ autoDecision收到决策: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq% json=${jsonData.take(200)} | state=${pipelineFSM.getCurrentState()}")
-                        
-                        // V3.50: 策略引擎回调完成 → 进入执行阶段
-                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)  // STRATEGY_COMPUTING→EXECUTING
+
+                        // R7-fix: 必须校验转换结果——迟到/重复回调时转换非法（状态不变），不得继续点击
+                        val newState = pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)  // STRATEGY_COMPUTING→EXECUTING
+                        if (newState != PipelineStateMachine.PipelineState.EXECUTING) {
+                            Log.w(TAG, "★ R7守卫: autoDecision迟到/重复(当前=$newState)，丢弃不点击 action=$action")
+                            return@post
+                        }
+                        // R8-fix: FSM进入EXECUTING后再查代次——属于已作废旧帧（超时恢复已推进代次）则RESET回去并丢弃
+                        if (gen != _strategyGeneration) {
+                            Log.w(TAG, "★ R8守卫: autoDecision代次过期($gen!=$_strategyGeneration)，丢弃 action=$action")
+                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+                            return@post
+                        }
                         
                         // V2.9.503: pipeline耗时——JS决策完成时刻
                         if (_diagStartTime > 0) {
@@ -2415,6 +2548,8 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                     Log.w(TAG, "★ Shot Clock HARD TIMEOUT! ${(System.currentTimeMillis() - handStartTime)}ms, forcing fold")
                     handStartTime = 0
                     lastDecisionTime = System.currentTimeMillis()
+                    cancelPendingTap()  // R1-fix: 硬超时fold前撤销迟到的延迟点击，防fold后双点
+                    _strategyGeneration++  // R8-fix: 作废在途策略回调
                     pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SHOT_CLOCK_TIMEOUT)  // V3.50: 任意状态→EXECUTING(强制fold)
                     executeAutoTapFallback("fold")
                     pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)  // V3.50: 执行完毕→IDLE
@@ -2430,6 +2565,8 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
             Log.w(TAG, "★ Shot Clock pre-check: ${(tAnalyzeStart - handStartTime)}ms, skip VLM and force fold")
             handStartTime = 0
             lastDecisionTime = tAnalyzeStart
+            cancelPendingTap()  // R1-fix: 硬超时fold前撤销迟到的延迟点击，防fold后双点
+            _strategyGeneration++  // R8-fix: 作废在途策略回调
             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SHOT_CLOCK_TIMEOUT)  // V3.50: 强制fold
             executeAutoTapFallback("fold")
             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)  // V3.50: 完成→IDLE
@@ -2542,30 +2679,38 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                             Log.d(TAG, "★ Insurance detected, auto-declining")
                             // P0-fix #5: Insurance路径补充FSM流转——STRATEGY_COMPUTING→EXECUTING→COOLDOWN→IDLE
                             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)  // →EXECUTING
-                            handler.post {
-                                try {
-                                    val (ix, iy) = GameModeConfig.getInsuranceDeclinePosition(screenWidth, screenHeight)
-                                    try { DiagnosticLogger.logEsp32Tap("insurance_decline", ix, iy, "insuranceBtn", "autoCapture") } catch (_: Exception) {}
-                                    val tapOk = bleManager?.sendTap(ix, iy, 50) ?: false
-                                    _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
-                                    _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
-                                    _pipelineLastAction = "insurance_decline"
-                                    try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, _pipelineLastAction) } catch (_: Exception) {}
-                                    if (tapOk) {
-                                        cancelBleAckTimeout()
-                                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
-                                        handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
-                                    } else {
-                                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
-                                        if (autoCaptureEnabled) scheduleNextAutoCapture()
+                            // R4-fix: tap阻塞移后台线程，ACK回主线程驱动FSM（与自动点击同款）
+                            Thread {
+                                val (ix, iy) = GameModeConfig.getInsuranceDeclinePosition(screenWidth, screenHeight)
+                                try { DiagnosticLogger.logEsp32Tap("insurance_decline", ix, iy, "insuranceBtn", "autoCapture") } catch (_: Exception) {}
+                                val tapOk = bleManager?.sendTap(ix, iy, 50) ?: false
+                                handler.post {
+                                    try {
+                                        // R4守卫：回主线程时若已不在EXECUTING（状态被超时/新帧带走），丢弃
+                                        if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.EXECUTING) {
+                                            Log.w(TAG, "★ R4守卫: Insurance tap回调时FSM=${pipelineFSM.getCurrentState()}，丢弃")
+                                            return@post
+                                        }
+                                        _pipelineEsp32TapTimeMs = System.currentTimeMillis() - _pipelineScreenshotTime
+                                        _pipelineTotalTimeMs = _pipelineEsp32TapTimeMs
+                                        _pipelineLastAction = "insurance_decline"
+                                        try { DiagnosticLogger.updatePipelineTiming(_pipelineJsDecisionTimeMs, _pipelineEsp32TapTimeMs, _pipelineTotalTimeMs, _pipelineLastAction) } catch (_: Exception) {}
+                                        if (tapOk) {
+                                            cancelBleAckTimeout()
+                                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
+                                            handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+                                        } else {
+                                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
+                                            if (autoCaptureEnabled) scheduleNextAutoCapture()
+                                        }
+                                        updateAdviceNotification("Insurance", "已自动拒绝")
+                                        updateBallAdvice("COLOR:CHECK|SIGNAL:INSURANCE|REASON:自动拒绝")
+                                        Log.d(TAG, "★ Insurance declined at ($ix, $iy)")
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Insurance decline error", e)
                                     }
-                                    updateAdviceNotification("Insurance", "已自动拒绝")
-                                    updateBallAdvice("COLOR:CHECK|SIGNAL:INSURANCE|REASON:自动拒绝")
-                                    Log.d(TAG, "★ Insurance declined at ($ix, $iy)")
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Insurance decline error", e)
                                 }
-                            }
+                            }.start()
                             true
                         }
                         result.suitUncertain && autoCaptureEnabled -> {
@@ -2589,14 +2734,29 @@ if(s2){pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK);
                     _strategyReceived = false
                     // 先取消之前的超时定时器（防止重复截图时叠加）
                     _strategyTimeoutRunnable?.let { handler.removeCallbacks(it) }
+                    // R8-fix: 本帧代次——超时定时器只认自己这一代；迟到的JS回调在代次推进后全部失效
+                    _strategyGeneration++
+                    val frameGen = _strategyGeneration
                     val timeoutRunnable = Runnable {
+                        if (_strategyGeneration != frameGen) {
+                            Log.d(TAG, "★ R8守卫: 策略超时定时器代次过期($frameGen!=$_strategyGeneration)，跳过")
+                            return@Runnable
+                        }
                         if (!_strategyReceived) {
                             Log.w(TAG, "★ 策略引擎超时8s，标记等待状态（非FOLD）")
+                            // R8-fix: 超时即刻推进代次——8~10.5s恢复窗口内到达的迟到回调全部作废
+                            _strategyGeneration++
+                            val recoveryGen = _strategyGeneration
                             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_TIMEOUT)  // V3.50: Bug#6 策略超时→ERROR_RECOVERY
                             updateBallAdvice("COLOR:CHECK|SIGNAL:TIMEOUT|EQ:0|REASON:策略计算中")
                             updateAdviceNotification("⏳ 策略计算中", "8s未回调→等待而非FOLD")
                             // P0-fix #2: 策略超时后自动恢复——延迟2.5s后RESET回IDLE，自动模式调度下一轮
                             handler.postDelayed({
+                                // R8-fix: 恢复前查代次——2.5s窗口内若已被新帧/硬超时/重初始化接管则放弃恢复
+                                if (_strategyGeneration != recoveryGen) {
+                                    Log.d(TAG, "★ R8守卫: 超时恢复代次过期，跳过RESET（已由新帧接管）")
+                                    return@postDelayed
+                                }
                                 if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.ERROR_RECOVERY) {
                                     pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
                                     Log.d(TAG, "★ P0-fix#2: 策略超时恢复 RESET→IDLE")

@@ -198,7 +198,9 @@ class HttpServerService : Service() {
         }
 
         if (server == null) {
-            server = object : NanoHTTPD(8666) {
+            // R9-6-fix: 绑定127.0.0.1——本机WebView/浏览器可访问，同局域网其他设备/网页无法探测，
+            // 杜绝无鉴权接口（/api/config改Key、/api/hotload远程下载）被局域网攻击面
+            server = object : NanoHTTPD("127.0.0.1", 8666) {
                 override fun serve(session: IHTTPSession): Response {
                     // V2.9.114: CORS preflight——WebViewAssetLoader跨域请求需OPTIONS预检
                     if (session.method == Method.OPTIONS) {
@@ -405,6 +407,14 @@ class HttpServerService : Service() {
                         // V2.1: API视觉识别（仅无障碍截图）
                         session.uri == "/api/analyze" -> {
                             try {
+                                // R9-5-fix: 自动流水线正在分析时快速拒绝，不让HTTP线程空等25s锁+28s VLM
+                                if (VisionApiClient.isAnalyzeBusy()) {
+                                    newFixedLengthResponse(Response.Status.SERVICE_UNAVAILABLE, "application/json",
+                                        """{"error":"pipeline_busy","message":"自动模式分析中，请稍后再试"}""").apply {
+                                        addHeader("Access-Control-Allow-Origin", "*")
+                                        addHeader("Retry-After", "10")
+                                    }
+                                } else {
                                 val screenshot = ScreenCaptureService.latestScreenshot
                                 if (screenshot == null) {
                                     // V2.1: 无截图 → 返回错误提示，绝不降级MediaProjection
@@ -431,6 +441,7 @@ class HttpServerService : Service() {
                                         }
                                     }
                                 }
+                                } // R9-5-fix: busy检查else块
                             } catch (e: Exception) {
                                 newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
                                     """{"error":"${e.message}"}""").apply {

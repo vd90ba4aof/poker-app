@@ -52,6 +52,10 @@ object VisionApiClient {
 
     // P0-R4-1: 分析锁——防止并发修改共享状态
     private val analyzeLock = java.util.concurrent.locks.ReentrantLock()
+
+    // R9-5-fix: 供HTTP调试接口快速探测——自动流水线正在分析时，/api/analyze直接503，
+    // 避免NanoHTTPD单线程被~28s的VLM调用占满、所有轮询请求排队
+    fun isAnalyzeBusy(): Boolean = analyzeLock.isLocked
     
     // V2.9.183: OkHttp连接池复用——避免每次TCP握手浪费100-200ms
     private val httpClient: OkHttpClient by lazy {

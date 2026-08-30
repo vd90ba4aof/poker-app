@@ -30,10 +30,16 @@ class ScreenOptService : AccessibilityService() {
         
         // P0-R4-2: 回调读写同步锁
         private val callbackLock = Any()
-        
+        // R9-9-fix: 回调代次——captureScreenSync超时后迟到帧不得投递到"已过期的等待方"
+        // 也不得在回调被清空后的竞态窗口里，以null身份被误恢复成自动流水线回调
+        @Volatile private var callbackGeneration = 0L
+
         /** 安全设置回调 */
         fun setScreenshotCallback(cb: ((Boolean) -> Unit)?) {
-            synchronized(callbackLock) { onScreenshotReady = cb }
+            synchronized(callbackLock) {
+                onScreenshotReady = cb
+                callbackGeneration++
+            }
         }
         
         /** 安全获取回调 */
@@ -75,19 +81,33 @@ class ScreenOptService : AccessibilityService() {
             val latch = java.util.concurrent.CountDownLatch(1)
             var result = false
             val originalCallback: ((Boolean) -> Unit)?
+            // R9-9-fix: myGen = 本等待方设置闭包时的代次；任何后续setScreenshotCallback
+            // （超时恢复/自动流水线接管）都会推进代次，迟到帧回调读到代次不符即空转丢弃
+            val myGen: Long
             synchronized(callbackLock) {
                 originalCallback = onScreenshotReady
+                callbackGeneration++
+                myGen = callbackGeneration
                 onScreenshotReady = { success ->
+                    if (callbackGeneration != myGen) {
+                        android.util.Log.w("ScreenOptService", "R9-9: 迟到帧到达，代次已变($callbackGeneration!=$myGen)，空转丢弃")
+                        return@let
+                    }
                     result = success
                     latch.countDown()
                 }
             }
             svc.performCapture()
-            latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-            // 恢复原始回调
+            val done = latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             synchronized(callbackLock) {
-                onScreenshotReady = originalCallback
+                if (callbackGeneration == myGen) {
+                    // 期间没有新回调接管，恢复原等待方（正常情况为null）
+                    // setScreenshotCallback内部会推进代次，迟到帧闭包随即失效
+                    setScreenshotCallback(originalCallback)
+                }
+                // 代次已被新setScreenshotCallback推进 → 自动流水线已接管，不动
             }
+            if (!done) android.util.Log.w("ScreenOptService", "captureScreenSync超时，迟到帧将被代次守卫丢弃")
             return result
         }
     }
