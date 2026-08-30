@@ -354,6 +354,7 @@ class Esp32UsbManager(private val context: Context) {
         val buf = ByteArray(FRAME_SIZE)
         var diagCount = 0
         var timeoutCount = 0
+        try {
         while (System.currentTimeMillis() < deadline) {
             val r = conn.bulkTransfer(inEp, buf, FRAME_SIZE, 100)
             // 前3次轮询记录原始返回，用于区分 超时(-1)/正常(>=1)
@@ -382,6 +383,12 @@ class Esp32UsbManager(private val context: Context) {
         }
         Log.w(TAG, "ACK timeout: in_timeouts=$timeoutCount polled=$diagCount cmd=${cmd.take(20)}")
         return null
+        } catch (e: Exception) {
+            // R5复核: 持锁轮询期间连接被closeConnection关闭，bulkTransfer会抛IllegalStateException/IOException；
+            // 不catch会让后台Thread静默死掉、FSM无人推进。返回null走ACK失败分支，由调用方决定重试/复位
+            Log.w(TAG, "sendCommandWaitAck异常（连接可能已断开）: ${e.message}")
+            return null
+        }
         } // synchronized(ioLock)
     }
 
@@ -421,9 +428,17 @@ class Esp32UsbManager(private val context: Context) {
         val copyLen = minOf(bytes.size, FRAME_SIZE - 1)  // 留1字节给固件补null
         System.arraycopy(bytes, 0, buf, 0, copyLen)
 
-        val r = conn.bulkTransfer(outEp, buf, FRAME_SIZE, 500)
+        val r = try {
+            conn.bulkTransfer(outEp, buf, FRAME_SIZE, 500)
+        } catch (e: Exception) {
+            // R5复核: 并发closeConnection时bulkTransfer抛异常，不catch会静默杀调用线程
+            Log.w(TAG, "BULK_WRITE异常（连接可能已断开）: ${e.message}")
+            -1
+        }
         if (r < 0) {
             Log.w(TAG, "BULK_WRITE failed ($r) for cmd=$cmd")
+            // R5复核: handleDisconnect→closeConnection释放USB句柄+notifyStatus通知UI断开；
+            // ioLock可重入同线程嵌套不死锁，notifyStatus回调自带try-catch
             handleDisconnect("USB写失败")
             return false
         }

@@ -466,6 +466,11 @@ class FloatingService : Service() {
         _shotClockRunnable = null
         _strategyTimeoutRunnable?.let { handler.removeCallbacks(it) }
         _strategyTimeoutRunnable = null
+        // R2复核: reinit同时撤销多帧截屏超时Runnable并释放残留门闩——
+        // 否则旧第二拍超时Runnable会在新管线运行中触发，误清新回调/误释放门闩
+        _screenshotTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        _screenshotTimeoutRunnable = null
+        _screenshotGate.set(false)
         // R3-fix: 必须先stop旧USB管理器——注销旧usbReceiver+释放旧连接，
         // 否则双接收器注册、双连接claim抢占、ACK串扰
         try { bleManager?.stop() } catch (_: Exception) {}
@@ -1174,32 +1179,34 @@ class FloatingService : Service() {
                             _screenshotTimeoutRunnable?.let { handler.removeCallbacks(it) }
                             _screenshotTimeoutRunnable = null
                             if (s2) {
-                                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_OK)
+                                // R2-fix-v2: 第二拍成功——只走verify分析，FSM由JS autoCaptureVisionComplete推进，
+                                // 绝不发SCREENSHOT_OK（此刻FSM在分析/执行态，该转换非法）
                                 processScreenshotAndAnalyze(isMultiFrame2=true)
                             } else {
-                                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)
-                                // R9-1-fix: 第二拍失败也要调度下一轮，否则自动流水线静默停摆
-                                autoConsecutiveErrors++
-                                checkAutoErrors()
-                                if (autoCaptureEnabled) scheduleNextAutoCapture()
+                                // R2-fix-v2: 第二拍失败——verify帧只是辅助确认，主决策不依赖它。
+                                // 只恢复现场(门闩/悬浮层)；FSM推进交给primary既有链路
+                                // （成功→onAutoCaptureVisionDone；primary丢失→R8策略超时8+2.5s兜底RESET+调度），
+                                // 不发SCREENSHOT_FAIL（分析/执行态为非法转换）、不越权scheduleNext
+                                Log.w(TAG, "★ R2-fix: 第二拍截屏失败，仅恢复现场，FSM交由主链路")
+                                showOverlay()
                             }
                         }}
                         // R2-fix: 第二拍独立超时——7s无回调则释放门闩+恢复悬浮层+复位FSM+继续调度
                         _screenshotTimeoutRunnable = Runnable {
                             if (_screenshotGate.compareAndSet(true, false)) {
-                                Log.w(TAG, "★ R2-fix: 多帧第二拍超时7s无回调，强制恢复(门闩/悬浮层/FSM)")
+                                // R2-fix-v2: 第二拍超时=verify帧丢失（辅助确认，非主链路）。
+                                // 只做防卡死的现场恢复(门闩/回调/悬浮层)；FSM推进交给primary既有链路
+                                // （R8策略超时8+2.5s兜底或onAutoCaptureVisionDone），不发非法转换/不越权调度
+                                Log.w(TAG, "★ R2-fix: 多帧第二拍超时7s无verify帧，恢复现场(门闩/回调/悬浮层)，FSM交主链路")
                                 ScreenOptService.setScreenshotCallback(null)
                                 showOverlay()
-                                pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL)
-                                autoConsecutiveErrors++
-                                checkAutoErrors()
-                                if (autoCaptureEnabled) scheduleNextAutoCapture()
                             }
                         }
                         handler.postDelayed(_screenshotTimeoutRunnable!!, 7000)
                         ScreenOptService.captureScreen()
                     } else {
-                        // 第二拍发起前服务已死：释放门闩恢复现场
+                        // 第二拍发起前服务已死：释放门闩恢复现场（FSM由primary主链路/R8兜底，不做转换）
+                        Log.w(TAG, "★ R2-fix: 第二拍发起前无障碍服务已死，释放门闩恢复悬浮层")
                         _screenshotGate.set(false)
                         showOverlay()
                     }
@@ -2678,7 +2685,12 @@ class FloatingService : Service() {
                         result.isInsurance && autoCaptureEnabled -> {
                             Log.d(TAG, "★ Insurance detected, auto-declining")
                             // P0-fix #5: Insurance路径补充FSM流转——STRATEGY_COMPUTING→EXECUTING→COOLDOWN→IDLE
-                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)  // →EXECUTING
+                            // R7-fix(复核): 必须校验转换结果——过期保险帧（FSM已被硬超时/新帧带走）时转换非法，
+                            // 绝不发物理点击（与autoDecision的R7守卫一致）
+                            val insState = pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)  // →EXECUTING
+                            if (insState != PipelineStateMachine.PipelineState.EXECUTING) {
+                                Log.w(TAG, "★ R7守卫: Insurance过期帧(当前=$insState)，跳过自动拒绝点击")
+                            } else {
                             // R4-fix: tap阻塞移后台线程，ACK回主线程驱动FSM（与自动点击同款）
                             Thread {
                                 val (ix, iy) = GameModeConfig.getInsuranceDeclinePosition(screenWidth, screenHeight)
@@ -2711,6 +2723,7 @@ class FloatingService : Service() {
                                     }
                                 }
                             }.start()
+                            }  // R7-fix: insState==EXECUTING 才点击
                             true
                         }
                         result.suitUncertain && autoCaptureEnabled -> {
