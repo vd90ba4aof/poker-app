@@ -1740,13 +1740,31 @@ class FloatingService : Service() {
                         // R10-fix: transition()非法时返回的是当前态本身，newState!=EXECUTING判断虽能拦截
                         //   "不在EXECUTING"，但语义不够硬；显式校验前置态==STRATEGY_COMPUTING，
                         //   保险起见两道判断并列（RECOGNIZING_LOCAL等态绝不可直接点击）
-                        // V2.9.553-rev9: showAdvice的P0-fix#1会同步把FSM→IDLE（比autoDecision的handler.post快），
-                        //   自动模式下若FSM=IDLE但代次未变（说明是同一手牌，非新周期），允许恢复→继续执行
+                        // V2.9.553-rev9-fix: showAdvice的P0-fix#1会同步把FSM→IDLE（比autoDecision的handler.post快），
+                        //   自动模式下若FSM=IDLE但代次未变（说明是同一手牌，非新周期），允许恢复→直接执行点击
                         if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.IDLE
                             && auto && gen == _strategyGeneration) {
-                            Log.d(TAG, "★ V2.9.553-rev9: autoDecision恢复IDLE→STRATEGY_COMPUTING（showAdvice已RESET但同代次）")
-                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)  // IDLE→IDLE（无害）
-                            // 直接进入EXECUTING，跳过STRATEGY_COMPUTING（因为策略已计算完毕）
+                            Log.d(TAG, "★ V2.9.553-rev9-fix: autoDecision IDLE恢复→直接执行点击（showAdvice已RESET但同代次）")
+                            // FSM已在IDLE，策略已计算完毕，直接执行点击，不走STRATEGY_READY转换
+                            // R8代次检查：确保不是迟到的旧决策
+                            if (gen != _strategyGeneration) {
+                                Log.w(TAG, "★ R8守卫：autoDecision代次已变($gen!=$_strategyGeneration)，放弃 IDLE恢复 action=$action")
+                                try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "R8守卫拦截：IDLE恢复时代次已变($gen!=$_strategyGeneration)", "action=$action") } catch (_: Exception) {}
+                                return@post
+                            }
+                            // 直接执行点击
+                            if (confidence == "low") {
+                                updateAdviceNotification("⚠️ 低置信度强制弃牌", "$reason (eq=$eq%)")
+                                updateBallAdvice("COLOR:FOLD|SIGNAL:LOW_CONF|EQ:$eq|REASON:低置信度强制弃牌")
+                                Log.i(TAG, "autoDecision IDLE恢复：低置信度，强制fold")
+                                executeAutoTapWithHumanDelay("fold", data)
+                            } else {
+                                Log.i(TAG, "autoDecision IDLE恢复：执行点击 $action (conf=$confidence, eq=$eq%)")
+                                updateAdviceNotification("🎯 自动执行：$action", "$reason (eq=$eq%)")
+                                executeAutoTapWithHumanDelay(action, data)
+                            }
+                            Log.d(TAG, "autoDecision IDLE恢复完成：$action")
+                            return@post
                         } else if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
                             Log.w(TAG, "★ R7守卫: autoDecision前置态非STRATEGY_COMPUTING(当前=${pipelineFSM.getCurrentState()})，丢弃不点击 action=$action")
                             try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "R7守卫拦截: 前置态非STRATEGY_COMPUTING(当前=${pipelineFSM.getCurrentState()})", "action=$action") } catch (_: Exception) {}
