@@ -1674,10 +1674,13 @@ class FloatingService : Service() {
                     _strategyTimeoutRunnable?.let { handler.removeCallbacks(it) }
                     _strategyTimeoutRunnable = null
                     // P0-fix #1: 手动截屏模式下showAdvice不触发FSM→STRATEGY_COMPUTING永久卡死
-                    // 策略回调完成→如果FSM仍在STRATEGY_COMPUTING，触发RESET回IDLE
-                    if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
+                    // V2.9.553-rev5: 有pending tap时不RESET——autoDecision已发布延迟点击，RESET会让R1守卫拦截
+                    if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.STRATEGY_COMPUTING
+                        && _pendingTapRunnable == null) {
                         Log.d(TAG, "★ P0-fix#1: showAdvice触发RESET（STRATEGY_COMPUTING→IDLE）")
                         pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+                    } else if (_pendingTapRunnable != null) {
+                        Log.d(TAG, "★ V2.9.553-rev5: showAdvice跳过RESET——autoDecision已发布pending tap，等自然完成")
                     }
                     if (advice.isNotEmpty()) {
                         tvRecResult?.text = advice  // V2.9.64: 只显示最新建议,不累积

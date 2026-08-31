@@ -9910,10 +9910,12 @@ function bridgeAdvice(r){
     var colorKey=r._colorInfo?r._colorInfo.colorKey:'FOLD';
     var signalType=r._colorInfo?r._colorInfo.signalType:'NONE';
     var _eqPct=r.eq?Math.round(r.eq):'';var bridgeData=fullAdv+'|COLOR:'+colorKey+'|SIGNAL:'+signalType+(_eqPct!==''?'|EQ:'+_eqPct:'');
-    // V2.9.503: 先执行autoExecuteDecision并保存结果，避免重复调用
+    // V2.9.553-rev5 FIX: ★ 先autoExecuteDecision再showAdvice——
+    //   原因: showAdvice在Kotlin侧会STRATEGY_COMPUTING→IDLE(P0-fix#1)，
+    //   若先showAdvice则autoDecision的R7守卫因FSM=IDLE而拦截所有auto-tap
     var _autoExecResult='skip';
     var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;
-    if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+bridgeData.substring(0,80));AndroidBridge.showAdvice(bridgeData);try{if(typeof autoExecuteDecision==="function"&&_am){var _execRet=autoExecuteDecision(r,_am);_autoExecResult=_execRet?'executed':'manual';}}catch(_ae){console.log("[autoExec] err:"+_ae.message);_autoExecResult='error';}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
+    if(typeof AndroidBridge!=='undefined'){try{if(typeof autoExecuteDecision==="function"&&_am){var _execRet=autoExecuteDecision(r,_am);_autoExecResult=_execRet?'executed':'manual';}}catch(_ae){console.log("[autoExec] err:"+_ae.message);_autoExecResult='error';}if(AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+bridgeData.substring(0,80));AndroidBridge.showAdvice(bridgeData);}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
     if(typeof AndroidBridge!=='undefined'&&AndroidBridge.updateNotification){AndroidBridge.updateNotification(fullAdv,reason);}
     // V2.9.503: 记录决策到Kotlin端诊断日志
     try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.logDecision){
