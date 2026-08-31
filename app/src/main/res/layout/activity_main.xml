@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.553-rev9-fix-v2 · IDLE恢复R1守卫修复"
+        android:text="V2.9.553-rev9-fix-v3 · 观战误点击+循环停摆+free过牌修复"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

@@ -1729,11 +1729,19 @@ class FloatingService : Service() {
                 handler.post {
                     try {
                         val data = org.json.JSONObject(jsonData)
-                        val action = data.optString("action", "fold")
+                        var action = data.optString("action", "fold")
                         val auto = data.optBoolean("auto", false)
                         val confidence = data.optString("confidence", "medium")
                         val reason = data.optString("reason", "")
                         val eq = data.optInt("eq", 0)
+                        // V2.9.553-rev9-fix-v3: free check局面fold→check（豪哥规则）。
+                        //   无需跟注(toCall=0)时弃牌=白白放弃底池，是策略错误；且GG左按钮在check局面文字就是"让牌/弃牌"
+                        //   点下去实际执行check，系统却记成fold造成状态错乱。任何"free+fold"一律改为check过牌。
+                        val toCallJs = data.optInt("toCall", -1)
+                        if (action == "fold" && (toCallJs == 0 || (toCallJs < 0 && cachedToCall == 0))) {
+                            Log.w(TAG, "★ free-check保护: action=fold但toCall=$toCallJs/cached=$cachedToCall(无需跟注)→改执行check")
+                            action = "check"
+                        }
                         Log.d(TAG, "★ autoDecision收到决策: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq% json=${jsonData.take(200)} | state=${pipelineFSM.getCurrentState()}")
 
                         // R7-fix: 必须校验转换结果——迟到/重复回调时转换非法（状态不变），不得继续点击
@@ -1751,11 +1759,16 @@ class FloatingService : Service() {
                             handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }
                             lastDecisionTime = System.currentTimeMillis()
                             // 直接执行点击（executeAutoTapFallback无FSM状态守卫，直接发tap到ESP32）
-                            if (confidence == "low") {
+                            if (confidence == "low" && action == "fold") {
                                 updateAdviceNotification("⚠️ 低置信度强制弃牌", "$reason (eq=$eq%)")
                                 updateBallAdvice("COLOR:FOLD|SIGNAL:LOW_CONF|EQ:$eq|REASON:低置信度强制弃牌")
                                 Log.i(TAG, "autoDecision IDLE恢复：低置信度，强制fold")
                                 executeAutoTapFallback("fold")
+                            } else if (confidence == "low") {
+                                // low置信但free-check保护已把fold改成check
+                                Log.i(TAG, "autoDecision IDLE恢复：低置信但free局面→$action")
+                                updateAdviceNotification("🎯 自动执行：$action", "$reason (eq=$eq%)")
+                                executeAutoTapFallback(action)
                             } else {
                                 Log.i(TAG, "autoDecision IDLE恢复：执行点击 $action (conf=$confidence, eq=$eq%)")
                                 updateAdviceNotification("🎯 自动执行：$action", "$reason (eq=$eq%)")
@@ -1799,7 +1812,7 @@ class FloatingService : Service() {
                             return@post
                         }
                         
-                        if (confidence == "low") {
+                        if (confidence == "low" && action == "fold") {
                             // 低置信→强制弃牌
                             updateAdviceNotification("🛑 低置信→弃牌", "$reason (eq=$eq%)")
                             updateBallAdvice("COLOR:FOLD|SIGNAL:LOW_CONF|EQ:$eq|REASON:低置信弃牌")
@@ -1807,6 +1820,11 @@ class FloatingService : Service() {
                             Log.i(TAG, "autoDecision执行: 低置信→弃牌, eq=$eq%")
                             executeAutoTapWithHumanDelay("fold", data)
                             Log.d(TAG, "autoDecision执行完成: fold")
+                        } else if (confidence == "low") {
+                            // low置信但free-check保护已把fold改成check→按check执行
+                            Log.i(TAG, "autoDecision执行: 低置信但free局面→$action, eq=$eq%")
+                            updateAdviceNotification("🎯 自动执行：$action", "$reason (eq=$eq%)")
+                            executeAutoTapWithHumanDelay(action, data)
                         } else {
                             // 高/中置信自动执行
                             Log.i(TAG, "autoDecision执行: $action (conf=$confidence, eq=$eq%)")
@@ -2697,6 +2715,9 @@ class FloatingService : Service() {
                             tvRecDetail?.visibility = View.VISIBLE
                             updateAdviceNotification("❓ 不在牌桌", "D=${result.dButtonPosition} 按钮=${result.buttons.joinToString(",")} WV:$webViewReady")
                         }
+                        // V2.9.553-rev9-fix-v3: NO_TABLE分支补调度——旧版此处只更新界面没续截图，
+                        // fold后观战帧走入此分支→autoCaptureRunnable被置空无任何东西再触发→截图循环永久停止(日志7分半空白根因)
+                        if (autoCaptureEnabled) scheduleNextAutoCapture()
                     } else {
                     val resultJson = VisionApiClient.toJson(result)
                     Log.d(TAG, "★ resultJson长度=${resultJson.length}, webViewReady=$webViewReady")
@@ -2966,6 +2987,10 @@ class FloatingService : Service() {
                     floatingBall?.text="⚠️";floatingBall?.textSize=14f
                     addErrorLog("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())} API异常: ${e.message?.take(100) ?: "未知"}")
                     updateAdviceNotification("API错误", e.message?.take(50) ?: "")
+                    // V2.9.553-rev9-fix-v3: 异常分支也必须RESET+续调度，否则FSM留ERROR_RECOVERY/识别态→截图循环停止
+                    autoConsecutiveErrors++; checkAutoErrors()
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+                    if (autoCaptureEnabled) scheduleNextAutoCapture()
                 }
             }
         }.start()

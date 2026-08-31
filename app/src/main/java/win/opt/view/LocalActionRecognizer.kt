@@ -60,6 +60,9 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         private const val POT_YELLOW_THRESHOLD = 100
         // 按钮区域黄色像素阈值
         private const val BTN_YELLOW_THRESHOLD = 100
+        // V2.9.553-rev9-fix-v3: 右侧下注预设面板黄色金额像素阈值（判定"轮到我"）
+        // free check局面主按钮灰色、只有下注预设面板亮黄色金额（豪哥规则：有黄色数字按钮=轮到我）
+        private const val PRESET_YELLOW_THRESHOLD = 400
 
         // 数字尺寸约束
         private const val DIGIT_MIN_W = 8
@@ -771,13 +774,34 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                 if (isYellow(p)) btn3Yellow++
             }
             
-            // 豪哥逻辑：有黄色下注数字或>=2个按钮=轮到我
+            // V2.9.553-rev9-fix-v3: 判据重写（豪哥规则）。
+            //   旧判据"底池黄色"错误：fold后观战底池金额一直亮→误判轮到我→观战帧盲发点击+循环断死。
+            //   新判据只认行动信号：
+            //     ①右侧下注预设面板黄色金额（X815-970/Y1680-2200）——free check局面主按钮灰色、
+            //       只有下注预设面板亮黄金额（如5♥2♦7♠面 让牌灰按钮+黄色400/300/200/132）；
+            //       需跟注/fold前该面板也在；fold后观战该面板消失。
+            //     ②>=2个黄色行动按钮（call+raise/fold+call局面）
+            //   底池黄色仅记日志，不参与判定。
+            val preX1 = (PRESET_X1 * sx).toInt().coerceIn(0, sw - 1)
+            val preX2 = (PRESET_X2 * sx).toInt().coerceIn(preX1 + 1, sw)
+            val preY1 = (PRESET_Y1 * sy).toInt().coerceIn(0, sh - 1)
+            val preY2 = (PRESET_Y2 * sy).toInt().coerceIn(preY1 + 1, sh)
+            val preW = preX2 - preX1
+            val preH = preY2 - preY1
+            val prePixels = IntArray(preW * preH)
+            screenshot.getPixels(prePixels, 0, preW, preX1, preY1, preW, preH)
+            var presetYellow = 0
+            for (p in prePixels) {
+                if (isYellow(p)) presetYellow++
+            }
+
             var yellowButtons = 0
             if (btn2Yellow >= BTN_YELLOW_THRESHOLD) yellowButtons++
             if (btn3Yellow >= BTN_YELLOW_THRESHOLD) yellowButtons++
-            
-            val myTurn = potYellow >= POT_YELLOW_THRESHOLD || yellowButtons >= 2
-            Log.d(TAG, "isMyTurn: potYellow=$potYellow btn2Yellow=$btn2Yellow btn3Yellow=$btn3Yellow yellowButtons=$yellowButtons -> $myTurn")
+
+            val presetActive = presetYellow >= PRESET_YELLOW_THRESHOLD
+            val myTurn = presetActive || yellowButtons >= 2
+            Log.d(TAG, "isMyTurn: presetYellow=$presetYellow(th=$PRESET_YELLOW_THRESHOLD,active=$presetActive) btn2Yellow=$btn2Yellow btn3Yellow=$btn3Yellow yellowButtons=$yellowButtons potYellow=$potYellow(仅参考) -> $myTurn")
             myTurn
         } catch (e: Exception) {
             Log.w(TAG, "isMyTurn failed: ${e.message}")
