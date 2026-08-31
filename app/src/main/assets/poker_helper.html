@@ -6625,7 +6625,7 @@ function eQ(key,nOpponents){
       else if((idx=O6.co.indexOf(key))!==-1)base=45;
       else if((idx=O6.mp.indexOf(key))!==-1)base=42;
       else if((idx=O6.utg.indexOf(key))!==-1)base=38;
-      else base=30;
+      else{base=30;console.log('[eQ] 未匹配手牌:'+key+'，fallback eq=30');}
     }
   }
   // V2.9.185: 多人底池动态调整——每多1个对手equity衰减约10%
@@ -8202,9 +8202,10 @@ function decide(){
       var _fbEq=50;
       var _fbStreet=G.comm.filter(function(c){return c;}).length>=5?'river':G.comm.filter(function(c){return c;}).length===4?'turn':'flop';
       var _fbHClass={name:'MEDIUM',desc:'兜底(崩溃恢复)',outs:0};
+      var _fbStk=G.stk>0?G.stk:100;
       var _fbResult=FallbackStrategy.medium(_fbEq,_fbHClass,
-        _fbStreet,G.scene||'check',G.pot||1,G.bet||0,G.stk||100,
-        G.stk?Math.round((G.stk||100)/(G.pot||1)):10,true,G.opp||'unknown',
+        _fbStreet,G.scene||'check',G.pot||1,G.bet||0,_fbStk,
+        Math.round(_fbStk/(G.pot||1)),true,G.opp||'unknown',
         null,null,null,'medium');
       if(_fbResult&&_fbResult.a){
         var _fbA=_fbResult.a==='fold'?'fold':_fbResult.a==='check'?'check':'call';
@@ -11298,8 +11299,9 @@ function onVisionResult(data){
       var _totalBets=data.players.reduce(function(s,p){return s+p.bet;},0);
       // 底池≈各玩家下注之和+自己的下注(如果有的话), 容忍2BB误差
       var _expectedPot=_totalBets+(G.bet>0?G.bet*bbValue:0);
-      if(_totalBets>0 && G.pot>0){
-        var _potRatio=_expectedPot/(G.pot*bbValue);
+      var _potBB=G.pot*bbValue;
+      if(_totalBets>0 && _potBB>0){
+        var _potRatio=_expectedPot/_potBB;
         if(_potRatio>=0.5 && _potRatio<=2.0){
           _pCheck.details.push('底池校验通过: players下注和='+_totalBets+' vs pot='+G.pot*bbValue);
         } else if(_totalBets>0){
@@ -12298,6 +12300,7 @@ function autoExecuteDecision(r, isAutoMode) {
 
   if (exec.confidence === 'low') {
     // 低置信→强制弃牌
+    console.log('[AutoExec] 低置信→强制弃牌: eq='+(r.eq||0)+' hClass='+(r.hClass?r.hClass.name:'?')+' pot='+G.pot+' stk='+G.stk+' bet='+G.bet);
     if (typeof AndroidBridge !== 'undefined' && AndroidBridge.autoDecision) {
       AndroidBridge.autoDecision(JSON.stringify({
         action: 'fold',
@@ -12305,7 +12308,10 @@ function autoExecuteDecision(r, isAutoMode) {
         confidence: 'low',
         reason: 'Low confidence, force fold',
         eq: r.eq || 0,
-        hClass: r.hClass ? r.hClass.name : '?'
+        hClass: r.hClass ? r.hClass.name : '?',
+        pot: G.pot || 0,
+        myChips: G.stk || 0,
+        toCall: G.bet || 0
       }));
     }
     return true;
@@ -12323,6 +12329,8 @@ function autoExecuteDecision(r, isAutoMode) {
         hClass: r.hClass ? r.hClass.name : '?',
         sizing: r.v || 0,
         pot: G.pot || 0,
+        myChips: G.stk || 0,
+        toCall: G.bet || 0,
         phase: G.phase || 'post',
         nash: r._nash ? true : false
       }));

@@ -143,7 +143,9 @@ class PipelineStateMachine {
 
         // === COOLDOWN 出发 ===
         (PipelineState.COOLDOWN to PipelineEvent.COOLDOWN_END) to PipelineState.IDLE,
-        (PipelineState.COOLDOWN to PipelineEvent.START_CAPTURE) to PipelineState.CAPTURING,  // 下一手牌开始
+        // V2.9.553-rev5: COOLDOWN→START_CAPTURE是安全冗余——正常流程COOLDOWN_END先到(同handler线程串行化)，
+        // 此分支仅在endCooldownAndScheduleNext的COOLDOWN_END因异常未触发时起兜底作用
+        (PipelineState.COOLDOWN to PipelineEvent.START_CAPTURE) to PipelineState.CAPTURING,
 
         // === ERROR_RECOVERY 出发 ===
         (PipelineState.ERROR_RECOVERY to PipelineEvent.RECOVERY_DONE) to PipelineState.IDLE,
