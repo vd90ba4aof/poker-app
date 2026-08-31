@@ -1675,12 +1675,18 @@ class FloatingService : Service() {
                     _strategyTimeoutRunnable = null
                     // P0-fix #1: 手动截屏模式下showAdvice不触发FSM→STRATEGY_COMPUTING永久卡死
                     // V2.9.553-rev5: 有pending tap时不RESET——autoDecision已发布延迟点击，RESET会让R1守卫拦截
+                    // V2.9.553-rev8: 自动模式不RESET——AutoConfidence=medium时autoDecision从未被调用，
+                    //   _pendingTapRunnable始终为null，导致每次showAdvice都把FSM→IDLE→下轮R7守卫拦截→零点击。
+                    //   自动模式的RESET权交给：①autoExecSkipped()即时重置 ②pipeline自身超时机制(8s/26s)
                     if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.STRATEGY_COMPUTING
-                        && _pendingTapRunnable == null) {
-                        Log.d(TAG, "★ P0-fix#1: showAdvice触发RESET（STRATEGY_COMPUTING→IDLE）")
+                        && _pendingTapRunnable == null
+                        && !autoCaptureEnabled) {
+                        Log.d(TAG, "★ P0-fix#1: showAdvice触发RESET（STRATEGY_COMPUTING→IDLE）[手动模式]")
                         pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
                     } else if (_pendingTapRunnable != null) {
                         Log.d(TAG, "★ V2.9.553-rev5: showAdvice跳过RESET——autoDecision已发布pending tap，等自然完成")
+                    } else if (autoCaptureEnabled) {
+                        Log.d(TAG, "★ V2.9.553-rev8: 自动模式showAdvice跳过RESET——FSM由autoExecSkipped/pipeline超时管理")
                     }
                     if (advice.isNotEmpty()) {
                         tvRecResult?.text = advice  // V2.9.64: 只显示最新建议,不累积
@@ -1822,6 +1828,20 @@ class FloatingService : Service() {
                     Log.d(TAG, "📝 决策已记录: ${data.optString("action")} eq=${data.optInt("eq")}% conf=${data.optString("confidence")}")
                 } catch (e: Exception) {
                     Log.e(TAG, "logDecision error: ${e.message}", e)
+                }
+            }
+            // V2.9.553-rev8: JS侧AutoConfidence=medium→skip时回调，立即RESET+下一轮
+            // 解决: medium时autoDecision从未被调用→_pendingTapRunnable=null→showAdvice RESET→FSM=IDLE→零点击
+            @JavascriptInterface
+            fun autoExecSkipped() {
+                handler.post {
+                    if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
+                        Log.d(TAG, "★ V2.9.553-rev8: autoExecSkipped→RESET（AutoConfidence=medium/skip）")
+                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+                        if (autoCaptureEnabled) scheduleNextAutoCapture()
+                    } else {
+                        Log.d(TAG, "★ V2.9.553-rev8: autoExecSkipped但FSM=${pipelineFSM.getCurrentState()}非STRATEGY_COMPUTING，跳过")
+                    }
                 }
             }
             // V2.9.516: SelfLearner — 记录自己的决策（每条街道一条，只记自己不记对手）
