@@ -1673,20 +1673,14 @@ class FloatingService : Service() {
                     // V2.9.125: 策略正常返回→取消超时定时器，防止正常建议被覆盖
                     _strategyTimeoutRunnable?.let { handler.removeCallbacks(it) }
                     _strategyTimeoutRunnable = null
-                    // P0-fix #1: 手动截屏模式下showAdvice不触发FSM→STRATEGY_COMPUTING永久卡死
-                    // V2.9.553-rev5: 有pending tap时不RESET——autoDecision已发布延迟点击，RESET会让R1守卫拦截
-                    // V2.9.553-rev8: 自动模式不RESET——AutoConfidence=medium时autoDecision从未被调用，
-                    //   _pendingTapRunnable始终为null，导致每次showAdvice都把FSM→IDLE→下轮R7守卫拦截→零点击。
-                    //   自动模式的RESET权交给：①autoExecSkipped()即时重置 ②pipeline自身超时机制(8s/26s)
-                    if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.STRATEGY_COMPUTING
-                        && _pendingTapRunnable == null
-                        && !autoCaptureEnabled) {
-                        Log.d(TAG, "★ P0-fix#1: showAdvice触发RESET（STRATEGY_COMPUTING→IDLE）[手动模式]")
+                    // P0-fix #1: 收到策略建议后RESET→IDLE，防止STRATEGY_COMPUTING永久卡死
+                    // V2.9.553-rev9: 恢复无条件RESET（撤销rev8的autoCaptureEnabled守卫）。
+                    //   rev9方案：autoDecision自带IDLE恢复——当FSM=IDLE且代次匹配时，
+                    //   autoDecision跳过STRATEGY_COMPUTING直接进入EXECUTING执行点击。
+                    //   这样彻底消除showAdvice与autoDecision之间的竞态。
+                    if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
+                        Log.d(TAG, "★ P0-fix#1: showAdvice触发RESET（STRATEGY_COMPUTING→IDLE）")
                         pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
-                    } else if (_pendingTapRunnable != null) {
-                        Log.d(TAG, "★ V2.9.553-rev5: showAdvice跳过RESET——autoDecision已发布pending tap，等自然完成")
-                    } else if (autoCaptureEnabled) {
-                        Log.d(TAG, "★ V2.9.553-rev8: 自动模式showAdvice跳过RESET——FSM由autoExecSkipped/pipeline超时管理")
                     }
                     if (advice.isNotEmpty()) {
                         tvRecResult?.text = advice  // V2.9.64: 只显示最新建议,不累积
@@ -1746,7 +1740,14 @@ class FloatingService : Service() {
                         // R10-fix: transition()非法时返回的是当前态本身，newState!=EXECUTING判断虽能拦截
                         //   "不在EXECUTING"，但语义不够硬；显式校验前置态==STRATEGY_COMPUTING，
                         //   保险起见两道判断并列（RECOGNIZING_LOCAL等态绝不可直接点击）
-                        if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
+                        // V2.9.553-rev9: showAdvice的P0-fix#1会同步把FSM→IDLE（比autoDecision的handler.post快），
+                        //   自动模式下若FSM=IDLE但代次未变（说明是同一手牌，非新周期），允许恢复→继续执行
+                        if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.IDLE
+                            && auto && gen == _strategyGeneration) {
+                            Log.d(TAG, "★ V2.9.553-rev9: autoDecision恢复IDLE→STRATEGY_COMPUTING（showAdvice已RESET但同代次）")
+                            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)  // IDLE→IDLE（无害）
+                            // 直接进入EXECUTING，跳过STRATEGY_COMPUTING（因为策略已计算完毕）
+                        } else if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
                             Log.w(TAG, "★ R7守卫: autoDecision前置态非STRATEGY_COMPUTING(当前=${pipelineFSM.getCurrentState()})，丢弃不点击 action=$action")
                             try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "R7守卫拦截: 前置态非STRATEGY_COMPUTING(当前=${pipelineFSM.getCurrentState()})", "action=$action") } catch (_: Exception) {}
                             return@post
@@ -1828,20 +1829,6 @@ class FloatingService : Service() {
                     Log.d(TAG, "📝 决策已记录: ${data.optString("action")} eq=${data.optInt("eq")}% conf=${data.optString("confidence")}")
                 } catch (e: Exception) {
                     Log.e(TAG, "logDecision error: ${e.message}", e)
-                }
-            }
-            // V2.9.553-rev8: JS侧AutoConfidence=medium→skip时回调，立即RESET+下一轮
-            // 解决: medium时autoDecision从未被调用→_pendingTapRunnable=null→showAdvice RESET→FSM=IDLE→零点击
-            @JavascriptInterface
-            fun autoExecSkipped() {
-                handler.post {
-                    if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
-                        Log.d(TAG, "★ V2.9.553-rev8: autoExecSkipped→RESET（AutoConfidence=medium/skip）")
-                        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
-                        if (autoCaptureEnabled) scheduleNextAutoCapture()
-                    } else {
-                        Log.d(TAG, "★ V2.9.553-rev8: autoExecSkipped但FSM=${pipelineFSM.getCurrentState()}非STRATEGY_COMPUTING，跳过")
-                    }
                 }
             }
             // V2.9.516: SelfLearner — 记录自己的决策（每条街道一条，只记自己不记对手）
