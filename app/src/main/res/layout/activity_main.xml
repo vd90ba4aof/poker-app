@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.553-rev9-fix-v3 · 观战误点击+循环停摆+free过牌修复"
+        android:text="V2.9.553-rev10 · 策略引擎P0修复(诈唬恢复+EV公式+纳什短码+多人池)"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

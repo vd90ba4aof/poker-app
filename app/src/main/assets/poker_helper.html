@@ -1384,6 +1384,8 @@ var ActionLine={
     var f=this.getStreetAction('flop');
     return f && f.heroAction==='raise' && f.scene==='check';
   },
+  // rev10策略修复: 旧调用名别名(曾因笔误didCbetOnFlop未定义导致TypeError崩溃兜底)
+  didCbetOnFlop:function(){ return this.didFlopCBet(); },
   
   reset:function(){this._lines=[];this._handId='';this._prevStreet='';}
 };
@@ -3039,7 +3041,7 @@ function decideTurnDoubleBarrel(k, spr, eq, oppProfile, bTexture, hClass){
   var street=getCurrentStreet();
   if(street!=='turn') return null;
   if(!ActionLine.didPreflopRaise()) return null;
-  if(!ActionLine.didCbetOnFlop()) return null;
+  if(!ActionLine.didFlopCBet()) return null;  // rev10: 修正方法名笔误(原didCbetOnFlop未定义)
 
   var btKey=_bt2key(bTexture);
   var hcKey=_hc2key(hClass);
@@ -3077,12 +3079,15 @@ function decidePreflop(k){
   var spr=calcSPR(), eq=eQ(k);
   var profile=DRTA.getProfile(), oppType=G.opp||'unknown', p5=_pos5(p);
 
-  // V3.24: 纳什push/fold — 短码(<15BB)时替代GTO策略
-  if(spr<1.5){
+  // V3.24→rev10: 纳什push/fold — 短码(<=15BB)时替代GTO策略
+  // rev10修复: 有效码深 effBB≈stk/pot*1.5(开池前底池≈1.5BB)。旧公式1/SPR方向写反,
+  // 5-15BB短码区(纳什表EV差距最大场景)永远查不到表,模块实际只在~2BB以下生效
+  var _nashEffBBpre=stk>0&&pot>0?Math.round(stk*1.5/pot):0;
+  if(_nashEffBBpre>0&&_nashEffBBpre<=15){
     try{
       if(typeof NashPushFold!=='undefined'&&typeof NashPushFold.decide==='function'){
-        var _nashEffBB=Math.round(1/Math.max(spr,0.02));
-        if(_nashEffBB<=15){
+        var _nashEffBB=_nashEffBBpre;
+        {
           var _nashR=NashPushFold.decide(k,p,scene,spr,_nashEffBB,bet,pot);
           // 青云独有: 锦标赛ICM纳什收紧
           try{if(typeof G!=='undefined' && G.game_type === 'tournament' && _nashR && (_nashR.a === 'raise' || _nashR.a === 'push')){
@@ -3238,6 +3243,20 @@ function decidePostflop(k){
   var _isMultiway=_nActive>=3;
   G._isMultiway=_isMultiway;
 
+  // rev10修复POST-4: 多人池权益用单挑单对手抽样会系统性高估(mcVsRange/riverExactEquity每次只抽1个对手,
+  // 3way中需同时领先两家范围)。短期在eq出口套分级折扣: NUTS/STRONG用multiPlayerEquity表值(AA85->73校准),
+  // MEDIUM/DRAW额外x0.9, AIR额外x0.8(弱牌高估幅度远大于强牌)。下游枚举器preEq与纹理表共享此eq
+  if(_isMultiway&&typeof eq==='number'&&eq>0){
+    try{
+      var _eqMwRaw=multiPlayerEquity(eq,_nActive);
+      var _hnMw=(hClass&&hClass.name)?hClass.name:'MEDIUM';
+      if(_hnMw==='MEDIUM'||_hnMw==='DRAW')_eqMwRaw=_eqMwRaw*0.9;
+      else if(_hnMw==='AIR')_eqMwRaw=_eqMwRaw*0.8;
+      eq=Math.round(Math.max(0,Math.min(100,_eqMwRaw))*10)/10;
+      console.log('[MW] 多人池权益折扣 n='+_nActive+' '+_hnMw+' -> eq='+eq);
+    }catch(eMw){}
+  }
+
   // ★ V3.1: StreetPlan多街计划 — 翻牌时生成计划，后续街检查
   var _planAdvice='';
   try{
@@ -3271,13 +3290,16 @@ function decidePostflop(k){
   }catch(e){}
 
   // ★ V3.11: 完整EV枚举 — 优先于查表 (River/Turn用真实EV选行动)
+  // rev10修复: 旧代码三个上下文参数硬编码false→_canBluff恒false(诈唬数学上永不输出)+
+  // 3bet池/多人池调整全失效。改为透传真实状态, _sprAdj按SPR分区给诈唬系数
+  var _evSprAdj=_buildSprAdjForEV(spr);
   try{
     if(street==='river'&&didPFR&&scene==='check'&&typeof _riverFullEnumerateEV==='function'){
-      var _evR=_riverFullEnumerateEV(k,hcKey,true,scene,bet,pot,btKey,ip,false,false,false,eq);
+      var _evR=_riverFullEnumerateEV(k,hcKey,true,scene,bet,pot,btKey,ip,_evSprAdj,_is3betPot,_isMultiway,eq,_nActive);
       if(_evR&&_evR.a){_evR.r=(_evR.r||'')+' | EV枚举';return _evR;}
     }
     if(street==='turn'&&didPFR&&scene==='check'&&typeof _turnFullEnumerateEV==='function'){
-      var _evT=_turnFullEnumerateEV(k,hcKey,true,scene,bet,pot,btKey,ip,false,false,false,eq);
+      var _evT=_turnFullEnumerateEV(k,hcKey,true,scene,bet,pot,btKey,ip,_evSprAdj,_is3betPot,_isMultiway,eq,_nActive);
       if(_evT&&_evT.a){_evT.r=(_evT.r||'')+' | EV枚举';return _evT;}
     }
   }catch(e){}
@@ -3339,17 +3361,19 @@ function decidePostflop(k){
   }
 
   // ★ V3.34: Turn Barrel纹理表 (完整纹理×类型表, 优先于简化DB)
-  if(street==='turn' && didPFR && ActionLine.didCbetOnFlop() && typeof _turnBarrel==='function'){
+  if(street==='turn' && didPFR && ActionLine.didFlopCBet() && typeof _turnBarrel==='function'){
     try{
-      var _tbR=_turnBarrel(k,hcKey,btKey,'b',bet,pot,true,ip,oppType,null,_is3betPot,_isMultiway);
+      var _tbR=_turnBarrel(k,hcKey,btKey,'b',bet,pot,true,ip,oppType,{cbet:1,fcb:1,bluff:1},_is3betPot,_isMultiway);
       if(_tbR&&_tbR.a){return _tbR;}
     }catch(e){}
   }
 
   // Turn Double Barrel
   if(street==='turn' && ip && scene==='check'){
-    var dbResult = decideTurnDoubleBarrel(k, spr, eq, profile, bTexture, hClass);
-    if(dbResult) return dbResult;
+    try{
+      var dbResult = decideTurnDoubleBarrel(k, spr, eq, profile, bTexture, hClass);
+      if(dbResult) return dbResult;
+    }catch(eDb){ /* rev10: 与其他纹理表分支一致,异常时落后续路径而非崩溃兜底 */ }
   }
 
   // ====== CBet ======
@@ -3417,8 +3441,19 @@ function decidePostflop(k){
 
 
 
+// ====== rev10: EV枚举器的SPR分区诈唬系数(旧_sprAdj恒为false致bluff永不开启) ======
+// 与旧引擎SPRZone分区对齐: 极短码all-in不诈唬, 深码略放宽
+function _buildSprAdjForEV(spr){
+  try{
+    var z=(typeof SPRZone!=='undefined'&&SPRZone.getZone)?SPRZone.getZone(spr):'standard';
+    var bluff=({ultra_short:0,short:0.3,med_short:0.8,standard:1.0,deep:1.2}[z]);
+    if(bluff===undefined)bluff=1.0;
+    return {cbet:1,fcb:1,bluff:bluff};
+  }catch(e){ return {cbet:1,fcb:1,bluff:1}; }
+}
+
 // ====== V3.11: 合并v2.9.164的EV计算核心 ======
-function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW, stk){
+function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW, stk, _nOpp){
     var evs={}, bestA=null, bestEV=-99999, bestSz=0;
     var _statFold=0.55, _statCall=0.32, _statRaise=0.13;
     // V2.9.162fix3: DRTA.getProfile() 实际字段是 fold_to_bet (50默认), 没有 callsBet
@@ -3434,7 +3469,13 @@ function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW
       }
       if(_statRaise<0.02)_statRaise=0.02;
     }
-    if(_isMW){_statFold=Math.min(0.85,_statFold*1.25);_statCall=Math.max(0.20,_statCall);}
+    // rev10修复POST-5: 多人池bluff成功需所有对手弃牌,联合弃牌率=f^(n-1)指数衰减
+    // (旧代码*1.25向上调整方向完全错误;f=0.55时3way应~0.30而非0.69)
+    if(_isMW){
+      var _nOppMW=(_nOpp&&_nOpp>=3)?_nOpp:3;
+      _statFold=Math.pow(Math.max(_statFold,0.05),_nOppMW-1);
+      _statCall=Math.max(0.20,1-_statFold);
+    }
     if(_is3bP){_statFold=Math.max(0.25,_statFold*0.85);}
     var _canBluff=_sprAdj&&_sprAdj.bluff>0.3;
     if(scene==='check'){
@@ -3445,14 +3486,18 @@ function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW
       var _betList=[s33,s75];
       for(var bi=0;bi<_betList.length;bi++){
         var bs=_betList[bi];
-        var ev=eq*(pot+bs)-(1-eq)*bs*_statCall;
+        // rev10修复POST-3: value EV标准式 F*pot+(1-F)*[eq*(pot+b)-(1-eq)*b]
+        // (旧式漏算对手fold直接赢pot的分支,强牌EV高估~0.18pot致边缘牌越过15%闸门乱value)
+        var ev=_statFold*pot+(1-_statFold)*(eq*(pot+bs)-(1-eq)*bs);
         if(ev>evs.betValue){evs.betValue=ev;evs.betValueSz=bs;}
       }
       evs.bluff=-99999; evs.bluffSz=0;
       if(_canBluff&&eq<0.40){
         for(var bj=0;bj<_betList.length;bj++){
           var bs2=_betList[bj];
-          var bluffEV=_statFold*bs2 + (1-_statFold)*(eq*(pot+bs2)-(1-eq)*bs2);
+          // rev10修复POST-3: 对手弃牌我们赢得的是当前底池pot,不是我们下的注bs2
+          // (旧式_statFold*bs2使33%pot档弃牌收益低估3倍,小尺寸诈唬EV永远算不正)
+          var bluffEV=_statFold*pot + (1-_statFold)*(eq*(pot+bs2)-(1-eq)*bs2);
           if(bluffEV>evs.bluff){evs.bluff=bluffEV;evs.bluffSz=bs2;}
         }
       }
@@ -3473,7 +3518,8 @@ function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW
         // V2.9.162fix3: 仅当 threebet 有实际数据(>=5)才反推,避免默认值0.40→0.55破坏air face场景
         else if(typeof _prof.threebet==='number'&&_prof.threebet>=5)_raiseFold=Math.max(0.20,Math.min(0.65,0.55-_prof.threebet/100*0.5));
       }
-      if(_isMW)_raiseFold=Math.min(0.7,_raiseFold*1.2);
+      // rev10修复POST-5: 面对我们raise时多人池联合弃牌率同样按f^(n-1)衰减
+      if(_isMW){var _nOppRF=(_nOpp&&_nOpp>=3)?_nOpp:3;_raiseFold=Math.pow(Math.max(_raiseFold,0.05),_nOppRF-1);}
       var callAfterEq=eq*0.70;
       evs.raise=_raiseFold*(pot+betSz) + (1-_raiseFold)*(callAfterEq*(pot+raiseSz)-(1-callAfterEq)*raiseSz);
       if(evs.fold>bestEV){bestA='fold';bestEV=evs.fold;bestSz=0;}
@@ -3627,7 +3673,7 @@ function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,
     return null;
   }
 
-function _riverFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj,_is3bP,_isMW,preEq){
+function _riverFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj,_is3bP,_isMW,preEq,_nOpp){
     var h=G.hole||[];
     var comm=G.comm||[];
     var hole=h.filter(function(c){return c;});
@@ -3656,7 +3702,7 @@ function _riverFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_s
     var _prof=null;
     try{_prof=DRTA.getProfile();}catch(e){}
     // V2.9.162: 调用公共EV计算核心 (子任务4: turn/river共用, _statFold/_raiseFold 全部在 core 内计算)
-    var _coreR=_computeFullEVCore(scene,betSz,pot,eq,_prof,_sprAdj,_is3bP,_isMW,G.stk||100000);
+    var _coreR=_computeFullEVCore(scene,betSz,pot,eq,_prof,_sprAdj,_is3bP,_isMW,G.stk||100000,_nOpp);
     if(!_coreR)return null;
     var evs=_coreR.evs, bestA=_coreR.bestA, bestEV=_coreR.bestEV, bestSz=_coreR.bestSz;
     var _statFold=_coreR._statFold, _raiseFold=_coreR._raiseFold;
@@ -3698,7 +3744,7 @@ function _riverFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_s
     return result;
   }
 
-function _turnFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj,_is3bP,_isMW,preEq){
+function _turnFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj,_is3bP,_isMW,preEq,_nOpp){
     var h=G.hole||[];
     var comm=G.comm||[];
     var hole=h.filter(function(c){return c;});
@@ -3731,7 +3777,7 @@ function _turnFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sp
     var _prof=null;
     try{_prof=DRTA.getProfile();}catch(e){}
     // V2.9.162: 调用公共EV计算核心 (子任务4: turn/river共用)
-    var _coreR=_computeFullEVCore(scene,betSz,pot,eq,_prof,_sprAdj,_is3bP,_isMW,G.stk||100000);
+    var _coreR=_computeFullEVCore(scene,betSz,pot,eq,_prof,_sprAdj,_is3bP,_isMW,G.stk||100000,_nOpp);
     if(!_coreR)return null;
     var evs=_coreR.evs, bestA=_coreR.bestA, bestEV=_coreR.bestEV, bestSz=_coreR.bestSz;
     var _statFold=_coreR._statFold, _raiseFold=_coreR._raiseFold;
@@ -11971,12 +12017,23 @@ var NashPushFold={
     'sb':{1:['AA','KK','QQ','JJ','TT','99','88','AKs','AQs','AJs','AKo','AQo','KQs'],3:['AA','KK','QQ','JJ','TT','99','88','77','AKs','AQs','AJs','ATs','AKo','AQo','AJo','KQs','KJs','KQo','QJs','JTs'],5:['AA','KK','QQ','JJ','TT','99','88','77','66','55','AKs','AQs','AJs','ATs','AKo','AQo','AJo','KQs','KJs','KTs','KQo','QJs','QTs','JTs','J9s','T9s'],8:['AA','KK','QQ','JJ','TT','99','88','77','66','55','44','AKs','AQs','AJs','ATs','A9s','AKo','AQo','AJo','ATo','KQs','KJs','KTs','KQo','QJs','QTs','QJo','JTs','J9s','T9s','98s'],12:['AA','KK','QQ','JJ','TT','99','88','77','66','55','44','AKs','AQs','AJs','ATs','A9s','A8s','AKo','AQo','AJo','ATo','KQs','KJs','KTs','K9s','KQo','KJo','QJs','QTs','Q9s','JTs','J9s','JTo','T9s','T8s','98s','87s'],15:['AA','KK','QQ','JJ','TT','99','88','77','66','55','44','AKs','AQs','AJs','ATs','A9s','A8s','AKo','AQo','AJo','ATo','A9o','KQs','KJs','KTs','K9s','KQo','KJo','QJs','QTs','Q9s','QJo','JTs','J9s','J8s','JTo','T9s','T8s','T9o','98s','87s','76s']},
     'btn':{1:['AA','KK','QQ','JJ','TT','AKs','AKo'],3:['AA','KK','QQ','JJ','TT','99','AKs','AQs','AKo','AQo','KQs','KJs'],5:['AA','KK','QQ','JJ','TT','99','88','77','AKs','AQs','AJs','AKo','AQo','AJo','KQs','KJs','KQo','QJs','JTs','T9s'],8:['AA','KK','QQ','JJ','TT','99','88','77','AKs','AQs','AJs','ATs','AKo','AQo','AJo','KQs','KJs','KTs','KQo','QJs','QTs','JTs','J9s','T9s','98s'],12:['AA','KK','QQ','JJ','TT','99','88','77','66','55','AKs','AQs','AJs','ATs','AKo','AQo','AJo','ATo','KQs','KJs','KTs','KQo','KJo','QJs','QTs','QJo','JTs','J9s','JTo','T9s','T8s','98s','87s'],15:['AA','KK','QQ','JJ','TT','99','88','77','66','55','AKs','AQs','AJs','ATs','A9s','AKo','AQo','AJo','ATo','KQs','KJs','KTs','K9s','KQo','KJo','QJs','QTs','Q9s','JTs','J9s','J8s','JTo','T9s','T8s','98s','87s','76s']}
   },
+  // rev10: PUSH表位置键补全 — BB短码面对limp时原无'bb'表→isNashPush直接false误fold;
+  // CO/HJ/MP/UTG复用现有键(略保守,避免新增大表出错)
+  _ensurePushKeys:function(){
+    if(!this.PUSH.bb&&this.PUSH.sb)this.PUSH.bb=this.PUSH.sb;  // BB短码用SB表(更保守)
+    if(!this.PUSH.co&&this.PUSH.btn)this.PUSH.co=this.PUSH.btn;
+  },
   shouldUseNash:function(scene,p,spr,effectiveBB){
-    if(spr>1.5)return false;
-    if(scene!=='check'&&scene!=='call')return false;
+    // rev10: 门限按有效BB数判断(旧spr>1.5与effBB反向,5-15BB被误挡)
+    if(scene!=='check'&&scene!=='call'&&scene!=='raise')return false;
     if(effectiveBB===undefined)effectiveBB=SPRZone.estimateBB?SPRZone.estimateBB():0;
-    if(effectiveBB<=0)effectiveBB=Math.round(1/Math.max(spr,0.01));
-    if(effectiveBB>15)return false;
+    if(effectiveBB<=0){
+      // rev10兜底: 正确换算 effBB≈1.5*SPR(旧1/SPR方向写反)
+      var _gStk=(typeof G!=='undefined'&&G.stk)?G.stk:100000;
+      var _gPot=(typeof G!=='undefined'&&G.pot)?G.pot:Math.max(_gStk/Math.max(spr,0.01),1);
+      effectiveBB=Math.round(_gStk*1.5/Math.max(_gPot,1));
+    }
+    if(effectiveBB>15||effectiveBB<=0)return false;
     return true;
   },
   _getBBKey:function(effectiveBB){
@@ -11984,24 +12041,37 @@ var NashPushFold={
     for(var i=0;i<keys.length;i++){if(effectiveBB<=keys[i])return keys[i];}
     return 15;
   },
-  isNashPush:function(k,p,effectiveBB){
+  // rev10: 自适应查表—PUSH/CALL多数位置表缺10档键(仅PUSH.sb有完整1-10),
+  // 直接_getBBKey(10)=10会range=undefined→10BB短码(最常见短码深度)全部误判弃牌。
+  // 缺档时向上取最近的更深档(更紧的表,保守不漏判)
+  _getRangeAt:function(ranges,effectiveBB){
+    if(!ranges)return null;
+    if(ranges[effectiveBB])return ranges[effectiveBB];
+    var keys=[1,3,5,8,10,12,15];
     var bbKey=this._getBBKey(effectiveBB);
-    var ranges=this.PUSH[p];
-    if(!ranges)return false;
-    var range=ranges[bbKey];
+    if(ranges[bbKey])return ranges[bbKey];
+    // bbKey档缺失: 向上取更深档(范围更紧)
+    var idx=keys.indexOf(bbKey);
+    for(var i=idx+1;i<keys.length;i++){if(ranges[keys[i]])return ranges[keys[i]];}
+    // 再向下兜底
+    for(var j=idx-1;j>=0;j--){if(ranges[keys[j]])return ranges[keys[j]];}
+    return null;
+  },
+  isNashPush:function(k,p,effectiveBB){
+    var range=this._getRangeAt(this.PUSH[p],effectiveBB);
     if(!range)return false;
     return range.indexOf(k)>=0;
   },
   isNashCall:function(k,p,effectiveBB,oppPos){
-    var bbKey=this._getBBKey(effectiveBB);
-    var callKey=(p==='bb'||p==='sb')?p:'bb';
-    var ranges=this.CALL[callKey];
-    if(!ranges)return false;
-    var range=ranges[bbKey];
+    // rev10: 非盲注位置(btn/co等)跟注shove应用更紧的btn表,旧逻辑全fallback到最宽的bb表→过度跟注
+    var callKey=(p==='bb'||p==='sb')?p:'btn';
+    var ranges=this.CALL[callKey]||this.CALL['bb'];
+    var range=this._getRangeAt(ranges,effectiveBB);
     if(!range)return false;
     return range.indexOf(k)>=0;
   },
   decide:function(k,p,scene,spr,effectiveBB,bet,pot){
+    try{this._ensurePushKeys();}catch(e){}
     if(!this.shouldUseNash(scene,p,spr,effectiveBB))return null;
     var bbKey=this._getBBKey(effectiveBB);
     if(scene==='check'||scene==='call'){
