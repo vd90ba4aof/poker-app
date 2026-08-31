@@ -9915,7 +9915,7 @@ function bridgeAdvice(r){
     //   若先showAdvice则autoDecision的R7守卫因FSM=IDLE而拦截所有auto-tap
     var _autoExecResult='skip';
     var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;
-    if(typeof AndroidBridge!=='undefined'){try{var _execRet=false;if(typeof autoExecuteDecision==="function"&&_am){_execRet=autoExecuteDecision(r,_am);_autoExecResult=_execRet?'executed':'manual';}if(AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+bridgeData.substring(0,80));AndroidBridge.showAdvice(bridgeData);}}catch(_ae){console.log("[autoExec] err:"+_ae.message);_autoExecResult='error';if(AndroidBridge.showAdvice){AndroidBridge.showAdvice(bridgeData);}}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
+    if(typeof AndroidBridge!=='undefined'){try{var _execRet=false;if(typeof autoExecuteDecision==="function"&&_am){_execRet=autoExecuteDecision(r,_am);_autoExecResult=_execRet?'executed':'manual';console.log('[V2.9.553-rev9] autoExec:_am='+_am+' ret='+_execRet+' _autoExecEnabled='+_autoExecEnabled);}if(AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+bridgeData.substring(0,80));AndroidBridge.showAdvice(bridgeData);}}catch(_ae){console.log("[autoExec] err:"+_ae.message);_autoExecResult='error';if(AndroidBridge.showAdvice){AndroidBridge.showAdvice(bridgeData);}}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
     if(typeof AndroidBridge!=='undefined'&&AndroidBridge.updateNotification){AndroidBridge.updateNotification(fullAdv,reason);}
     // V2.9.503: 记录决策到Kotlin端诊断日志
     try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.logDecision){
@@ -12295,7 +12295,7 @@ function onChipReset(){
 }
 // 自动执行决策——在bridgeAdvice之后调用
 function autoExecuteDecision(r, isAutoMode) {
-  if (!isAutoMode || !_autoExecEnabled) return false;
+  if (!isAutoMode) return false; // V2.9.553-rev9: 移除_autoExecEnabled依赖(Kotlin侧isAutoCaptureOn已是权威源)
 
   var exec = AutoConfidence.execute(r);
   console.log('[AutoExec] result=' + JSON.stringify(exec));
