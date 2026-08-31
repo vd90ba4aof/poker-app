@@ -2324,7 +2324,7 @@ var _SQUEEZE={
 
 // ====== 第一部分: GTO翻前频率表 (5-Max专用) ======
 var _RFI={
-  UTG1:{AA:1,KK:1,QQ:1,JJ:1,TT:1,"99":.9,"88":.8,"77":.7,"66":.6,"55":.5,"44":.4,"33":.3,"22":.3,AKs:1,AQs:1,AJs:1,ATs:.9,A9s:.7,A8s:.5,A7s:.4,A6s:.3,A5s:.6,A4s:.4,A3s:.3,A2s:.3,KQs:1,KJs:1,KTs:.7,K9s:.5,K8s:.3,K7s:.2,K6s:.1,K5s:.1,QJs:.9,QTs:.6,Q9s:.4,Q8s:.2,JTs:.9,J9s:.5,J8s:.2,T9s:.9,T8s:.3,"98s":.5,"87s":.5,"76s":.4,"65s":.3,"54s":.2,AKo:1,AQo:1,AJo:.7,ATo:.4,A9o:.2,KQo:.9,KJo:.6,KTo:.3,QJo:.5,JTo:.2},
+  UTG1:{AA:1,KK:1,QQ:1,JJ:1,TT:1,"99":.9,"88":.8,"77":.7,"66":.6,"55":.5,"44":.4,"33":.3,"22":.3,AKs:1,AQs:1,AJs:1,ATs:.9,A9s:.7,A8s:.5,A7s:.4,A6s:.3,A5s:.6,A4s:.4,A3s:.3,A2s:.3,KQs:1,KJs:1,KTs:.7,K9s:.5,K8s:.1,K7s:.2,K6s:.1,K5s:.1,QJs:.9,QTs:.6,Q9s:.4,Q8s:.1,JTs:.9,J9s:.5,J8s:.1,T9s:.9,T8s:.3,"98s":.5,"87s":.5,"76s":.4,"65s":.3,"54s":.2,AKo:1,AQo:1,AJo:.7,ATo:.4,A9o:.1,KQo:.9,KJo:.6,KTo:.3,QJo:.5,JTo:.2},
   MP:{AA:1,KK:1,QQ:1,JJ:1,TT:1,"99":1,"88":.9,"77":.8,"66":.7,"55":.6,"44":.5,"33":.4,"22":.4,AKs:1,AQs:1,AJs:1,ATs:1,A9s:.9,A8s:.7,A7s:.5,A6s:.4,A5s:.8,A4s:.6,A3s:.4,A2s:.4,KQs:1,KJs:1,KTs:.9,K9s:.7,K8s:.5,K7s:.3,K6s:.2,K5s:.2,K4s:.1,QJs:1,QTs:.8,Q9s:.6,Q8s:.4,Q7s:.2,Q6s:.1,JTs:1,J9s:.7,J8s:.4,J7s:.2,T9s:1,T8s:.5,T7s:.3,"98s":.7,"97s":.3,"87s":.7,"86s":.3,"76s":.6,"75s":.3,"65s":.4,"54s":.4,"43s":.1,AKo:1,AQo:1,AJo:.9,ATo:.7,A9o:.5,A8o:.3,A7o:.1,KQo:1,KJo:.8,KTo:.6,K9o:.3,K8o:.1,QJo:.7,QTo:.5,Q9o:.2,JTo:.5,J9o:.2,T9o:.3},
   CO:{AA:1,KK:1,QQ:1,JJ:1,TT:1,"99":1,"88":1,"77":.9,"66":.8,"55":.7,"44":.6,"33":.5,"22":.5,AKs:1,AQs:1,AJs:1,ATs:1,A9s:1,A8s:.9,A7s:.8,A6s:.7,A5s:1,A4s:.8,A3s:.7,A2s:.7,KQs:1,KJs:1,KTs:1,K9s:.9,K8s:.7,K7s:.5,K6s:.4,K5s:.3,K4s:.2,K3s:.2,K2s:.1,QJs:1,QTs:.9,Q9s:.7,Q8s:.5,Q7s:.3,Q6s:.2,Q5s:.1,JTs:1,J9s:.8,J8s:.5,J7s:.3,J6s:.2,T9s:1,T8s:.7,T7s:.4,T6s:.2,"98s":.8,"97s":.5,"96s":.2,"87s":.8,"86s":.5,"76s":.7,"75s":.4,"65s":.6,"64s":.2,"54s":.5,"53s":.2,"43s":.3,AKo:1,AQo:1,AJo:1,ATo:.9,A9o:.7,A8o:.5,A7o:.3,A6o:.1,A3o:.1,A2o:.1,KQo:1,KJo:.9,KTo:.8,K9o:.5,K8o:.2,QJo:.8,QTo:.7,Q9o:.3,Q8o:.1,JTo:.7,J9o:.3,T9o:.4,"98o":.1},
   BTN:{AA:1,KK:1,QQ:1,JJ:1,TT:1,"99":1,"88":1,"77":1,"66":.9,"55":.8,"44":.7,"33":.6,"22":.6,AKs:1,AQs:1,AJs:1,ATs:1,A9s:1,A8s:1,A7s:1,A6s:.9,A5s:1,A4s:1,A3s:.9,A2s:.9,KQs:1,KJs:1,KTs:1,K9s:1,K8s:.9,K7s:.7,K6s:.5,K5s:.4,K4s:.3,K3s:.2,K2s:.2,QJs:1,QTs:1,Q9s:.9,Q8s:.6,Q7s:.4,Q6s:.3,Q5s:.2,Q4s:.1,Q3s:.1,JTs:1,J9s:.9,J8s:.7,J7s:.4,J6s:.3,J5s:.2,J4s:.1,T9s:1,T8s:.8,T7s:.5,T6s:.3,T5s:.2,T4s:.1,"98s":.9,"97s":.6,"96s":.3,"95s":.2,"87s":.9,"86s":.6,"85s":.3,"76s":.8,"75s":.5,"74s":.2,"65s":.7,"64s":.3,"54s":.6,"53s":.2,"43s":.3,AKo:1,AQo:1,AJo:1,ATo:1,A9o:.9,A8o:.7,A7o:.4,A6o:.2,A5o:.1,A3o:.2,A2o:.2,KQo:1,KJo:1,KTo:.9,K9o:.6,K8o:.3,K7o:.1,QJo:.9,QTo:.8,Q9o:.4,Q8o:.2,JTo:.8,J9o:.4,J8o:.2,T9o:.5,T8o:.2,"98o":.2},
@@ -2352,7 +2352,7 @@ var _3B={
   },
   vs_BTN:{
     from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},AJo:{a:'3b',f:.2},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.3},KJs:{a:'3b',f:.2},QJs:{a:'3b',f:.2},KQo:{a:'3b',f:.3}},
-    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},"99":{a:'3b',f:.3},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},AJs:{a:'3b',f:.2},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},K5s:{a:'3b',f:.2},K4s:{a:'3b',f:.2},"98s":{a:'3b',f:.3},"87s":{a:'3b',f:.2},ATs:{a:'c',f:.7},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},A6s:{a:'c',f:.3},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},K9s:{a:'c',f:.4},QJs:{a:'c',f:.5},QTs:{a:'c',f:.4},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.6},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},"65s":{a:'c',f:.3},"54s":{a:'c',f:.2},AJo:{a:'c',f:.3},KQo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.2}}},
+    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},"99":{a:'3b',f:.3},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},AJs:{a:'3b',f:.2},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},K5s:{a:'3b',f:.2},K4s:{a:'3b',f:.2},"98s":{a:'3b',f:.3},"87s":{a:'3b',f:.2},ATs:{a:'c',f:.7},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},A6s:{a:'c',f:.3},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},K9s:{a:'c',f:.4},QJs:{a:'c',f:.5},QTs:{a:'c',f:.4},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.6},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},"65s":{a:'c',f:.3},"54s":{a:'c',f:.2},AJo:{a:'c',f:.3},KQo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.2},K8o:{a:'c',f:.2},K7o:{a:'c',f:.15},Q9o:{a:'c',f:.3},Q8o:{a:'c',f:.2},J9o:{a:'c',f:.25},T9o:{a:'c',f:.3},"98o":{a:'c',f:.25},"87o":{a:'c',f:.15}}},
   vs_SB:{
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},"99":{a:'3b',f:.4},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.4},KJs:{a:'3b',f:.3},QJs:{a:'3b',f:.25},KQo:{a:'3b',f:.35},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},"44":{a:'c',f:.4},"33":{a:'c',f:.35},"22":{a:'c',f:.35},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KTs:{a:'c',f:.6},K9s:{a:'c',f:.5},QTs:{a:'c',f:.5},Q9s:{a:'c',f:.4},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.5},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},AJo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.25}},
     from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.4},KJs:{a:'3b',f:.3},KQo:{a:'3b',f:.35},"99":{a:'c',f:.85},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},ATs:{a:'c',f:.75},KTs:{a:'c',f:.6},K9s:{a:'c',f:.5},QJs:{a:'c',f:.55},QTs:{a:'c',f:.5},JTs:{a:'c',f:.65},J9s:{a:'c',f:.45},T9s:{a:'c',f:.55},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},AJo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.25},JTo:{a:'c',f:.3},T9o:{a:'c',f:.25}}
@@ -2588,6 +2588,17 @@ function decideTurnDefense(k, spr, eq, oppProfile, bTexture, hClass){
   var foldP=td[0], callP=td[1], raiseP=td[2];
   var pot=G.pot||1, bet=G.bet||0, stk=G.stk||100000;
 
+  // rev12修复POST-12: _TURN_DEFENSE无尺度维度——小注(<40%pot,MDF>=71%)时fold档概率减半转call,
+  // 弱对/弱听(hcKey5-10)不被小注诈唬白拿底池;纯空气(13-15)/差听(12)维持弃牌
+  if(bet>0){
+    var _tdSzRatio=bet/Math.max(pot,1);
+    if(_tdSzRatio<0.4&&hcKey<=10&&hcKey>=5){
+      var _tdMove=foldP*0.5;
+      foldP=foldP-_tdMove;callP=callP+_tdMove;
+      console.log('[SE] turn小注防守: sz='+Math.round(_tdSzRatio*100)+'%pot hc='+hcKey+' fold概率减半->call');
+    }
+  }
+
   // 定量剥削调整
   var oppType=G.opp||'unknown';
   var cbetTDev = _oppDev('cbetTurn', oppProfile.cbetTurn, _GTO.cbetTurn, _GTO_SD.cbetTurn);
@@ -2813,6 +2824,20 @@ function decidePreflop(k){
 
   // 3: 面对3bet
   if(scene==='reraise'){
+    // rev12修复PRE-5: 5bet非全下显式分支——旧新引擎缺5bet检测,面对5bet误用_F3B 4bet表
+    // (4b频率如QQ .6会继续4b/跟注)。判断:翻前面对加注额>=12BB(典型5bet尺度)即5bet场景,
+    // 仅AA/KK/QQ/AKs/AKo(fivebet_shove坚果组)继续全下,其余一律弃牌
+    try{
+      var _5bBetBB=(pot>0&&pot<=3)?bet/(pot/1.5):0;  // 开池前底池~1.5BB,换算加注额BB数
+      if(_5bBetBB>=12){
+        var _5bShove=['AA','KK','QQ','AKs','AKo'];
+        if(_5bShove.indexOf(k)>=0){
+          var _5bSz=Math.min(stk,bet);
+          return{a:'raise',v:stk,r:'5bet-shove: '+k+'坚果级('+Math.round(_5bBetBB)+'BB)',eq:eq,c:'h',sizing:stk,scene:'面对5bet',spr:spr,_se:true,_seFreq:1};
+        }
+        return _fold(eq,k+' vs 5bet('+Math.round(_5bBetBB)+'BB)->非坚果组弃牌',spr);
+      }
+    }catch(e5b){}
     // rev11 PRE-2: 旧死代码squeeze块已移至scene==='raise'分支(此处scene恒为reraise,旧条件scene==='raise'永假)
     var _f3bKey=p5==='MP'?'UTG1':p5;  // V3.31: MP位置用UTG1策略(5人桌早期位置)
     var f3b=_F3B[_f3bKey];if(!f3b)return null;var entry3=f3b[k];if(!entry3)return _fold(eq,k+' vs 3bet→fold',spr);
@@ -3010,10 +3035,22 @@ function decidePostflop(k){
     if(tdResult) return tdResult;
   }
 
-  // ★ V3.34: Turn Barrel纹理表 (完整纹理×类型表, 优先于简化DB)
-  if(street==='turn' && didPFR && ActionLine.didFlopCBet() && typeof _turnBarrel==='function'){
+  // rev12修复POST-13: turn probe——非PFR防守方在turn对手check时无任何主动下注分支
+  // (旧引擎_donkDecision表的freq/sz数值本就是防守方领先下注频率/尺度,语义与probe一致,直接复用)
+  if(street==='turn' && !didPFR && scene==='check' && typeof _donkDecision==='function'){
     try{
-      var _tbR=_turnBarrel(k,hcKey,btKey,'b',bet,pot,true,ip,oppType,{cbet:1,fcb:1,bluff:1},_is3betPot,_isMultiway);
+      var _probeR=_donkDecision(k,hcKey,btKey,ip,pot,oppType,{cbet:1,fcb:1,bluff:1},_is3betPot,_isMultiway,'turn');
+      if(_probeR&&_probeR.a){_probeR.scene='Turn Probe';_probeR.r='GTO Turn probe '+(hcKey<=4?'价值':'诈唬')+'('+Math.round((_probeR._seFreq||0)*100)+'%)';return _probeR;}
+    }catch(e){}
+  }
+
+  // ★ V3.34: Turn Barrel纹理表 (完整纹理×类型表, 优先于简化DB)
+  // rev12修复POST-13: 旧门槛ActionLine.didFlopCBet()把delayed cbet(翻牌check转牌开枪)完全排除,
+  // _turnBarrel内本有didFlopCBet===false→freq*0.3的弱化档却永远走不到。改为传入真实状态,延迟开火低频可用
+  if(street==='turn' && didPFR && typeof _turnBarrel==='function'){
+    try{
+      var _didFCB=ActionLine.didFlopCBet();
+      var _tbR=_turnBarrel(k,hcKey,btKey,'b',bet,pot,_didFCB,ip,oppType,{cbet:1,fcb:1,bluff:1},_is3betPot,_isMultiway);
       if(_tbR&&_tbR.a){return _tbR;}
     }catch(e){}
   }
@@ -3180,7 +3217,10 @@ function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW
       }
       evs.check=eq*pot*_chkMult;
       evs.betValue=-99999; evs.betValueSz=s33;
-      var _betList=[s33,s75];
+      // rev12修复POST-13: 旧仅33%/75%两档,GTO常用的半池/pot/超池(坚果优势面)被量化到相邻档。
+      // 扩5档,GG四档快照_snapToGGTiers会映射到可执行档位,1.33超池自动落pot/allin档
+      var s50=Math.round(pot*0.5),s100=Math.round(pot*1.0),s133=Math.round(Math.min(pot*1.33,stk||100000));
+      var _betList=[s33,s50,s75,s100,s133];
       for(var bi=0;bi<_betList.length;bi++){
         var bs=_betList[bi];
         // rev10修复POST-3: value EV标准式 F*pot+(1-F)*[eq*(pot+b)-(1-eq)*b]
@@ -3337,7 +3377,15 @@ function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,
     var table=rivTbl[rivKey];
     if(!table){rivKey='0_'+(scene==='check'?'bet':'face');table=rivTbl[rivKey];}
     if(!table||!table[hcKey])return null;
-    var e=table[hcKey];// V2.9.161: River SPR/3bet/Multiway调整
+    var e=table[hcKey];
+    // rev12修复POST-12: _RIV face兜底表无尺度维度——对手1/3pot小注(MDF=75%,只需20%权益)
+    // 时hcKey7-10弱对/弱听一律fold会被小注诈唬直接剥削。小注(szRatio<0.4)且我们非纯空气(hc<=10):
+    // fold/call类降级为call(raise类保留);枚举器主路径自带pot odds,此处仅兜底
+    if(scene!=='check'&&e.a==='fold'){
+      var _rivSzRatio=betSz/Math.max(pot,1);
+      if(_rivSzRatio<0.4&&hcKey<=10){e={a:'call',s:0};console.log('[SE] river小注防守: sz='+Math.round(_rivSzRatio*100)+'%pot hc='+hcKey+' fold->call');}
+    }
+    // V2.9.161: River SPR/3bet/Multiway调整
         var _rivAdj=1;
         if(e.a==='bluff'){
           if(_sprAdj.bluff<0.5)_rivAdj=0; // 短码不诈唬
@@ -3690,10 +3738,21 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk){
     var sum=adjC+adjR+adjF;
     if(sum>0.01){adjC/=sum;adjR/=sum;adjF/=sum;}else{adjC=e.c;adjR=e.r;adjF=e.f;}
     var _fcbEA=ExploitAdjuster(1,'facing_cbet',hcKey,(typeof oppType!=='undefined'?oppType:(G.opp||'unknown')),street||'flop','facing_cbet');
-    if(_fcbEA.label){adjR=adjR*_fcbEA.freq;adjC=adjC+(1-_fcbEA.freq)*adjC;adjF=1-adjR-adjC;if(adjF<0)adjF=0;}
+    // rev12修复POST-14: 旧式 adjC=adjC+(1-freq)*adjC 在raise下调分支把call错误放大1.6倍(call-happy);
+    // 改为标准再分配——raise被压减的余量dR按call/fold现有比例分给两者,方向恒正确
+    if(_fcbEA.label){
+      var _dR=adjR*(1-_fcbEA.freq);
+      adjR=adjR*_fcbEA.freq;
+      var _cfBase=adjC+adjF;
+      if(_cfBase>0.001){adjC+=_dR*(adjC/_cfBase);adjF+=_dR*(adjF/_cfBase);}
+    }
     // V2.9.161: SPR区面CBet调整
     var _sprAdjSafe=(typeof _sprAdj!=='undefined'&&_sprAdj)?_sprAdj:{fcb:1,cbet:1,bluff:1};  // V3.35: 默认值防止ReferenceError
     adjF=adjF*_sprAdjSafe.fcb;
+    // rev12修复POST-14: 调整链末端统一归一化(旧式ExploitAdjuster后与SPR调整后不再归一,三概率和可≠1)
+    var _sumEA=adjC+adjR+adjF;
+    if(_sumEA>0.01){adjC/=_sumEA;adjR/=_sumEA;adjF/=_sumEA;}
+    adjC=Math.max(0,adjC);adjR=Math.max(0,adjR);adjF=Math.max(0,adjF);
     // 频率随机决策
     var r=Math.random();
     var spr=calcSPR();
@@ -6426,9 +6485,13 @@ function handClassify(hole,comm){
   var flushSuits={};
   cards.forEach(function(c){if(c)flushSuits[c.suit]=(flushSuits[c.suit]||0)+1;});
   var flushDraw=false,flushMade=false;
+  // rev12修复POST-11: 4同花必须手牌参与该花色才算听花——
+  // 转牌公牌4同花+手牌0该花: 河牌来花只是公共牌同花(摊牌比踢脚),不是我们听花,旧码误标flushDraw+9outs致半诈唬过度
+  var _flushHoleSuits={};
+  hole.filter(function(c){return c;}).forEach(function(c){if(c&&c.suit)_flushHoleSuits[c.suit]=(_flushHoleSuits[c.suit]||0)+1;});
   for(var s in flushSuits){
     if(flushSuits[s]>=5)flushMade=true;
-    else if(flushSuits[s]===4)flushDraw=true;
+    else if(flushSuits[s]===4&&(_flushHoleSuits[s]||0)>=1)flushDraw=true;
   }
   var rankVals=cards.map(function(c){return c?RV[c.rank]:0;});
   var uniq=[];

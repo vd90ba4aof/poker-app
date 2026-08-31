@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.553-rev11 · 策略引擎P1修复(挤压+隔离加注+对手类型+范围收窄+分街EV+MC超时保护)"
+        android:text="V2.9.553-rev12 · P2修复(听牌outs+小注防守+下注档位+延迟开火/turn probe+5bet/范围微调+剥削公式)"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
