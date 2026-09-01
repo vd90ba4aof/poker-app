@@ -1163,12 +1163,23 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                     else -> Triple(chChips, scChips, "c")
                 }
                 if (ch == '?') {
+                    // V2.9.556-fix: 逗号/小数点跳过而非整体失败
+                    // GG筹码显示"3,406"(千位逗号)或"201.13"(小数桌)，逗号/小数点无模板匹配
+                    // 特征：小尺寸(w<20,h<20) + 低分(所有模板<0.4) + 非矩形(宽高比极端或面积过小)
+                    val isCommaOrDot = qW < 20 && qH < 20 &&
+                            scBtn < 0.4f && scPot < 0.4f && scChips < 0.4f &&
+                            (qW * qH < 200 || qW.toFloat() / qH < 0.4f || qH.toFloat() / qW < 0.4f)
+                    if (isCommaOrDot) {
+                        diagParts.add(",(skip)")
+                        continue  // 跳过逗号/小数点，继续读后续数字
+                    }
                     return AmountResult(0, 0f, digits.size, "digit_unmatched")
                 }
                 sb.append(ch)
                 if (sc < minConf) minConf = sc
                 diagParts.add("$ch(%s%.2f)".format(src, sc))
             }
+            if (sb.isEmpty()) return AmountResult(0, 0f, digits.size, "all_commas_dots")
             val value = try { sb.toString().toLong() } catch (_: Exception) { 0L }
             val diag = "n=${digits.size} ${diagParts.joinToString(" ")} v=$value"
             AmountResult(value, minConf, digits.size, diag)
