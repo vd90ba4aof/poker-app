@@ -27,6 +27,14 @@ jobs:
         
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: JS engine runtime smoke test
+      run: node tests/engine_smoke.test.js
       
     - name: Build with Gradle
       run: ./gradlew assembleDebug

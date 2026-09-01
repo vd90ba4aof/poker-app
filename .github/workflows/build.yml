@@ -28,6 +28,16 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: JS engine runtime smoke test
+        # 运行时行为门禁：加载真实poker_helper.html喂vision数据，断言go()决策时刻stk/pot已就绪。
+        # 拦截静态检查抓不到的时序/分支回归（如2026-09-01 stk时序倒置：决策用默认100BB）。
+        run: node tests/engine_smoke.test.js
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
 
