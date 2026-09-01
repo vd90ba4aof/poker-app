@@ -3306,11 +3306,24 @@ function decidePostflop(k){
   var oppType=G.opp||'unknown';
   var profile=DRTA.getProfile();
   var eq;
+  // POST-4: 提前计算 _nActive 用于多对手互斥抽样
+  var _nActive=0;
+  try{
+    var _pl=G._lastPlayers&&G._lastPlayers.length>0?G._lastPlayers:(G.players||[]);
+    for(var _pi=0;_pi<_pl.length;_pi++){
+      var _pp=_pl[_pi];
+      if(!_pp)continue;
+      var _isFolded=_pp.folded===true;
+      var _isActive=_pp.active===true||_pp.active===1||(!_isFolded&&_pp.chips>0);
+      if(_isActive&&!_isFolded)_nActive++;
+    }
+  }catch(e){_nActive=0;}
+  if(_nActive<2)_nActive=2;
 
   // rev11 POST-6: 对手范围按行动线收窄——我们是PFR且面对bet=对手donk/raise(极化);对手是PFR连开barrel按街收窄
   var _oppLinePF=scene==='check'?(bc.length===5?'barrel_river':'barrel_turn'):'raise';
-  if(bc.length===5){var rs=riverExactEquity(hole,comm,getOppRange('postflop',_oppLinePF,bTexture.wetness>=2?'wet':'dry'));eq=rs.eq;}
-  else{var mcI=bc.length===4?1200:1000;if(bet/(pot+bet)>=.66)mcI=Math.round(mcI*2);else if(bet/(pot+bet)>=.33)mcI=Math.round(mcI*1.3);var ms=mcVsRange(hole,comm,getOppRange('postflop',_oppLinePF,bTexture.wetness>=2?'wet':'dry'),Math.min(mcI,4000));eq=ms.eq;}
+  if(bc.length===5){var rs=riverExactEquity(hole,comm,getOppRange('postflop',_oppLinePF,bTexture.wetness>=2?'wet':'dry'),_nActive-1);eq=rs.eq;}
+  else{var mcI=bc.length===4?1200:1000;if(bet/(pot+bet)>=.66)mcI=Math.round(mcI*2);else if(bet/(pot+bet)>=.33)mcI=Math.round(mcI*1.3);var ms=mcVsRange(hole,comm,getOppRange('postflop',_oppLinePF,bTexture.wetness>=2?'wet':'dry'),Math.min(mcI,4000),_nActive-1);eq=ms.eq;}
   _mcSimCache=null;
 
   var btKey=_bt2key(bTexture);
@@ -10740,9 +10753,9 @@ function e5(cards){var best=0;var all5=[];var n=cards.length;for(var i=0;i<n-4;i
 // V2.9.53: 河牌完全枚举——5张公共牌确定时精确计算胜率
 // 原理: 河牌无需模拟未知公共牌，只需枚举对手所有可能手牌组合，逐一比较牌力
 // 精度: 100%精确（非MC近似），典型场景1000-2000组合，<100ms
-function riverExactEquity(hole,comm,oppRange){
+function riverExactEquity(hole,comm,oppRange,nOpponents){
+  if(nOpponents===undefined)nOpponents=1;
   var known=[].concat(hole,comm.filter(function(c){return c;}));
-  // 构建剩余牌堆
   var deck=[];
   for(var ri=0;ri<R.length;ri++){
     for(var si=0;si<SU.length;si++){
@@ -10752,7 +10765,6 @@ function riverExactEquity(hole,comm,oppRange){
       }
     }
   }
-  // 构建对手范围: 展开oppRange为具体手牌组合，排除已知牌
   var oppHands=[];
   for(var ki=0;ki<oppRange.length;ki++){
     var key=oppRange[ki];
@@ -10760,12 +10772,12 @@ function riverExactEquity(hole,comm,oppRange){
     for(var hi=0;hi<hands.length;hi++){
       var h=hands[hi];
       if(!known.some(function(c){return c.rank===h[0].rank&&(c.suit===h[0].suit||!c.suit);})
-        &&!known.some(function(c){return c.rank===h[1].rank&&(c.suit===h[1].suit||!c.suit);})){
+        &&!known.some(function(c){return c.rank===h[1].rank&&(c.suit===h[1].suit||!c.suit);}))
+      {
         oppHands.push(h);
       }
     }
   }
-  // 如果对手范围为空，枚举所有剩余2张组合（无范围约束）
   if(oppHands.length===0){
     for(var i=0;i<deck.length;i++){
       for(var j=i+1;j<deck.length;j++){
@@ -10773,16 +10785,32 @@ function riverExactEquity(hole,comm,oppRange){
       }
     }
   }
-  // 我的牌力（河牌7张选最佳5张，只算一次）
   var myBest=e5([].concat(hole,comm));
-  var w=0,t=0,total=oppHands.length;
-  // 遍历对手每一手，精确比较（7张选最佳5张）
-  for(var oi=0;oi<total;oi++){
-    var oppBest=e5([].concat(oppHands[oi],comm));
-    if(myBest>oppBest) w++;
-    else if(myBest===oppBest) t++;
+  if(nOpponents<=1){
+    var w=0,t=0,total=oppHands.length;
+    for(var oi=0;oi<total;oi++){
+      var oppBest=e5([].concat(oppHands[oi],comm));
+      if(myBest>oppBest) w++;
+      else if(myBest===oppBest) t++;
+    }
+    return {eq:(w+t*0.5)/total*100, win:w/total*100, tie:t/total*100, exact:true, combos:total};
+  } else if(nOpponents===2 && oppHands.length<=200){
+    var w=0,t=0,total=0;
+    for(var oi=0;oi<oppHands.length;oi++){
+      for(var oj=oi+1;oj<oppHands.length;oj++){
+        var opp1Best=e5([].concat(oppHands[oi],comm));
+        var opp2Best=e5([].concat(oppHands[oj],comm));
+        var maxOppBest=Math.max(opp1Best,opp2Best);
+        if(myBest>maxOppBest) w++;
+        else if(myBest===maxOppBest) t++;
+        total++;
+      }
+    }
+    return {eq:(w+t*0.5)/total*100, win:w/total*100, tie:t/total*100, exact:true, combos:total, multiway:true};
+  } else {
+    var mcResult=mcVsRange(hole,comm,oppRange,2000,nOpponents);
+    return {eq:mcResult.eq, win:mcResult.win, tie:mcResult.tie, exact:false, mc:true};
   }
-  return {eq:(w+t*0.5)/total*100, win:w/total*100, tie:t/total*100, exact:true, combos:total};
 }
 
 function mcVsRange(hole,comm,oppRange,iterations){if(iterations===undefined)iterations=1000;var known=[].concat(hole,comm.filter(function(c){return c;}));var deck=[];for(var ri=0;ri<R.length;ri++){for(var si=0;si<SU.length;si++){var rank=R[ri];var suit=SU[si];if(!known.some(function(c){return c.rank===rank&&(c.suit===suit||!c.suit)})){deck.push({rank:rank,suit:suit});}}}var cn=comm.filter(function(c){return c;}).length;var nd=5-cn;var oppHands=[];for(var ki=0;ki<oppRange.length;ki++){var key=oppRange[ki];var hands=handKeyToCards(key);for(var hi=0;hi<hands.length;hi++){var h=hands[hi];if(!known.some(function(c){return c.rank===h[0].rank&&(c.suit===h[0].suit||!c.suit)})&&!known.some(function(c){return c.rank===h[1].rank&&(c.suit===h[1].suit||!c.suit)})){oppHands.push(h);}}}var w=0,t=0;var hv=eH([].concat(hole,comm.filter(function(c){return c;})));for(var i=0;i<iterations;i++){var sh=[].concat(deck);for(var j=sh.length-1;j>sh.length-1-nd&&j>0;j--){var k=Math.floor(Math.random()*(j+1));var tmp=sh[j];sh[j]=sh[k];sh[k]=tmp;}var board=[].concat(comm.filter(function(c){return c;}),(nd>0?sh.slice(-nd):[]));var myBest=eH([].concat(hole,board));var oppBest=0;if(oppHands.length>0){var oppIdx=Math.floor(Math.random()*oppHands.length);var oppHole=oppHands[oppIdx];if(oppHole)oppBest=eH([].concat(oppHole,board));}else{var oppSh=[].concat(deck.slice(0,-nd));for(var jj=oppSh.length-1;jj>oppSh.length-3&&jj>0;jj--){var kk=Math.floor(Math.random()*(jj+1));var tmp2=oppSh[jj];oppSh[jj]=oppSh[kk];oppSh[kk]=tmp2;}oppBest=eH([oppSh[0],oppSh[1]].concat(board));}if(myBest>oppBest)w++;else if(myBest===oppBest)t++;}return{eq:(w+t*0.5)/iterations*100,win:w/iterations*100,tie:t/iterations*100};}
