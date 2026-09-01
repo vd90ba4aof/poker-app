@@ -1284,7 +1284,7 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                     if (sc >= MIN_DIGIT_CONF && ch != '?') {
                         sb.append(ch)
                     } else {
-                        Log.d(TAG, "🎯 盲注$tag组内低分组块(x=${c.x1},w=${c.w},h=${c.h},sc=$sc)→跳过")
+                        Log.d(TAG, "🎯 盲注${tag}组内低分组块(x=${c.x1},w=${c.w},h=${c.h},sc=$sc)→跳过")
                     }
                 }
                 return sb.toString()
