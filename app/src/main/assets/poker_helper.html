@@ -1322,7 +1322,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.555',
+  CURRENT_VERSION:'2.9.556',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -1828,21 +1828,22 @@ var OppProfiler={
     G._oppProfiles=this._profiles;
   },
   
-  // V2.9.105: 筹码深度分类
+  // V2.9.105→V2.9.556: 筹码深度分类 — 直读码深(stk/blindBB), 删旧pot/stk反推
   _updateStackTypes:function(){
-    var bb=G.stk?Math.round(G.pot/G.stk*100)/100:0;
-    // 用盲注算BB更准确
     var blindBB=window._lastBlindBB||200;
     for(var nk in this._profiles){
       var p=this._profiles[nk];
       if(p._lastChips<=0)continue;
       var bbCount=Math.round(p._lastChips/blindBB);
-      if(bbCount<20){
-        p.stackType='short'; // <20BB 短筹码
-      }else if(bbCount<50){
-        p.stackType='medium'; // 20-50BB 中等
+      p.effBB=bbCount; // V2.9.556: 存对手码深供翻前决策
+      if(bbCount<=15){
+        p.stackType='nash'; // <=15BB 纳什push/fold
+      }else if(bbCount<=40){
+        p.stackType='short'; // 15-40BB 短码(收紧)
+      }else if(bbCount>=150){
+        p.stackType='deep'; // >150BB 深码(投机升值)
       }else{
-        p.stackType='deep'; // >50BB 深筹码
+        p.stackType='medium'; // 40-150BB 常规
       }
     }
   },
@@ -2736,7 +2737,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.555';
+var APP_VERSION='2.9.556';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3125,10 +3126,17 @@ function decidePreflop(k){
   var spr=calcSPR(), eq=eQ(k);
   var profile=DRTA.getProfile(), oppType=G.opp||'unknown', p5=_pos5(p);
 
-  // V3.24→rev10: 纳什push/fold — 短码(<=15BB)时替代GTO策略
-  // rev10修复: 有效码深 effBB≈stk/pot*1.5(开池前底池≈1.5BB)。旧公式1/SPR方向写反,
-  // 5-15BB短码区(纳什表EV差距最大场景)永远查不到表,模块实际只在~2BB以下生效
-  var _nashEffBBpre=stk>0?stk:0;
+  // V2.9.556 P1(深/短码接入): 直读码深 — 头像下数字÷盲注BB,不走底池反推
+  var _blindBB=window._lastBlindBB||200;
+  var _myEffBB=_blindBB>0?Math.round(stk/_blindBB):0;
+  // 对手码深感知: 取池内最浅对手码深, 池里有人短码按有效码深打
+  var _oppEffBB=_myEffBB;
+  try{var _os=G.opp_seats||[];for(var _oi=0;_oi<_os.length;_oi++){var _oc=parseInt(_os[_oi]&&_os[_oi].chips)||0;var _of=(_os[_oi]&&_os[_oi].active!==false&&_os[_oi].action!=='fold');if(_oc>0&&_of){var _ebb=Math.round(_oc/_blindBB);if(_ebb<_oppEffBB)_oppEffBB=_ebb;}}}catch(eOe){}
+  // 码深分档
+  var _depthTier=_oppEffBB<=15?'nash':(_oppEffBB<=40?'short':(_oppEffBB>=150?'deep':'standard'));
+
+  // V3.24→rev10→V2.9.556: 纳什push/fold — 对手码深<=15BB触发, 直读不再用stk绝对值
+  var _nashEffBBpre=_oppEffBB;
   if(_nashEffBBpre>0&&_nashEffBBpre<=15){
     try{
       if(typeof NashPushFold!=='undefined'&&typeof NashPushFold.decide==='function'){
@@ -3154,6 +3162,9 @@ function decidePreflop(k){
   var _specSPRMult={ultra_short:.1,short:.3,med_short:.7,standard:1,deep:1.3}[SPRZone.getZone(spr)]||1;
   var _specPosMult={utg:.6,utg1:.7,mp:.8,mp1:.85,hj:.95,co:1.1,btn:1.2,sb:.9,bb:1}[p]||1;
   _specBonus=Math.round(_specBonus*_specSPRMult*_specPosMult);
+  // V2.9.556: 翻前码深分档调eq — 深码投机牌升值, 短码投机牌清零(只打大牌)
+  if(_depthTier==='deep'&&k.indexOf('s')>=0)_specBonus=Math.round(_specBonus*1.5); // 深码同花连牌/同花A奖励翻倍
+  if(_depthTier==='short'&&k.indexOf('s')>=0&&'23456789T'.indexOf(k[0])>=0&&'23456789T'.indexOf(k[1])>=0)_specBonus=0; // 短码非高牌同花连牌不给投机
   if(_specBonus>0)eq+=_specBonus;
 
   var posMod={utg:-6,utg1:-4.5,mp:-3,mp1:-1.5,hj:1,co:2,btn:6,sb:0,bb:1};
@@ -12354,10 +12365,10 @@ var NashPushFold={
     if(scene!=='check'&&scene!=='call'&&scene!=='raise')return false;
     if(effectiveBB===undefined)effectiveBB=SPRZone.estimateBB?SPRZone.estimateBB():0;
     if(effectiveBB<=0){
-      // rev10兜底: 正确换算 effBB≈1.5*SPR(旧1/SPR方向写反)
+      // V2.9.556: 直读兜底(不再用stk/pot反推,避免小数桌码深算错)
       var _gStk=(typeof G!=='undefined'&&G.stk)?G.stk:100000;
-      var _gPot=(typeof G!=='undefined'&&G.pot)?G.pot:Math.max(_gStk/Math.max(spr,0.01),1);
-      effectiveBB=Math.round(_gStk*1.5/Math.max(_gPot,1));
+      var _gBB=(typeof window!=='undefined'&&window._lastBlindBB>0)?window._lastBlindBB:200;
+      effectiveBB=Math.round(_gStk/_gBB);
     }
     if(effectiveBB>15||effectiveBB<=0)return false;
     return true;
