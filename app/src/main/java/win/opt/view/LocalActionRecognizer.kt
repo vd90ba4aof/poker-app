@@ -1178,6 +1178,100 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * V2.9.554: 盲注识别（牌桌中央"德州扑克, 100 / 200"暗灰绿水印文字）。
+     * 难点：①文字是暗灰绿(lum~114)非白色，背景深绿felt(lum~44)，需亮度mask；
+     *       ②中文"德州扑克"竖笔画拆成窄长条(w~13 h~29)，几何上与数字"1"无法区分，
+     *         只能靠模板匹配分数挡（中文/斜杠匹配任何数字都低分<0.45）。
+     * 流程：亮度mask → findComponents → 从右往左状态机读数：
+     *       最右连续高分数字=BB → 首个低分=斜杠(切SB) → SB数字 → 再低分=中文(停)。
+     * @return Pair(SB, BB)，识别失败返回(0,0)
+     */
+    fun recognizeBlinds(bmp: Bitmap): Pair<Int, Int> {
+        return try {
+            val w0 = bmp.width
+            val h0 = bmp.height
+            if (w0 < 10 || h0 < 10) return Pair(0, 0)
+
+            // 1. 亮度mask：暗灰绿水印(lum 89-121) vs 深绿felt(lum 41-76)，阈值75居中
+            val px = IntArray(w0 * h0)
+            bmp.getPixels(px, 0, w0, 0, 0, w0, h0)
+            val mask = BooleanArray(w0 * h0)
+            for (i in px.indices) {
+                val p = px[i]
+                val lum = ((p shr 16 and 0xFF) + (p shr 8 and 0xFF) + (p and 0xFF)) / 3
+                mask[i] = lum >= 75
+            }
+
+            // 2. 连通区域 + 基础过滤（去碎点；数字h~24-26、斜杠h~32、中文竖笔h~24-31都保留）
+            var comps = findComponents(mask, w0, h0)
+            if (comps.isEmpty()) return Pair(0, 0)
+            comps = comps.sortedBy { it.x1 }.filter { it.h >= 15 && it.area >= 60 }
+            if (comps.size < 2) return Pair(0, 0)
+
+            // 3. 从右往左状态机读数（跨三套模板取最高分，数字真实匹配>0.6，中文/斜杠<0.45）
+            val MIN_DIGIT_CONF = 0.45f
+            val bbDigits = StringBuilder()
+            val sbDigits = StringBuilder()
+            var readingBB = true
+            var lowStreak = 0
+            for (c in comps.asReversed()) {
+                val rw = c.w; val rh = c.h
+                val d = BooleanArray(rw * rh)
+                for (y in 0 until rh) for (x in 0 until rw) {
+                    d[y * rw + x] = mask[(c.y1 + y) * w0 + (c.x1 + x)]
+                }
+                var mnX = rw; var mxX = -1; var mnY = rh; var mxY = -1
+                for (y in 0 until rh) for (x in 0 until rw) {
+                    if (d[y * rw + x]) {
+                        if (x < mnX) mnX = x; if (x > mxX) mxX = x
+                        if (y < mnY) mnY = y; if (y > mxY) mxY = y
+                    }
+                }
+                if (mxX < 0) continue
+                val tw = mxX - mnX + 1; val th = mxY - mnY + 1
+                if (tw < 6 || th < 15) continue
+                val trimmed = BooleanArray(tw * th)
+                for (y in 0 until th) System.arraycopy(d, (mnY + y) * rw + mnX, trimmed, y * tw, tw)
+
+                val (chPot, scPot) = matchDigitNatural(trimmed, tw, th, potTemplates)
+                val (chChips, scChips) = matchDigitNatural(trimmed, tw, th, chipsTemplates)
+                val (chBtn, scBtn) = matchDigitNatural(trimmed, tw, th, digitTemplates)
+                val (ch, sc) = when {
+                    scBtn >= scPot && scBtn >= scChips -> Pair(chBtn, scBtn)
+                    scPot >= scChips -> Pair(chPot, scPot)
+                    else -> Pair(chChips, scChips)
+                }
+
+                if (sc >= MIN_DIGIT_CONF && ch != '?') {
+                    // 高分数字：从右往左读，插入当前组头部
+                    if (readingBB) { bbDigits.insert(0, ch) } else { sbDigits.insert(0, ch) }
+                    lowStreak = 0
+                } else {
+                    // 低分组件：斜杠或中文竖笔
+                    if (readingBB) {
+                        if (bbDigits.isNotEmpty()) { readingBB = false; lowStreak = 1 }  // BB读完→斜杠→切SB
+                        // BB为空时低分=边缘噪音，忽略
+                    } else {
+                        lowStreak++
+                        if (sbDigits.isNotEmpty()) break   // SB已读完，左侧是中文→停
+                        if (lowStreak > 3) break           // 斜杠碎片过多，放弃SB
+                    }
+                }
+            }
+
+            val bb = bbDigits.toString().toIntOrNull() ?: 0
+            val sb = sbDigits.toString().toIntOrNull() ?: 0
+            if (bb <= 0) return Pair(0, 0)
+            val finalSB = if (sb > 0) sb else (if (bb % 2 == 0) bb / 2 else 0)
+            Log.d(TAG, "🎯 本地CV盲注: SB=$finalSB BB=$bb (raw: sb='$sbDigits' bb='$bbDigits' comps=${comps.size})")
+            Pair(finalSB, bb)
+        } catch (e: Exception) {
+            Log.w(TAG, "recognizeBlinds failed: ${e.message}")
+            Pair(0, 0)
+        }
+    }
+
     // ========== V2.9.527: D按钮(庄位)本地CV识别 ==========
 
     /**

@@ -1307,6 +1307,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var localPotOk = false
                 var localChipsValue: Int = 0
                 var amountDiag = "skipped"
+                // V2.9.554: 本地CV盲注识别（牌桌中央"100/200"白灰小字），作为inferredBB的兜底
+                var localBlindSB = 0
+                var localBlindBB = 0
                 // V2.9.526: 检测是否轮到我行动（绿色进度条）
                 val isMyTurn = try {
                     LocalActionRecognizer.getInstance(context).isMyTurn(screenshotBmp)
@@ -1379,6 +1382,23 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "对手筹码识别失败: ${e.message}")
+                }
+
+                // V2.9.554: 盲注本地CV识别（牌桌中央"德州扑克, 100/200"白灰小字，~5ms）
+                // 独立try-catch，失败不影响主流程；结果作为inferredBB=0时的兜底
+                try {
+                    val blindBmp = RegionCropper.cropBlindText(screenshotBmp)
+                    if (blindBmp != null) {
+                        val (sbBlind, bbBlind) = LocalActionRecognizer.getInstance(context).recognizeBlinds(blindBmp)
+                        blindBmp.recycle()
+                        if (bbBlind > 0) {
+                            localBlindBB = bbBlind
+                            localBlindSB = sbBlind
+                            Log.d(TAG, "🎯 本地CV盲注: SB=$localBlindSB BB=$localBlindBB")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "盲注识别失败: ${e.message}")
                 }
 
                 // 2. 裁剪操作区（每帧必识别）
@@ -1614,8 +1634,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     toCall = finalToCall,
                     minRaise = finalMinRaise,
                     buttons = action?.buttons ?: emptyList(),
-                    blindSB = inferredSB,
-                    blindBB = inferredBB,
+                    // V2.9.554: 盲注三级——本地GCD推断(翻前加注时最准) > 本地CV盲注文字(每帧可读) > 0
+                    blindSB = if (inferredSB > 0) inferredSB else localBlindSB,
+                    blindBB = if (inferredBB > 0) inferredBB else localBlindBB,
                     ante = 0,
                     players = buildOppPlayerList(oppChipsMap, localChipsValue, dButtonSeatLocal),
                     dButtonPosition = mapDSeatToPosition(
