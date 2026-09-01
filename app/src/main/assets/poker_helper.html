@@ -3346,18 +3346,7 @@ function decidePostflop(k){
   // V3.12: 3bet底池/多人池检测 (旧引擎设置，我们丢失后补回)
   var _is3betPot=spr<10&&(ActionLine.didPreflopRaise()||G._faced3bet||G._heroDid4bet);
   G._is3betPot=_is3betPot;
-  var _nActive=0;
-  try{
-    // V3.33: 多人池检测用G.players(下划线版_lastPlayers从没被赋值过)
-    var _pl=G._lastPlayers&&G._lastPlayers.length>0?G._lastPlayers:(G.players||[]);
-    for(var _pi=0;_pi<_pl.length;_pi++){
-      var _pp=_pl[_pi];
-      if(!_pp)continue;
-      var _isFolded=_pp.folded===true;
-      var _isActive=_pp.active===true||_pp.active===1||(!_isFolded&&_pp.chips>0);
-      if(_isActive&&!_isFolded)_nActive++;
-    }
-  }catch(e){}
+  
   if(_nActive<2)_nActive=2;
   var _isMultiway=_nActive>=3;
   G._isMultiway=_isMultiway;
@@ -7532,9 +7521,9 @@ function multiPlayerEquity(eq,opponents){
   // V2.9.30: 非线性衰减(基于PokerStove实际数据拟合)
   // AA: hu=85%, 3way=73%, 4way=64%, 5way=56%
   // AKs: hu=67%, 3way=52%, 4way=42%, 5way=35%
-  var decayFactors={3:0.86, 4:0.73, 5:0.63, 6:0.55};
+  var decayFactors={3:0.70, 4:0.55, 5:0.45, 6:0.38};
   var factor=decayFactors[opponents];
-  if(!factor) factor=Math.max(0.40, 0.55-(opponents-6)*0.08);
+  if(!factor) factor=Math.max(0.25, 0.38-(opponents-6)*0.06);
   return Math.round(eq*factor*10)/10;
 }
 // V2.9.105: 多人池策略模块——多人池范围收紧/c-bet降低/bluff减少/draw收窄
@@ -9295,7 +9284,7 @@ function postF(k){
   var bc=comm.filter(function(c){return c;});
   var spr=calcSPR();
   var sprAdvice=getSPRAdvice(spr);
-  var _pfOrd={sb:1,bb:2,utg:3,utg1:4,mp:5,mp1:6,hj:7,co:8,btn:9};var _hOrd=_pfOrd[G.pos]||5;var _oRole=G._raiserRole||G._raiserPos||'';var _oOrd=_pfOrd[_oRole]||5;var ip=_hOrd>_oOrd;
+  var _pfOrd={sb:1,bb:2,utg:3,utg1:4,mp:5,mp1:6,hj:7,co:8,btn:9};var _hOrd=_pfOrd[G.pos]||5;var _oRole=G._raiserRole||G._raiserPos||'';var _oOrd=_pfOrd[_oRole]||5;var ip=postflopIP(G.pos);
   var scene=G.scene;
   var street=getCurrentStreet();
   var bTexture=boardTexture(bc);
@@ -10813,7 +10802,7 @@ function riverExactEquity(hole,comm,oppRange,nOpponents){
   }
 }
 
-function mcVsRange(hole,comm,oppRange,iterations){if(iterations===undefined)iterations=1000;var known=[].concat(hole,comm.filter(function(c){return c;}));var deck=[];for(var ri=0;ri<R.length;ri++){for(var si=0;si<SU.length;si++){var rank=R[ri];var suit=SU[si];if(!known.some(function(c){return c.rank===rank&&(c.suit===suit||!c.suit)})){deck.push({rank:rank,suit:suit});}}}var cn=comm.filter(function(c){return c;}).length;var nd=5-cn;var oppHands=[];for(var ki=0;ki<oppRange.length;ki++){var key=oppRange[ki];var hands=handKeyToCards(key);for(var hi=0;hi<hands.length;hi++){var h=hands[hi];if(!known.some(function(c){return c.rank===h[0].rank&&(c.suit===h[0].suit||!c.suit)})&&!known.some(function(c){return c.rank===h[1].rank&&(c.suit===h[1].suit||!c.suit)})){oppHands.push(h);}}}var w=0,t=0;var hv=eH([].concat(hole,comm.filter(function(c){return c;})));for(var i=0;i<iterations;i++){var sh=[].concat(deck);for(var j=sh.length-1;j>sh.length-1-nd&&j>0;j--){var k=Math.floor(Math.random()*(j+1));var tmp=sh[j];sh[j]=sh[k];sh[k]=tmp;}var board=[].concat(comm.filter(function(c){return c;}),(nd>0?sh.slice(-nd):[]));var myBest=eH([].concat(hole,board));var oppBest=0;if(oppHands.length>0){var oppIdx=Math.floor(Math.random()*oppHands.length);var oppHole=oppHands[oppIdx];if(oppHole)oppBest=eH([].concat(oppHole,board));}else{var oppSh=[].concat(deck.slice(0,-nd));for(var jj=oppSh.length-1;jj>oppSh.length-3&&jj>0;jj--){var kk=Math.floor(Math.random()*(jj+1));var tmp2=oppSh[jj];oppSh[jj]=oppSh[kk];oppSh[kk]=tmp2;}oppBest=eH([oppSh[0],oppSh[1]].concat(board));}if(myBest>oppBest)w++;else if(myBest===oppBest)t++;}return{eq:(w+t*0.5)/iterations*100,win:w/iterations*100,tie:t/iterations*100};}
+function mcVsRange(hole,comm,oppRange,iterations,nOpp){if(iterations===undefined)iterations=1000;if(nOpp===undefined||nOpp<1)nOpp=1;var known=[].concat(hole,comm.filter(function(c){return c;}));var deck=[];for(var ri=0;ri<R.length;ri++){for(var si=0;si<SU.length;si++){var rank=R[ri];var suit=SU[si];if(!known.some(function(c){return c.rank===rank&&(c.suit===suit||!c.suit)})){deck.push({rank:rank,suit:suit});}}}var cn=comm.filter(function(c){return c;}).length;var nd=5-cn;var oppHands=[];for(var ki=0;ki<oppRange.length;ki++){var key=oppRange[ki];var hands=handKeyToCards(key);for(var hi=0;hi<hands.length;hi++){var h=hands[hi];if(!known.some(function(c){return c.rank===h[0].rank&&(c.suit===h[0].suit||!c.suit)})&&!known.some(function(c){return c.rank===h[1].rank&&(c.suit===h[1].suit||!c.suit)})){oppHands.push(h);}}}var w=0,t=0;var hv=eH([].concat(hole,comm.filter(function(c){return c;})));for(var i=0;i<iterations;i++){var sh=[].concat(deck);for(var j=sh.length-1;j>sh.length-1-nd&&j>0;j--){var k=Math.floor(Math.random()*(j+1));var tmp=sh[j];sh[j]=sh[k];sh[k]=tmp;}var board=[].concat(comm.filter(function(c){return c;}),(nd>0?sh.slice(-nd):[]));var myBest=eH([].concat(hole,board));var oppBest=0;var oppTaken=[];var valid=true;var nOppEff=Math.min(nOpp,oppHands.length>0?oppHands.length:(nOpp>1?nOpp:1));if(nOppEff<=1||oppHands.length===0){if(oppHands.length>0){var oppIdx=Math.floor(Math.random()*oppHands.length);var oppHole=oppHands[oppIdx];if(oppHole)oppBest=eH([].concat(oppHole,board));}else{var oppSh=[].concat(deck.slice(0,-nd));for(var jj=oppSh.length-1;jj>oppSh.length-3&&jj>0;jj--){var kk=Math.floor(Math.random()*(jj+1));var tmp2=oppSh[jj];oppSh[jj]=oppSh[kk];oppSh[kk]=tmp2;}oppBest=eH([oppSh[0],oppSh[1]].concat(board));}}else{var tries=0;while(tries<5){oppTaken=[];valid=true;var usedI={};for(var oi=0;oi<nOppEff;oi++){var oppIdx2,idx2,att=0;do{oppIdx2=Math.floor(Math.random()*oppHands.length);idx2=oppIdx2;att++;}while(usedI[idx2]&&att<20);if(usedI[idx2]){valid=false;break;}usedI[idx2]=true;var oh=oppHands[oppIdx2];if(oppTaken.some(function(c){return c.rank===oh[0].rank&&c.suit===oh[0].suit})){valid=false;break;}if(oppTaken.some(function(c){return c.rank===oh[1].rank&&c.suit===oh[1].suit})){valid=false;break;}oppTaken.push(oh[0],oh[1]);}if(valid)break;tries++;}if(valid){for(var oi2=0;oi2<oppTaken.length;oi2+=2){var oB=eH([oppTaken[oi2],oppTaken[oi2+1]].concat(board));if(oB>oppBest)oppBest=oB;}}else{var oppIdx3=Math.floor(Math.random()*oppHands.length);var oppHole3=oppHands[oppIdx3];if(oppHole3)oppBest=eH([].concat(oppHole3,board));}}if(myBest>oppBest)w++;else if(myBest===oppBest)t++;}return{eq:(w+t*0.5)/iterations*100,win:w/iterations*100,tie:t/iterations*100};}
 function handKeyToCards(key){var results=[];var r1=key[0],r2=key[1];var isSuited=key.indexOf('s')!==-1;var isPaired=r1===r2;if(isPaired){for(var s1i=0;s1i<SU.length;s1i++){for(var s2i=s1i+1;s2i<SU.length;s2i++){results.push([{rank:r1,suit:SU[s1i]},{rank:r2,suit:SU[s2i]}]);}}}else if(isSuited){for(var si=0;si<SU.length;si++){results.push([{rank:r1,suit:SU[si]},{rank:r2,suit:SU[si]}]);}}else{for(var s1j=0;s1j<SU.length;s1j++){for(var s2j=0;s2j<SU.length;s2j++){if(SU[s1j]!==SU[s2j])results.push([{rank:r1,suit:SU[s1j]},{rank:r2,suit:SU[s2j]}]);}}}return results;}
 async function toggleCamModal(){
   var m=document.getElementById('camModal');
