@@ -1322,7 +1322,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.554',
+  CURRENT_VERSION:'2.9.555',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2736,7 +2736,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.554';
+var APP_VERSION='2.9.555';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -10096,6 +10096,14 @@ function show(r){
 
 var _mcSimCache=null; // V2.9.46: Worker异步MC结果缓存
 function go(){
+  // V2.9.555 FIX(P0-A时序倒置): vision数据入库期间，UI同步辅助函数(sTT/setOppType等)
+  // 内部会触发go()，此刻BB换算(V2.9.527: G.stk=chips/BB, G.pot=pot/BB)尚未执行，
+  // 决策会拿到输入框默认值stk=100/pot=10——20BB短码被当100BB深码→同花/A牌被错误弃牌。
+  // 入库期间禁止决策，统一由onVisionResult末尾数据就绪后的权威go()触发。
+  if(window._visionUpdating){
+    console.log('[go] vision入库中→抑制(数据未就绪，等onVisionResult末尾权威go()) stk='+G.stk+' pot='+G.pot);
+    return;
+  }
   // V2.9.139: 防双触发——200ms内重复调用跳过(避免HandHistory重复记录)
   var _now=Date.now();
   if(window._goLastTime && (_now-window._goLastTime)<200){
@@ -11109,6 +11117,9 @@ function detectSceneFromButtons(buttons, street, activePlayers) {
 // V1.3: API视觉识别结果回调 - 自动填入牌面+策略分析
 function onVisionResult(data){
   var _tVisionStart=Date.now();
+  // V2.9.555 FIX(P0-A): 数据入库期间抑制UI辅助函数(sTT/setOppType)内部的提前go()，
+  // 直到末尾BB换算完成、数据全就绪后才放行权威go()。早退分支(NO_TABLE/verify)不影响。
+  window._visionUpdating=true;
   // [REV4_DIAG] onVisionResult入口原始数据快照
   if(data){console.log("[onVisionResult_DIAG_ENTRY] _frameTag="+(data._frameTag||'none')+" pot_size="+data.pot_size+" my_chips="+data.my_chips+" to_call="+data.to_call+" blind_bb="+data.blind_bb+" blind_sb="+data.blind_sb+" is_poker_table="+data.is_poker_table+" hole_cards="+JSON.stringify(data.hole_cards||null));}
   // V2.9.153: Layer1+3
@@ -11131,7 +11142,7 @@ function onVisionResult(data){
   }
   // V2.9.153: Layer2
   if(data&&data._frameTag==='primary'){MultiFrameConsensus.onPrimaryFrame(data);}
-  else if(data&&data._frameTag==='verify'){var cs=MultiFrameConsensus.onVerifyFrame(data);if(cs&&cs._s&&cs._s.length>0)data=MultiFrameConsensus.applyConsensus(data);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.autoCaptureVisionComplete)AndroidBridge.autoCaptureVisionComplete(true);return;}
+  else if(data&&data._frameTag==='verify'){var cs=MultiFrameConsensus.onVerifyFrame(data);if(cs&&cs._s&&cs._s.length>0)data=MultiFrameConsensus.applyConsensus(data);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.autoCaptureVisionComplete)AndroidBridge.autoCaptureVisionComplete(true);window._visionUpdating=false;return;}
   // V2.9.156: VPP后处理纠错——在数据进G之前修正常见识别错误
   if(data&&data.hole_cards&&data.hole_cards.length>=2&&data.is_poker_table!==false){data=VPP.process(data);}
   if(data&&data.hole_cards&&data.hole_cards.length>=2&&_ft!=='auto'&&_ft!=='verify'){var _nk=data.hole_cards[0].rank+(data.hole_cards[0].suit||'')+data.hole_cards[1].rank+(data.hole_cards[1].suit||'');var _pk=G._rankLockKey||'';if((_pk&&_nk!==_pk)||_isStreetChange(data)){try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.triggerMultiFrame)AndroidBridge.triggerMultiFrame();}catch(e){}}}
@@ -11155,6 +11166,7 @@ function onVisionResult(data){
         AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:NO_TABLE|EQ:0|REASON:未检测到牌桌');
       }
     }catch(e){}
+    window._visionUpdating=false;
     return;
   }
   // V2.9.70保留: data为空→也判NO_TABLE(兜底)
@@ -11164,6 +11176,7 @@ function onVisionResult(data){
         AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:NO_TABLE|EQ:0|REASON:数据为空');
       }
     }catch(e){}
+    window._visionUpdating=false;
     return;
   }
   
@@ -11838,6 +11851,8 @@ function onVisionResult(data){
   
   // 8. 触发策略分析（唯一的go()调用，数据此时已全部就绪）
   // V2.9.13: showAdvice+脉冲动画已移到go()内部异步回调中，确保decide()完成后才执行
+  // V2.9.555 FIX(P0-A): 解除入库抑制——此刻BB换算(G.stk/G.pot/G.bet)已完成，权威go()放行
+  window._visionUpdating=false;
   var _vLog=(G.hole[0]&&G.hole[1])?G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit:'no_hand';console.log('[onVisionResult诊断] 调用go() hand='+_vLog+' scene='+G.scene+' phase='+G.phase+' pot='+G.pot+' bet='+G.bet+' ⏱parse='+(Date.now()-_tVisionStart)+'ms');
   go();
   

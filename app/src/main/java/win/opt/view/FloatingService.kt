@@ -1752,31 +1752,51 @@ class FloatingService : Service() {
                         //   自动模式下若FSM=IDLE但代次未变（说明是同一手牌，非新周期），允许恢复→直接执行点击
                         // V2.9.553-rev9-fix-v2: executeAutoTapWithHumanDelay有R1守卫(要求FSM=EXECUTING)，
                         //   IDLE恢复路径FSM=IDLE→R1丢弃→ESP32收不到点击。改用executeAutoTapFallback（无FSM守卫）。
+                        // V2.9.555-fix(P0-B): rev9-fix-v2让IDLE恢复一律走executeAutoTapFallback（GG固定坐标
+                        //   fold/check/raise 3点），完全绕过latestButtonPositions的vision精准按钮坐标——
+                        //   真机实测11次自动点击100% fallback、翻后raise点错到滑块/4006金额。
+                        //   修复：IDLE恢复时先补一次STRATEGY_READY转换把FSM推回EXECUTING（语义上"策略已就绪"，
+                        //   与正常路径一致），再走executeAutoTap精准坐标路径（含翻后raise的33/50%预设+sizing逻辑）；
+                        //   仅当latestButtonPositions为空（vision本帧没识别到按钮）时，才回退固定坐标兜底。
                         if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.IDLE
                             && auto && gen == _strategyGeneration) {
-                            Log.d(TAG, "★ V2.9.553-rev9-fix: autoDecision IDLE恢复→executeAutoTapFallback（showAdvice已RESET但同代次）")
-                            // 取消Shot Clock防止二次fold（executeAutoTapFallback的回调也会清，但提前清更安全）
+                            // 取消Shot Clock（精准路径/兜底路径内部都会维护FSM与调度）
                             handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }
                             lastDecisionTime = System.currentTimeMillis()
-                            // 直接执行点击（executeAutoTapFallback无FSM状态守卫，直接发tap到ESP32）
-                            if (confidence == "low" && action == "fold") {
-                                updateAdviceNotification("⚠️ 低置信度强制弃牌", "$reason (eq=$eq%)")
-                                updateBallAdvice("COLOR:FOLD|SIGNAL:LOW_CONF|EQ:$eq|REASON:低置信度强制弃牌")
-                                Log.i(TAG, "autoDecision IDLE恢复：低置信度，强制fold")
-                                executeAutoTapFallback("fold")
-                            } else if (confidence == "low") {
-                                // low置信但free-check保护已把fold改成check
-                                Log.i(TAG, "autoDecision IDLE恢复：低置信但free局面→$action")
-                                updateAdviceNotification("🎯 自动执行：$action", "$reason (eq=$eq%)")
-                                executeAutoTapFallback(action)
+                            val havePreciseButtons = latestButtonPositions.isNotEmpty()
+                            if (havePreciseButtons) {
+                                // 补转换：IDLE→EXECUTING，让精准路径内部的R1/R4守卫放行
+                                val recoverState = pipelineFSM.transition(PipelineStateMachine.PipelineEvent.STRATEGY_READY)
+                                Log.i(TAG, "★ V2.9.555-fix: autoDecision IDLE恢复→补STRATEGY_READY($recoverState)→精准点击 $action (按钮${latestButtonPositions.size}个: ${latestButtonPositions.joinToString(","){it.text}})")
+                                if (recoverState != PipelineStateMachine.PipelineState.EXECUTING) {
+                                    // 补转换失败（极端竞态）→固定坐标兜底
+                                    Log.w(TAG, "★ IDLE恢复补转换失败(=$recoverState)，回退固定坐标 $action")
+                                    executeAutoTapFallback(action)
+                                    if (autoCaptureEnabled) scheduleNextAutoCapture()
+                                    return@post
+                                }
+                                updateAdviceNotification(
+                                    if (confidence == "low" && action == "fold") "🛑 低置信→弃牌" else "🎯 自动执行：$action",
+                                    "$reason (eq=$eq%)")
+                                // 精准路径：直接执行（不走WithHumanDelay，IDLE恢复本身已在handler.post后；
+                                //   executeAutoTap内部自带BLE后台线程+ACK回主线程驱动FSM/调度）
+                                executeAutoTap(action, data)
                             } else {
-                                Log.i(TAG, "autoDecision IDLE恢复：执行点击 $action (conf=$confidence, eq=$eq%)")
-                                updateAdviceNotification("🎯 自动执行：$action", "$reason (eq=$eq%)")
-                                executeAutoTapFallback(action)
+                                // vision本帧未提供按钮坐标→固定坐标兜底（rev9原逻辑）
+                                Log.d(TAG, "★ V2.9.553-rev9-fix: autoDecision IDLE恢复→无精准按钮坐标→executeAutoTapFallback")
+                                if (confidence == "low" && action == "fold") {
+                                    updateAdviceNotification("⚠️ 低置信度强制弃牌", "$reason (eq=$eq%)")
+                                    updateBallAdvice("COLOR:FOLD|SIGNAL:LOW_CONF|EQ:$eq|REASON:低置信度强制弃牌")
+                                    Log.i(TAG, "autoDecision IDLE恢复：低置信度，强制fold")
+                                    executeAutoTapFallback("fold")
+                                } else {
+                                    Log.i(TAG, "autoDecision IDLE恢复：固定坐标点击 $action (conf=$confidence, eq=$eq%)")
+                                    updateAdviceNotification("🎯 自动执行：$action", "$reason (eq=$eq%)")
+                                    executeAutoTapFallback(action)
+                                }
+                                // executeAutoTapFallback的R4守卫在FSM≠EXECUTING时不转换也不调度，这里必须补上
+                                if (autoCaptureEnabled) scheduleNextAutoCapture()
                             }
-                            Log.d(TAG, "autoDecision IDLE恢复完成：$action")
-                            // executeAutoTapFallback的R4守卫在FSM≠EXECUTING时return→不调度下一轮，这里必须补上
-                            if (autoCaptureEnabled) scheduleNextAutoCapture()
                             return@post
                         } else if (pipelineFSM.getCurrentState() != PipelineStateMachine.PipelineState.STRATEGY_COMPUTING) {
                             Log.w(TAG, "★ R7守卫: autoDecision前置态非STRATEGY_COMPUTING(当前=${pipelineFSM.getCurrentState()})，丢弃不点击 action=$action")

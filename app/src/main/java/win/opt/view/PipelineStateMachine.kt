@@ -117,6 +117,12 @@ class PipelineStateMachine {
         // === IDLE 出发 ===
         (PipelineState.IDLE to PipelineEvent.START_CAPTURE) to PipelineState.CAPTURING,
         (PipelineState.IDLE to PipelineEvent.ENTER_API) to PipelineState.RECOGNIZING_API,
+        // V2.9.555-fix(P0-B): IDLE恢复转换——showAdvice的P0-fix#1会把STRATEGY_COMPUTING同步RESET到IDLE
+        //   （比autoDecision的handler.post快），同代次autoDecision随后到达时FSM已是IDLE。
+        //   旧版IDLE恢复一律走executeAutoTapFallback固定坐标，绕过vision精准按钮坐标→100%点错。
+        //   此转换让IDLE恢复能补推到EXECUTING，从而走精准坐标路径（executeAutoTap）。
+        //   安全性：仅autoDecision的IDLE恢复分支(已校验auto && gen==_strategyGeneration)调用，语义=策略已就绪。
+        (PipelineState.IDLE to PipelineEvent.STRATEGY_READY) to PipelineState.EXECUTING,
 
         // === CAPTURING 出发 ===
         (PipelineState.CAPTURING to PipelineEvent.SCREENSHOT_OK) to PipelineState.RECOGNIZING_LOCAL,

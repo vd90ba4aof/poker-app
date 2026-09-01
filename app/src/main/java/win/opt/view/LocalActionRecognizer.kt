@@ -1209,62 +1209,94 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             comps = comps.sortedBy { it.x1 }.filter { it.h >= 15 && it.area >= 60 }
             if (comps.size < 2) return Pair(0, 0)
 
-            // 3. 从右往左状态机读数（跨三套模板取最高分，数字真实匹配>0.6，中文/斜杠<0.45）
+            // 3. V2.9.555-fix(P0-C): 几何锚定读数，替代旧的"从右往左+MIN_DIGIT_CONF分数"状态机。
+            //    旧bug（真机实测）：观战帧左侧中文水印"扑克克"的竖笔笔画被误判成数字'7'/'1'/'0'，
+            //    分数刚好越过0.45阈值→SB读成7100。根因是靠分数无法区分"中文竖笔"和"窄数字1"。
+            //    几何事实（330×50裁剪区实测）：
+            //      · 斜杠"/" 全场最高 h≈32（数字/中文h24-31）、窄 w≈10-14 → 绝对分界锚点
+            //      · 同一数字内笔画 gap≈4；斜杠两侧 gap≈10；中文群内部/中文群↔SB gap≈22
+            //    策略：斜杠定位BB/SB分界；SB组从斜杠向左收集数字块，遇 gap≥15 判定中文群开始→切断。
+            //    纯几何，不依赖0.45分数，中文竖笔天然被gap挡在SB组外。
+            val maxH = comps.maxOf { it.h }
+            // 3a. 找斜杠锚点：最高（h>=maxH-2 且 h>=28）且窄（w<=16）的组件
+            var slashIdx = -1
+            for (i in comps.indices) {
+                val c = comps[i]
+                if (c.h >= maxH - 2 && c.h >= 28 && c.w <= 16) { slashIdx = i; break }
+            }
+            // 3b. 兜底：没找到典型斜杠时，取最高组件中最窄的那个（斜杠一定是全场最高）
+            if (slashIdx < 0) {
+                slashIdx = comps.withIndex().filter { it.value.h >= maxH - 2 }.minByOrNull { it.value.w }?.index ?: -1
+            }
+            if (slashIdx < 0) return Pair(0, 0)
+
+            // 3c. BB组 = 斜杠右侧全部组件（向右读）
+            val bbComps = comps.filterIndexed { i, _ -> i > slashIdx }
+            // 3c. SB组 = 斜杠向左收集数字块，gap>=15 切断（中文群开始）。
+            //   rightX 跟踪"当前已收集SB块的最右沿"（初值=斜杠左沿），向左每块检查 gap=rightX-该块右沿。
+            val sbCollected = ArrayList<Comp>()
+            var rightX = comps[slashIdx].x1
+            for (i in (slashIdx - 1) downTo 0) {
+                val c = comps[i]
+                val gap = rightX - c.x2
+                // 只在"已进入SB数字后"（gap是数字内部~4 vs 中文群边界~22）才切断；
+                // 斜杠到SB首位数字的gap~10不应切（斜杠分隔天然较宽）
+                if (sbCollected.isNotEmpty() && gap >= 15) {
+                    Log.d(TAG, "🎯 盲注几何切断: 组件x=${c.x1}-${c.x2}与SB右沿gap=$gap≥15→判定中文群，停止向左")
+                    break
+                }
+                sbCollected.add(c)
+                rightX = c.x1
+            }
+            val sbComps = sbCollected.asReversed()  // 转成x升序供读数
+
+            // 3d. 对两组内每个组件做数字模板匹配（仍需识别是几），按x升序拼接
             val MIN_DIGIT_CONF = 0.45f
-            val bbDigits = StringBuilder()
-            val sbDigits = StringBuilder()
-            var readingBB = true
-            var lowStreak = 0
-            for (c in comps.asReversed()) {
-                val rw = c.w; val rh = c.h
-                val d = BooleanArray(rw * rh)
-                for (y in 0 until rh) for (x in 0 until rw) {
-                    d[y * rw + x] = mask[(c.y1 + y) * w0 + (c.x1 + x)]
-                }
-                var mnX = rw; var mxX = -1; var mnY = rh; var mxY = -1
-                for (y in 0 until rh) for (x in 0 until rw) {
-                    if (d[y * rw + x]) {
-                        if (x < mnX) mnX = x; if (x > mxX) mxX = x
-                        if (y < mnY) mnY = y; if (y > mxY) mxY = y
+            fun readGroup(group: List<Comp>, tag: String): String {
+                val sb = StringBuilder()
+                for (c in group) {
+                    val rw = c.w; val rh = c.h
+                    val d = BooleanArray(rw * rh)
+                    for (y in 0 until rh) for (x in 0 until rw) {
+                        d[y * rw + x] = mask[(c.y1 + y) * w0 + (c.x1 + x)]
                     }
-                }
-                if (mxX < 0) continue
-                val tw = mxX - mnX + 1; val th = mxY - mnY + 1
-                if (tw < 6 || th < 15) continue
-                val trimmed = BooleanArray(tw * th)
-                for (y in 0 until th) System.arraycopy(d, (mnY + y) * rw + mnX, trimmed, y * tw, tw)
+                    var mnX = rw; var mxX = -1; var mnY = rh; var mxY = -1
+                    for (y in 0 until rh) for (x in 0 until rw) {
+                        if (d[y * rw + x]) {
+                            if (x < mnX) mnX = x; if (x > mxX) mxX = x
+                            if (y < mnY) mnY = y; if (y > mxY) mxY = y
+                        }
+                    }
+                    if (mxX < 0) continue
+                    val tw = mxX - mnX + 1; val th = mxY - mnY + 1
+                    if (tw < 6 || th < 15) continue
+                    val trimmed = BooleanArray(tw * th)
+                    for (y in 0 until th) System.arraycopy(d, (mnY + y) * rw + mnX, trimmed, y * tw, tw)
 
-                val (chPot, scPot) = matchDigitNatural(trimmed, tw, th, potTemplates)
-                val (chChips, scChips) = matchDigitNatural(trimmed, tw, th, chipsTemplates)
-                val (chBtn, scBtn) = matchDigitNatural(trimmed, tw, th, digitTemplates)
-                val (ch, sc) = when {
-                    scBtn >= scPot && scBtn >= scChips -> Pair(chBtn, scBtn)
-                    scPot >= scChips -> Pair(chPot, scPot)
-                    else -> Pair(chChips, scChips)
-                }
-
-                if (sc >= MIN_DIGIT_CONF && ch != '?') {
-                    // 高分数字：从右往左读，插入当前组头部
-                    if (readingBB) { bbDigits.insert(0, ch) } else { sbDigits.insert(0, ch) }
-                    lowStreak = 0
-                } else {
-                    // 低分组件：斜杠或中文竖笔
-                    if (readingBB) {
-                        if (bbDigits.isNotEmpty()) { readingBB = false; lowStreak = 1 }  // BB读完→斜杠→切SB
-                        // BB为空时低分=边缘噪音，忽略
+                    val (chPot, scPot) = matchDigitNatural(trimmed, tw, th, potTemplates)
+                    val (chChips, scChips) = matchDigitNatural(trimmed, tw, th, chipsTemplates)
+                    val (chBtn, scBtn) = matchDigitNatural(trimmed, tw, th, digitTemplates)
+                    val (ch, sc) = when {
+                        scBtn >= scPot && scBtn >= scChips -> Pair(chBtn, scBtn)
+                        scPot >= scChips -> Pair(chPot, scPot)
+                        else -> Pair(chChips, scChips)
+                    }
+                    if (sc >= MIN_DIGIT_CONF && ch != '?') {
+                        sb.append(ch)
                     } else {
-                        lowStreak++
-                        if (sbDigits.isNotEmpty()) break   // SB已读完，左侧是中文→停
-                        if (lowStreak > 3) break           // 斜杠碎片过多，放弃SB
+                        Log.d(TAG, "🎯 盲注$tag组内低分组块(x=${c.x1},w=${c.w},h=${c.h},sc=$sc)→跳过")
                     }
                 }
+                return sb.toString()
             }
 
-            val bb = bbDigits.toString().toIntOrNull() ?: 0
-            val sb = sbDigits.toString().toIntOrNull() ?: 0
+            val bbStr = readGroup(bbComps, "BB")
+            val sbStr = readGroup(sbComps, "SB")
+            val bb = bbStr.toIntOrNull() ?: 0
+            val sb = sbStr.toIntOrNull() ?: 0
             if (bb <= 0) return Pair(0, 0)
             val finalSB = if (sb > 0) sb else (if (bb % 2 == 0) bb / 2 else 0)
-            Log.d(TAG, "🎯 本地CV盲注: SB=$finalSB BB=$bb (raw: sb='$sbDigits' bb='$bbDigits' comps=${comps.size})")
+            Log.d(TAG, "🎯 本地CV盲注(几何锚定): SB=$finalSB BB=$bb (raw: sb='$sbStr' bb='$bbStr' slash@x=${comps[slashIdx].x1} h=${comps[slashIdx].h} comps=${comps.size})")
             Pair(finalSB, bb)
         } catch (e: Exception) {
             Log.w(TAG, "recognizeBlinds failed: ${e.message}")

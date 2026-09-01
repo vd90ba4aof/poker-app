@@ -107,22 +107,35 @@ if (typeof global.onVisionResult !== 'function' || typeof global.G === 'undefine
 
 // ---------- 拦截 go()：在决策真正运行的瞬间快照 G.stk/G.pot ----------
 // 这是本测试的核心——测的是"决策那一刻"引擎手里的筹码/底池，不是onVisionResult跑完后的终值。
+// V2.9.555: 引擎在onVisionResult入库期间(window._visionUpdating=true)会抑制UI辅助函数
+//           (sTT/setOppType)内部提前触发的go()；测试必须复刻同一契约：
+//           只快照"真正放行"的那次权威决策，被抑制的提前调用只计数、不快照。
 let goSnapshot = null;
+let suppressedCount = 0;
 const _origGo = global.go;
 global.go = function() {
+  if (global.window && global.window._visionUpdating) {
+    suppressedCount++;   // 入库期间的提前go()——真机上被引擎guard拦截，不产生决策
+    return;
+  }
   if (goSnapshot === null) goSnapshot = { stk: global.G.stk, pot: global.G.pot, bet: global.G.bet };
   // 不调用真实go()（避免异步MC/UI链路噪音）；决策时刻状态已快照
 };
 
 function feedAndSnap(label, data) {
   goSnapshot = null;
+  suppressedCount = 0;
   global.G.stk = 100; global.G.pot = 10; global.G.bet = 0;  // 重置为输入框默认值
   try { global.onVisionResult(data); } catch (e) { /* mock不全的无关报错忽略 */ }
   const expStk = Math.round(data.my_chips / data.blind_bb);
   const expPot = Math.round(data.pot_size / data.blind_bb);
   console.log('\n【' + label + '】 chips=' + data.my_chips + ' pot=' + data.pot_size + ' BB=' + data.blind_bb
-    + ' → 决策时刻 stk=' + (goSnapshot ? goSnapshot.stk : 'go未触发') + ' pot=' + (goSnapshot ? goSnapshot.pot : '?'));
-  assert(goSnapshot !== null, 'go()决策被触发', 'onVisionResult未触发go()');
+    + ' → 决策时刻 stk=' + (goSnapshot ? goSnapshot.stk : 'go未触发') + ' pot=' + (goSnapshot ? goSnapshot.pot : '?')
+    + ' (入库期提前go被抑制' + suppressedCount + '次)');
+  assert(goSnapshot !== null, 'go()决策被触发', 'onVisionResult未触发有效go()');
+  assert(suppressedCount >= 1,
+    '入库期提前go()被guard抑制(sTT/setOppType不再用默认值抢先决策)',
+    '未检测到抑制的提前go()——guard可能失效，时序倒置回归风险');
   if (goSnapshot) {
     assert(goSnapshot.stk === expStk,
       '决策时刻筹码深度 stk=' + expStk + 'BB（不是默认100）',
