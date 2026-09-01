@@ -800,7 +800,7 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             if (btn3Yellow >= BTN_YELLOW_THRESHOLD) yellowButtons++
 
             val presetActive = presetYellow >= PRESET_YELLOW_THRESHOLD
-            val myTurn = presetActive || yellowButtons >= 2
+            val myTurn = presetActive || yellowButtons >= 1
             Log.d(TAG, "isMyTurn: presetYellow=$presetYellow(th=$PRESET_YELLOW_THRESHOLD,active=$presetActive) btn2Yellow=$btn2Yellow btn3Yellow=$btn3Yellow yellowButtons=$yellowButtons potYellow=$potYellow(仅参考) -> $myTurn")
             myTurn
         } catch (e: Exception) {

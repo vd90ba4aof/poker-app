@@ -3128,7 +3128,7 @@ function decidePreflop(k){
   // V3.24→rev10: 纳什push/fold — 短码(<=15BB)时替代GTO策略
   // rev10修复: 有效码深 effBB≈stk/pot*1.5(开池前底池≈1.5BB)。旧公式1/SPR方向写反,
   // 5-15BB短码区(纳什表EV差距最大场景)永远查不到表,模块实际只在~2BB以下生效
-  var _nashEffBBpre=stk>0&&pot>0?Math.round(stk*1.5/pot):0;
+  var _nashEffBBpre=stk>0?stk:0;
   if(_nashEffBBpre>0&&_nashEffBBpre<=15){
     try{
       if(typeof NashPushFold!=='undefined'&&typeof NashPushFold.decide==='function'){
