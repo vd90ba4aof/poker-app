@@ -348,7 +348,7 @@ class FloatingService : Service() {
                     // R10-fix: USB直连没有RSSI概念（Esp32UsbManager.onRssiUpdate为no-op从不回调），
                     // 旧BLE遗留的"0dBm"显示让豪哥误判信号差；改为显示USB链接状态，连通即绿色
                     tvBle?.text = if (connected) "🔗 USB" else "📡"
-                    tvBle?.setTextColor(if (connected) 0xFF4ade80.toInt() else 0xFFBDBDBD.toInt())
+                    tvBle?.setTextColor(if (connected) 0xFF888888.toInt() else 0xFFBDBDBD.toInt())
                     tvStatus?.text = "ESP32: $message"
                     if (connected) {
                         _bleConnectTime = System.currentTimeMillis()
@@ -393,7 +393,7 @@ class FloatingService : Service() {
                     _lastRssi = rssi
                     tvBle?.text = "🔗 ${rssi}dBm"
                     tvBle?.setTextColor(when {
-                        rssi > -50 -> 0xFF4ade80.toInt()
+                        rssi > -50 -> 0xFF888888.toInt()
                         rssi >= -70 -> 0xFFFFEB3B.toInt()
                         else -> 0xFFFF5252.toInt()
                     })
@@ -1319,14 +1319,14 @@ class FloatingService : Service() {
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xEE0a1a0a.toInt())
+            setBackgroundColor(0xEE0a0a0a.toInt())
         }
 
         // Top bar with buttons - V2.9.177: 增大内边距
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(0x990a1a0a.toInt())
+            setBackgroundColor(0x990a0a0a.toInt())
             setPadding(6, 4, 6, 4)
         }
 
@@ -1344,7 +1344,7 @@ class FloatingService : Service() {
             setTextColor(0xFFE0E0E0.toInt())
             textSize = 11f  // V2.9.43: 9f→11f 更醒目
             setPadding(6, 2, 6, 2)
-            setBackgroundColor(0x990a1a0a.toInt())
+            setBackgroundColor(0x990a0a0a.toInt())
             visibility = View.GONE
         }
 
@@ -1354,7 +1354,7 @@ class FloatingService : Service() {
             setTextColor(0xFFB0BEC5.toInt())
             textSize = 8f
             setPadding(6, 0, 6, 2)
-            setBackgroundColor(0x990a1a0a.toInt())
+            setBackgroundColor(0x990a0a0a.toInt())
             visibility = View.GONE
         }
 
@@ -1387,7 +1387,7 @@ class FloatingService : Service() {
 
         val tvCollapse = TextView(this).apply {
             text = "▼"
-            setTextColor(0xFF4ade80.toInt())
+            setTextColor(0xFF666666.toInt())
             textSize = 10f
             setPadding(4, 2, 4, 2)
             setOnClickListener { toggleExpand() }
@@ -1429,7 +1429,7 @@ class FloatingService : Service() {
         // V2.9.200: 平台切换按钮（标准/GG/短牌）
         val tvPlatform = TextView(this).apply {
             text = "🎮"
-            setTextColor(0xFF4ade80.toInt())
+            setTextColor(0xFF666666.toInt())
             textSize = 14f
             setPadding(6, 2, 6, 2)
             setBackgroundColor(0x00000000)
@@ -2119,8 +2119,8 @@ class FloatingService : Service() {
             setLineSpacing(0f, 0.85f)
             val shape = GradientDrawable()
             shape.shape = GradientDrawable.OVAL
-            shape.setColor(0xDD1a1a2e.toInt())
-            shape.setStroke((2 * density).toInt(), 0xFF4ade80.toInt())
+            shape.setColor(0xDD111111.toInt())
+            shape.setStroke((2 * density).toInt(), 0xFF333333.toInt())
             background = shape
             elevation = 8f
         }
@@ -2289,7 +2289,7 @@ class FloatingService : Service() {
             val stroke = (3 * density).toInt()
             // V2.9.546: 基于USB连接状态
             val color = when {
-                bleManager?.isConnected == true && _lastRssi > -70 -> 0xFF4ade80.toInt()  // 绿
+                bleManager?.isConnected == true && _lastRssi > -70 -> 0xFF666666.toInt()  // 灰
                 bleManager?.isConnected == true -> 0xFFFFEB3B.toInt()  // 黄
                 else -> 0xFFFF5252.toInt()  // 红 - 未连接
             }
@@ -2387,7 +2387,7 @@ class FloatingService : Service() {
                     startBallSignal(0)
                 }
                 else -> {
-                    shape.setColor(0xBB4ade80.toInt()); shape.setStroke(stroke, 0xFF4ade80.toInt())
+                    shape.setColor(0xBB222222.toInt()); shape.setStroke(stroke, 0xFF333333.toInt())
                     ball.text="🎯";ball.textSize=18f
                     startBallSignal(0)
                 }
@@ -2395,7 +2395,7 @@ class FloatingService : Service() {
             // V2.9.546: 覆盖边框颜色为USB连接状态色
             try {
                 val bleColor = when {
-                    bleManager?.isConnected == true && _lastRssi > -70 -> 0xFF4ade80.toInt()
+                    bleManager?.isConnected == true && _lastRssi > -70 -> 0xFF666666.toInt()
                     bleManager?.isConnected == true -> 0xFFFFEB3B.toInt()
                     else -> 0xFFFF5252.toInt()
                 }

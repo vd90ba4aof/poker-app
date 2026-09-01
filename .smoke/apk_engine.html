@@ -1,4 +1,435 @@
-
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<script>var API_BASE="http://127.0.0.1:8666";</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+<title>显示优化 V3.50</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#080e08;color:#fff;height:100vh;padding:6px;user-select:none;font-size:14px;display:flex;flex-direction:column;overflow-y:auto}
+body.speed-mode{background:transparent}
+.res{background:linear-gradient(135deg,#0f1b2e,#16213e);border-radius:14px;padding:10px;text-align:center;margin-bottom:6px;min-height:60px;max-height:120px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.r-a{font-size:48px;font-weight:900;letter-spacing:3px;line-height:1}
+.r-a.raise{color:#69F0AE;text-shadow:0 0 25px rgba(105,240,174,.6)}
+.r-a.raise_big{color:#00E676;text-shadow:0 0 30px rgba(0,230,118,.8)}
+.r-a.call{color:#FFAB40;text-shadow:0 0 25px rgba(255,171,64,.6)}
+.r-a.weak_call{color:#FF8C00;text-shadow:0 0 25px rgba(255,140,0,.6)}
+.r-a.fold{color:#FF5252;text-shadow:0 0 25px rgba(255,82,82,.6)}
+.r-a.check{color:#BDBDBD}
+.r-a.allin{color:#CE93D8;text-shadow:0 0 25px rgba(206,147,216,.6)}
+/* V2.9.63: 7色信号闪烁动画 */
+@keyframes signal-slow{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes signal-fast{0%,100%{opacity:1}25%{opacity:.2}75%{opacity:1}}
+@keyframes signal-double{0%{opacity:1}15%{opacity:.2}30%{opacity:1}45%{opacity:.2}100%{opacity:1}}
+.signal-tilt{animation:signal-slow 1s ease-in-out infinite}
+.signal-counter{animation:signal-fast .33s ease-in-out infinite}
+.signal-uncertain{animation:signal-double 1.5s ease-in-out infinite}
+.r-v{font-size:22px;color:#ccc;margin-top:2px;font-weight:bold}
+.r-d{font-size:11px;color:#888;margin-top:2px;line-height:1.4}
+.r-tip{font-size:10px;color:#2ed573;margin-top:4px;font-weight:bold;padding:3px 12px;background:rgba(46,213,115,.1);border-radius:20px;display:inline-block}
+body.speed-mode .r-tip.fold-tip{color:#FF5252;background:rgba(255,82,82,.12)}
+body.speed-mode .r-tip.weak_call-tip{color:#FF8C00;background:rgba(255,140,0,.12)}
+body.speed-mode .r-tip.call-tip{color:#FFAB40;background:rgba(255,171,64,.12)}
+body.speed-mode .r-tip.raise-tip{color:#69F0AE;background:rgba(105,240,174,.12)}
+body.speed-mode .r-tip.raise_big-tip{color:#00E676;background:rgba(0,230,118,.15)}
+body.speed-mode .r-tip.check-tip{color:#BDBDBD;background:rgba(189,189,189,.1)}
+body.speed-mode .r-tip.allin-tip{color:#CE93D8;background:rgba(206,147,216,.12)}
+.r-exploit{font-size:9px;padding:2px 8px;border-radius:10px;margin-top:3px;display:inline-block}
+.r-exploit.fish{background:rgba(46,213,115,.15);color:#2ed573}
+.r-exploit.tp{background:rgba(93,173,226,.15);color:#5dade2}
+.r-exploit.lag{background:rgba(255,71,87,.15);color:#ff6b7a}
+.r-exploit.maniac{background:rgba(200,50,150,.15);color:#c83296}
+.r-exploit.calling_station{background:rgba(100,180,220,.15);color:#64b4dc}
+.r-exploit.nit{background:rgba(180,180,50,.15);color:#b4b432}
+.r-drta{font-size:9px;padding:2px 8px;border-radius:8px;margin-top:3px;display:inline-block;background:rgba(199,125,255,.15);color:#c77dff}
+.r-plan{font-size:9px;color:#c77dff;margin-top:3px;padding:2px 8px;background:rgba(199,125,255,.1);border-radius:8px;display:inline-block}
+.r-ev-sm{font-size:10px;color:#555;margin-top:3px}
+.r-spr{font-size:9px;padding:2px 6px;border-radius:3px;margin-top:2px;display:inline-block}
+.r-spr.lo{background:rgba(255,71,87,.15);color:#ff4757}
+.r-spr.us{background:rgba(200,50,50,.25);color:#e03030}
+.r-spr.ms{background:rgba(255,140,0,.15);color:#ff8c00}
+.r-spr.sd{background:rgba(46,213,115,.15);color:#2ed573}
+.r-spr.dp{background:rgba(100,149,237,.15);color:#6495ed}
+.r-spr.md{background:rgba(255,215,0,.15);color:#ffd700}
+.r-spr.hi{background:rgba(46,213,115,.15);color:#2ed573}
+.r-class{font-size:8px;padding:2px 6px;border-radius:10px;margin-top:2px;display:inline-block}
+.r-class.nuts{background:rgba(168,85,247,.2);color:#c77dff}
+.r-class.strong{background:rgba(46,213,115,.2);color:#2ed573}
+.r-class.medium{background:rgba(255,215,0,.2);color:#ffd700}
+.r-class.weak{background:rgba(255,71,87,.2);color:#ff6b6b}
+.r-class.draw{background:rgba(93,173,226,.2);color:#5dade2}
+.r-class.air{background:rgba(100,100,100,.2);color:#888}
+.tracker-wrap{margin-bottom:4px;padding:6px;background:linear-gradient(135deg,rgba(199,125,255,.08),rgba(168,85,247,.05));border-radius:10px;border:1px solid rgba(199,125,255,.15)}
+.tracker-title{font-size:10px;color:#c77dff;font-weight:bold;margin-bottom:4px;display:flex;align-items:center;gap:4px}
+.tracker-title .t-icon{font-size:14px}
+.tracker-stats{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px}
+.t-stat{flex:1;min-width:45%;background:rgba(0,0,0,.2);padding:4px 6px;border-radius:6px}
+.t-stat-l{font-size:8px;color:#555}
+.t-stat-v{font-size:11px;font-weight:bold;color:#fff}
+.t-conf{width:100%;height:4px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden;margin-top:3px}
+.t-conf-fill{height:100%;background:linear-gradient(90deg,#5dade2,#c77dff);transition:width .3s}
+.tracker-actions{display:flex;gap:3px;margin-top:4px}
+.t-btn{flex:1;padding:4px 6px;border:none;border-radius:4px;font-size:9px;font-weight:bold;cursor:pointer;background:rgba(255,255,255,.04);color:#555;transition:all .08s}
+.t-btn:active{transform:scale(.95)}
+.t-btn.on{background:rgba(199,125,255,.2);color:#c77dff}
+.t-btn.rst{background:rgba(255,71,87,.1);color:#ff4757}
+.scene-wrap{margin-bottom:4px}
+.scene-tabs{display:flex;gap:2px;margin-bottom:3px}
+.s-tab{flex:1;padding:8px 0;border:none;border-radius:6px;font-size:11px;font-weight:900;cursor:pointer;background:rgba(255,255,255,.04);color:#444;transition:all .1s}
+.s-tab.on{color:#fff}
+.s-tab.pre.on{background:linear-gradient(135deg,#1a4d2e,#0d2818);color:#2ed573}
+.s-tab.post.on{background:linear-gradient(135deg,#4d2600,#2d1800);color:#ffa502}
+.scene-btns{display:flex;gap:3px;flex-wrap:wrap}
+.big-btn{flex:1;min-width:48%;padding:14px 8px;border:none;border-radius:12px;font-size:15px;font-weight:900;cursor:pointer;background:rgba(255,255,255,.04);color:#555;transition:all .08s;text-align:center}
+.big-btn:active{transform:scale(.95)}
+.big-btn.on{color:#fff;box-shadow:0 0 15px rgba(255,255,255,.1)}
+.big-btn.open.on{background:linear-gradient(135deg,#1a5c30,#0d3d1f);color:#2ed573}
+.big-btn.raise.on{background:linear-gradient(135deg,#8b1a1a,#5c1010);color:#ff6b6b}
+.big-btn.call.on{background:linear-gradient(135deg,#8b5a00,#5c3a00);color:#ffa502}
+.big-btn.reraise.on{background:linear-gradient(135deg,#5c1a8b,#3d105c);color:#c77dff}
+.big-btn.check.on{background:linear-gradient(135deg,#3d3d3d,#2a2a2a);color:#aaa}
+.big-btn.bet.on{background:linear-gradient(135deg,#8b1a1a,#5c1010);color:#ff6b6b}
+.big-btn.allin.on{background:linear-gradient(135deg,#5c1a8b,#3d105c);color:#c77dff}
+.big-btn .b-emoji{font-size:18px;display:block;margin-bottom:2px}
+.cards-row{display:flex;gap:3px;margin-bottom:4px;justify-content:center;align-items:flex-end}
+.card-slot{width:38px;height:52px;border:1.5px dashed rgba(255,255,255,.1);border-radius:5px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;font-size:7px;color:#333;background:rgba(0,0,0,.12);transition:all .08s}
+.card-slot:active{transform:scale(.9)}
+.card-slot.f{border:none;background:#f5f5f0;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.card-slot .cr{font-size:16px;font-weight:900;line-height:1}
+.card-slot .cs{font-size:11px;line-height:1}
+.card-slot.red{color:#c41e3a}.card-slot.blk{color:#1a1a1a}
+.card-label{font-size:7px;color:#444;text-align:center;margin-top:1px}
+.card-group{display:flex;flex-direction:column;align-items:center}
+.card-sep{width:1px;height:36px;background:rgba(255,255,255,.05);margin:0 2px}
+.mx-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:2px}
+.mx-wrap.collapsed{display:none}
+.mx-info{display:flex;justify-content:center;gap:6px;font-size:8px;color:#888;margin-bottom:2px;flex-wrap:wrap}
+.mx-info span{background:rgba(255,255,255,.05);padding:1px 5px;border-radius:6px}
+.mx-badge{font-size:7px;padding:1px 4px;border-radius:4px;font-weight:700;margin-right:2px}
+.mx-badge.short{background:#ff4757;color:#fff}
+.mx-badge.standard{background:#2ed573;color:#000}
+.mx-badge.deep{background:#5dade2;color:#fff}
+.mx-badge.opp{background:#a855f7;color:#fff}
+.mx-badge.limp{background:#ffa502;color:#000}
+.mx{border-collapse:collapse;margin:0 auto}
+.mx th,.mx td{width:26px;height:26px;text-align:center;font-size:7px;font-weight:700;border:1px solid rgba(255,255,255,.04)}
+.mx th{color:#555;font-size:7px;background:rgba(0,0,0,.2)}
+.mx td{cursor:pointer;transition:all .06s;border-radius:2px;position:relative}
+.mx td:active{transform:scale(.85)}
+.mx td.sel{outline:2px solid #ffd700;outline-offset:-1px;z-index:2}
+.mx td .cell-label{font-size:6px;line-height:1;display:block}
+.mx td .cell-action{font-size:5.5px;opacity:.7;line-height:1;display:block;margin-top:1px}
+.c-r{background:rgba(46,213,115,.5);color:#fff}.c-c{background:rgba(255,165,2,.4);color:#fff}
+.c-b{background:rgba(93,173,226,.4);color:#fff}.c-f{background:rgba(255,255,255,.02);color:#333}
+.c-p{font-weight:900}
+/* V2.9.55: 场景感知范围颜色——强度分3档 */
+.c-r3{background:rgba(46,213,115,.7);color:#fff}.c-r2{background:rgba(46,213,115,.5);color:#fff}.c-r1{background:rgba(46,213,115,.3);color:#ccc}
+.c-b3{background:rgba(93,173,226,.7);color:#fff}.c-b2{background:rgba(93,173,226,.5);color:#fff}.c-b1{background:rgba(93,173,226,.3);color:#ccc}
+.c-c3{background:rgba(255,165,2,.6);color:#fff}.c-c2{background:rgba(255,165,2,.4);color:#fff}.c-c1{background:rgba(255,165,2,.25);color:#ccc}
+.c-v3{background:rgba(168,85,247,.6);color:#fff}.c-v2{background:rgba(168,85,247,.4);color:#fff}.c-v1{background:rgba(168,85,247,.25);color:#ccc}
+.c-s3{background:rgba(255,107,107,.6);color:#fff}.c-s2{background:rgba(255,107,107,.4);color:#fff}.c-s1{background:rgba(255,107,107,.25);color:#ccc}
+.c-hand{outline:2px solid #ffd700;outline-offset:-1px;z-index:2}
+.mx-legend{display:flex;gap:5px;justify-content:center;font-size:8px;color:#444;margin:1px 0 3px}
+.ml{width:6px;height:6px;border-radius:50%;display:inline-block;vertical-align:middle;margin-right:1px}
+.hint{font-size:9px;color:#555;text-align:center;padding:3px;background:rgba(255,255,255,.02);border-radius:4px;margin-bottom:3px}
+.cam-mini{position:fixed;bottom:8px;right:8px;z-index:50}
+.cam-mini-btn{width:36px;height:36px;border:none;border-radius:50%;font-size:16px;cursor:pointer;background:rgba(0,0,0,.7);color:#888;transition:all .1s;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+.cam-mini-btn.on{background:rgba(46,213,115,.8);color:#fff}
+.cam-mini-btn:active{transform:scale(.9)}
+.adv-t{font-size:10px;color:#555;text-align:center;padding:6px;cursor:pointer;border-top:1px solid rgba(255,255,255,.03);background:rgba(0,0,0,.15);border-radius:6px}
+.adv{display:none;padding:6px;background:rgba(0,0,0,.25);border-radius:6px;margin-bottom:4px}
+.adv.show{display:block}
+.adv-row{display:flex;gap:3px;align-items:center;margin-bottom:5px;flex-wrap:wrap}
+.adv-l{font-size:9px;color:#555;min-width:40px}
+.adv-btn{padding:5px 8px;border:none;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;background:rgba(255,255,255,.04);color:#555;transition:all .06s}
+.adv-btn.on{background:rgba(168,85,247,.12);color:#a855f7}
+.adv-inp{width:50px;padding:4px 6px;border:1px solid rgba(255,255,255,.08);border-radius:4px;background:rgba(0,0,0,.2);color:#fff;font-size:11px;font-weight:bold;text-align:center}
+.adv-sub{font-size:9px;color:#666;margin-bottom:4px}
+.exploit-row{display:flex;gap:3px;margin-bottom:4px}
+.ex-btn{flex:1;padding:10px 0;border:none;border-radius:10px;font-size:13px;font-weight:900;cursor:pointer;background:rgba(255,255,255,.04);color:#555;transition:all .08s;text-align:center}
+.ex-btn:active{transform:scale(.95)}
+.ex-btn.on{color:#fff}
+.ex-btn.fish.on{background:linear-gradient(135deg,#1a5c30,#0d3d1f)}
+.ex-btn.maniac.on{background:linear-gradient(135deg,#5c1a4a,#3d0d30)}
+.ex-btn.cs.on{background:linear-gradient(135deg,#1a3d5c,#0d2d3d)}
+.ex-btn.nit.on{background:linear-gradient(135deg,#3d3d1a,#2d2d0d)}
+.ex-btn.tp.on{background:linear-gradient(135deg,#1a3d5c,#0d2840)}
+.ex-btn.lag.on{background:linear-gradient(135deg,#5c1a1a,#3d0d0d)}
+.ex-btn.unknown.on{background:linear-gradient(135deg,#333,#222);color:#888}
+.ex-btn .e-emoji{font-size:16px;display:block;margin-bottom:1px}
+.clr{display:inline-block;width:48%;padding:12px;border:1px solid rgba(255,71,87,.15);border-radius:10px;background:transparent;color:#ff4757;font-size:13px;font-weight:bold;cursor:pointer;margin:3px 1%;text-align:center;box-sizing:border-box}
+.modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.92);z-index:100;padding:8px;overflow-y:auto}
+.modal.on{display:block}
+.mt{text-align:center;font-size:14px;color:#ffd700;margin-bottom:6px;font-weight:bold}
+.ms-row{display:flex;justify-content:center;gap:4px;margin-bottom:6px}
+.ms-btn{padding:6px 14px;border:none;border-radius:12px;font-size:16px;cursor:pointer;background:rgba(255,255,255,.06);transition:all .06s}
+.ms-btn.on{background:#ffd700}
+.m-grid{display:grid;grid-template-columns:repeat(13,1fr);gap:2px;max-width:460px;margin:0 auto}
+.m-c{aspect-ratio:.75;border:none;border-radius:2px;font-size:10px;font-weight:bold;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#f5f5f0;transition:all .05s;padding:1px 0}
+.m-c:active{transform:scale(.85)}
+.m-c.red{color:#c41e3a}.m-c.blk{color:#1a1a1a}
+.m-c.dis{opacity:.12;pointer-events:none}
+.m-c .mr{font-size:11px;line-height:1}.m-c .ms{font-size:8px;line-height:1}
+.m-cl{display:block;margin:8px auto;padding:6px 20px;border:none;border-radius:10px;background:rgba(255,255,255,.06);color:#fff;font-size:11px;cursor:pointer}
+/* V2.9.57: Session统计弹窗 */
+.stats-modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.95);z-index:150;padding:8px;overflow-y:auto}
+.stats-modal.on{display:block}
+.stats-title{text-align:center;font-size:13px;color:#ffd700;margin-bottom:6px;font-weight:bold}
+.stats-card{background:rgba(255,255,255,.05);border-radius:8px;padding:8px;margin-bottom:6px}
+.stats-card h3{font-size:10px;color:#888;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:2px}
+.stats-row{display:flex;justify-content:space-between;font-size:9px;padding:2px 0;color:#ccc}
+.stats-row .val{font-weight:bold;color:#fff}
+.stats-row .val.pos{color:#2ed573}
+.stats-row .val.neg{color:#ff4757}
+.stats-row .val.neu{color:#ffa502}
+.stats-bar{height:14px;background:rgba(255,255,255,.04);border-radius:3px;margin:2px 0;position:relative;overflow:hidden}
+.stats-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.stats-bar-label{position:absolute;right:4px;top:0;font-size:7px;line-height:14px;color:#fff;font-weight:bold}
+.stats-chart{height:60px;display:flex;align-items:flex-end;gap:1px;margin:4px 0;padding:0 2px}
+.stats-chart-bar{flex:1;min-width:2px;border-radius:1px 1px 0 0;transition:height .2s}
+.stats-pos-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.cam-modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.95);z-index:200;padding:8px}
+.cam-modal.on{display:block}
+.cam-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.cam-title{font-size:14px;color:#ffd700;font-weight:bold}
+.cam-close{padding:6px 14px;border:none;border-radius:6px;background:rgba(255,71,87,.2);color:#ff4757;font-size:11px;cursor:pointer}
+.cam-wrap{position:relative;border-radius:10px;overflow:hidden;background:#000}
+.cam-wrap video{width:100%;display:block;border-radius:10px}
+.cam-wrap canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+.cam-hint{position:absolute;bottom:8px;left:0;right:0;text-align:center;font-size:10px;color:rgba(255,255,255,.6);background:rgba(0,0,0,.6);padding:4px;border-radius:0 0 10px 10px}
+.cam-result{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;justify-content:center;align-items:center}
+.cam-card{padding:5px 10px;border-radius:5px;font-size:13px;font-weight:bold;cursor:pointer}
+.cam-card.hi{background:rgba(46,213,115,.2);color:#2ed573;border:1px solid rgba(46,213,115,.3)}
+.cam-card.ok{background:rgba(255,215,0,.2);color:#ffd700;border:1px solid rgba(255,215,0,.4)}
+.cam-card.add{background:rgba(255,255,255,.05);color:#888;border:1px dashed rgba(255,255,255,.1)}
+.cam-card .cf{font-size:9px;color:#888;margin-left:2px}
+.set-panel{margin-top:6px;padding:6px;background:rgba(0,0,0,.3);border-radius:6px}
+.set-row{display:flex;gap:4px;align-items:center;margin-bottom:4px}
+.set-lbl{color:#666;font-size:10px;min-width:50px}
+.set-inp{flex:1;padding:5px 8px;border:1px solid rgba(255,255,255,.1);border-radius:5px;background:rgba(0,0,0,.3);color:#fff;font-size:11px}
+.set-btn{padding:5px 10px;border:none;border-radius:5px;font-size:10px;font-weight:700;cursor:pointer}
+.set-btn.save{background:#2ed573;color:#000}
+.set-btn.test{background:rgba(93,173,226,.2);color:#5dade2}
+.set-info{font-size:9px;color:#555;margin-top:3px}
+.yolo-badge{font-size:9px;padding:2px 6px;border-radius:4px;font-weight:900}
+.yolo-badge.on{background:rgba(46,213,115,.15);color:#2ed573}
+.yolo-badge.off{background:rgba(255,255,255,.05);color:#444}
+/* === V1.5 极速模式 === */
+body.speed-mode .tracker-wrap,
+body.speed-mode .scene-wrap,
+body.speed-mode .cards-row,
+body.speed-mode .hint,
+body.speed-mode .mx-wrap,
+body.speed-mode .adv-t,
+body.speed-mode .adv,
+body.speed-mode .cam-mini{display:none!important}
+body.speed-mode .res{position:fixed;top:0;left:0;right:0;z-index:999;min-height:auto;border-radius:8px;padding:4px 8px;background:rgba(10,20,40,.92);border:1px solid rgba(46,213,115,.3);justify-content:flex-start}
+body.speed-mode .r-a{font-size:22px;letter-spacing:2px;padding:2px 6px;border-radius:6px;display:inline-block;margin-bottom:2px}
+body.speed-mode .r-v{font-size:14px;margin-top:1px}
+body.speed-mode .r-d{font-size:11px;margin-top:1px}
+body.speed-mode .r-tip{font-size:20px;padding:4px 10px;margin-top:4px;font-weight:900;border-radius:8px;display:inline-block;text-shadow:0 1px 4px rgba(0,0,0,.5)}
+body.speed-mode .r-class{font-size:9px;margin-top:2px}
+body.speed-mode .r-drta,
+body.speed-mode .r-spr,
+body.speed-mode .r-ev-sm,
+body.speed-mode .r-plan,
+body.speed-mode .r-exploit{display:none!important}
+body.speed-mode .speed-exit{display:inline-block!important}
+.speed-exit{display:none!important;font-size:10px;color:#555;padding:3px 10px;border-radius:12px;background:rgba(255,255,255,.05);cursor:pointer;margin-top:6px}
+.speed-exit:active{background:rgba(255,255,255,.15)}
+@keyframes resultPulse{0%{transform:scale(1)}25%{transform:scale(1.06)}50%{transform:scale(1)}75%{transform:scale(1.03)}100%{transform:scale(1)}}
+.result-pulse{animation:resultPulse .4s ease-out}
+@keyframes borderFlash{0%{box-shadow:0 0 0 0 rgba(255,255,255,.6)}50%{box-shadow:0 0 20px 4px rgba(255,255,255,.3)}100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}}
+.border-flash{animation:borderFlash .5s ease-out}
+/* API处理中状态 */
+.api-processing .res{opacity:.6}
+.api-processing .res::after{content:'⏳ 识别中...';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:18px;color:#ffd700;font-weight:900}
+.api-processing .res{position:relative}
+/* === V2.0 识别结果展示 === */
+.rec-banner{display:none;background:linear-gradient(135deg,#1a237e,#0d47a1);border-radius:10px;padding:8px;margin-bottom:4px;text-align:center;border:1px solid rgba(144,202,249,.3)}
+.rec-banner.on{display:block}
+.rec-label{font-size:9px;color:#90caf9;margin-bottom:3px;font-weight:bold}
+.rec-cards{display:flex;justify-content:center;gap:2px;align-items:center;flex-wrap:wrap;margin-bottom:3px}
+.rec-card{display:inline-flex;flex-direction:column;align-items:center;padding:2px 5px;background:rgba(255,255,255,.12);border-radius:4px;min-width:28px}
+.rec-card .rc-r{font-size:16px;font-weight:900;line-height:1}
+.rec-card .rc-s{font-size:12px;line-height:1}
+.rec-card.red{color:#ff6b6b}.rec-card.blk{color:#e0e0e0}
+.rec-sep{width:1px;height:24px;background:rgba(255,255,255,.2);margin:0 3px}
+.rec-info{font-size:10px;color:#90caf9;margin-top:2px}
+body.speed-mode .rec-banner{padding:10px;border-radius:14px;border-width:2px}
+body.speed-mode .rec-card .rc-r{font-size:20px}
+body.speed-mode .rec-card .rc-s{font-size:14px}
+body.speed-mode .rec-info{font-size:12px;font-weight:bold}
+body.speed-mode .rec-label{font-size:10px}
+/* V2.9.131: 换桌建议 — 悬浮球闪烁动画（视觉层，不动7色策略色）*/
+@keyframes v29131-blink-slow {0%,100%{box-shadow:0 0 0 0 rgba(255,215,0,0)}50%{box-shadow:0 0 0 6px rgba(255,215,0,0.6)}}
+@keyframes v29131-blink-fast {0%,100%{box-shadow:0 0 0 0 rgba(255,71,87,0)}50%{box-shadow:0 0 0 6px rgba(255,71,87,0.7)}}
+.v29131-blink-slow {animation: v29131-blink-slow 2s ease-in-out infinite}
+.v29131-blink-fast {animation: v29131-blink-fast 0.8s ease-in-out infinite}
+.tc-blink-icon {display:inline-block;margin-left:4px;font-size:14px}
+.tc-blink-icon.l1 {animation: v29131-blink-slow 2s ease-in-out infinite}
+.tc-blink-icon.l2 {animation: v29131-blink-fast 0.8s ease-in-out infinite}
+.tc-condition {padding:4px 8px;margin:3px 0;background:rgba(255,255,255,0.08);border-radius:6px;font-size:12px;display:flex;justify-content:space-between;align-items:center}
+.tc-condition.met {background:rgba(255,71,87,0.15);color:#ff6b7a}
+.tc-advice {padding:8px;margin:6px 0;background:rgba(255,215,0,0.12);border-radius:6px;font-size:12px;color:#ffd700}
+.tc-l2-banner {background:linear-gradient(135deg,#7a1a1a,#a82a1a);color:#fff;padding:6px 10px;border-radius:4px;font-weight:bold;text-align:center;margin-bottom:6px}
+.tc-l1-banner {background:linear-gradient(135deg,#3a3a1a,#5a4a1a);color:#ffd700;padding:6px 10px;border-radius:4px;font-weight:bold;text-align:center;margin-bottom:6px}
+</style>
+</head>
+<body class="speed-mode">
+<div class="rec-banner" id="recBanner">
+  <div class="rec-label">🔍 识别结果</div>
+  <div class="rec-cards" id="recCards"></div>
+  <div class="rec-info" id="recInfo"></div>
+</div>
+<div class="res" id="res"><div style="color:#555;font-size:14px">📷 截图即可开始分析</div></div>
+<div class="tracker-wrap" id="trackerWrap">
+  <div class="tracker-title"><span class="t-icon">🎯</span>对手追踪 <span id="oppTypeTag" style="font-size:9px;padding:1px 5px;background:rgba(199,125,255,.2);border-radius:3px;color:#c77dff">unknown</span></div>
+  <div id="oppProfileInfo" style="padding:2px 8px;"><div style="font-size:9px;color:#555">等待数据...</div></div>
+  <div class="tracker-stats" id="trackerStats">
+    <div class="t-stat"><div class="t-stat-l">手数</div><div class="t-stat-v" id="tHands">0</div></div>
+    <div class="t-stat"><div class="t-stat-l">VPIP</div><div class="t-stat-v" id="tVpip">--</div></div>
+    <div class="t-stat"><div class="t-stat-l">PFR</div><div class="t-stat-v" id="tPfr">--</div></div>
+    <div class="t-stat"><div class="t-stat-l">AF</div><div class="t-stat-v" id="tAf">--</div></div>
+    <div class="t-stat"><div class="t-stat-l">弃牌率</div><div class="t-stat-v" id="tFtB">--</div></div>
+    <div class="t-stat"><div class="t-stat-l">近侵</div><div class="t-stat-v" id="tRagg">--</div></div>
+    <div class="t-stat"><div class="t-stat-l">3bet</div><div class="t-stat-v" id="t3bet">--</div></div>
+    <div class="t-stat"><div class="t-stat-l">CBet</div><div class="t-stat-v" id="tCbet">--</div></div>
+    <div class="t-stat"><div class="t-stat-l">偷盲</div><div class="t-stat-v" id="tSteal">--</div></div>
+  </div>
+  <div style="font-size:8px;color:#888;text-align:center;padding:1px 4px">范围推断: <span id="tRangeDist" style="color:#c77dff">--</span></div>
+  <div class="t-conf"><div class="t-conf-fill" id="tConfFill" style="width:0%"></div></div>
+  <div class="tracker-actions">
+    <button class="t-btn" id="tBtnUnknown" onclick="setTrackerType('unknown')">❓未知</button>
+    <button class="t-btn" id="tBtnFish" onclick="setTrackerType('fish')">🐟鱼</button>
+    <button class="t-btn" id="tBtnTP" onclick="setTrackerType('tight')">🎯紧被动</button>
+    <button class="t-btn" id="tBtnLAG" onclick="setTrackerType('lag')">🔥松凶</button>
+    <button class="t-btn rst" onclick="resetTracker()">🔄重置</button>
+  </div>
+</div>
+<div class="scene-wrap" id="sceneWrap">
+  <div class="scene-tabs">
+    <button class="s-tab pre on" id="tabPre" onclick="setPhase('pre')">🌱 翻前</button>
+    <button class="s-tab post" id="tabPost" onclick="setPhase('post')">🌿 翻后</button>
+  </div>
+  <div id="sceneBtnsPre" class="scene-btns">
+    <button class="big-btn open on" id="scOpen" onclick="setScene('open')"><span class="b-emoji">🟢</span>开池</button>
+    <button class="big-btn raise" id="scRaise" onclick="setScene('raise')"><span class="b-emoji">🔴</span>面对加注</button>
+    <button class="big-btn call" id="scCall" onclick="setScene('call')"><span class="b-emoji">🟡</span>多人跟注</button>
+    <button class="big-btn reraise" id="scReraise" onclick="setScene('reraise')"><span class="b-emoji">🟣</span>面对再raise</button>
+  </div>
+  <div id="sceneBtnsPost" class="scene-btns" style="display:none">
+    <button class="big-btn check on" id="scCheck" onclick="setScene('check')"><span class="b-emoji">⚪</span>对手过牌</button>
+    <button class="big-btn bet" id="scBet" onclick="setScene('bet')"><span class="b-emoji">🔴</span>对手下注</button>
+    <button class="big-btn allin" id="scAllin" onclick="setScene('allin')"><span class="b-emoji">🟡</span>对手全下</button>
+  </div>
+</div>
+<div class="exploit-row" id="exploitRow">
+  <button class="ex-btn unknown on" id="exUnknown" onclick="setOppType('unknown')"><span class="e-emoji">❓</span>未知</button>
+  <button class="ex-btn fish" id="exFish" onclick="setOppType('fish')"><span class="e-emoji">🐟</span>鱼</button>
+  <button class="ex-btn tp" id="exTP" onclick="setOppType('tight')"><span class="e-emoji">🎯</span>紧被动</button>
+  <button class="ex-btn lag" id="exLAG" onclick="setOppType('lag')"><span class="e-emoji">🔥</span>松凶</button>
+</div>
+<div class="cards-row" id="cardsRow">
+  <div class="card-group"><div class="card-slot" id="h0" onclick="pick('h0')"><span>手1</span></div><div class="card-label">手牌</div></div>
+  <div class="card-group"><div class="card-slot" id="h1" onclick="pick('h1')"><span>手2</span></div><div class="card-label">&nbsp;</div></div>
+  <div class="card-sep"></div>
+  <div class="card-group"><div class="card-slot" id="c0" onclick="pick('c0')"><span>翻1</span></div><div class="card-label">公共</div></div>
+  <div class="card-group"><div class="card-slot" id="c1" onclick="pick('c1')"><span>翻2</span></div><div class="card-label">&nbsp;</div></div>
+  <div class="card-group"><div class="card-slot" id="c2" onclick="pick('c2')"><span>翻3</span></div><div class="card-label">&nbsp;</div></div>
+  <div class="card-group"><div class="card-slot" id="c3" onclick="pick('c3')"><span>转牌</span></div><div class="card-label">&nbsp;</div></div>
+  <div class="card-group"><div class="card-slot" id="c4" onclick="pick('c4')"><span>河牌</span></div><div class="card-label">&nbsp;</div></div>
+</div>
+<div class="hint" id="hint">👆 点击格子选牌，或点右上角📷开摄像头</div>
+<div class="mx-info" id="mxInfo"></div>
+<div class="mx-wrap" id="mxWrap"><table class="mx" id="mx"></table></div>
+<div class="mx-legend" id="mxLegend">
+  <span><span class="ml" style="background:#2ed573"></span>加注</span>
+  <span><span class="ml" style="background:#5dade2"></span>3bet</span>
+  <span><span class="ml" style="background:#ffa502"></span>跟注</span>
+  <span><span class="ml" style="background:#222"></span>弃牌</span>
+</div>
+<div class="adv-t" onclick="togAdv()">⚙ 高级设置（默认无需打开）▼</div>
+<div class="adv" id="adv">
+  <div class="adv-sub">以下可默认不动，高级玩家自调</div>
+  <div class="adv-row">
+    <span class="adv-l">位置</span>
+    <button class="adv-btn on" id="posBtn" onclick="sPos('btn')">BTN</button>
+    <button class="adv-btn" onclick="sPos('co')">CO</button>
+    <button class="adv-btn" onclick="sPos('hj')">HJ</button>
+    <button class="adv-btn" onclick="sPos('mp')">MP</button>
+    <button class="adv-btn" onclick="sPos('utg')">UTG</button>
+    <button class="adv-btn" onclick="sPos('sb')">SB</button>
+    <button class="adv-btn" onclick="sPos('bb')">BB</button>
+  </div>
+  <div class="adv-row">
+    <span class="adv-l">桌型</span>
+    <button class="adv-btn" onclick="sTT(2)">2人</button>
+    <button class="adv-btn" onclick="sTT(3)">3人</button>
+    <button class="adv-btn" onclick="sTT(4)">4人</button>
+    <button class="adv-btn" onclick="sTT(5)">5人</button>
+    <button class="adv-btn on" onclick="sTT(6)">6人</button>
+    <button class="adv-btn" onclick="sTT(7)">7人</button>
+    <button class="adv-btn" onclick="sTT(8)">8人</button>
+    <button class="adv-btn" onclick="sTT(9)">9人</button>
+  </div>
+  <div class="adv-row"><span class="adv-l">筹码</span><input type="number" class="adv-inp" id="stkInp" value="100" min="5" max="500" onchange="updateStk()"><span style="color:#444;font-size:9px">BB</span></div>
+  <div class="adv-row"><span class="adv-l">平跟者</span><button class="adv-btn on" id="limpBtn0" onclick="setLimpers(0)">0</button><button class="adv-btn" id="limpBtn1" onclick="setLimpers(1)">1</button><button class="adv-btn" id="limpBtn2" onclick="setLimpers(2)">2+</button></div>
+  <div class="adv-row"><span class="adv-l">底池</span><input type="number" class="adv-inp" id="potInp" value="10" min="1" max="500" onchange="updatePot()"><span style="color:#444;font-size:9px">BB</span></div>
+  <div class="adv-row"><span class="adv-l">面对</span><input type="number" class="adv-inp" id="betInp" value="0" min="0" max="500" onchange="updateBet()"><span style="color:#444;font-size:9px">BB</span></div>
+</div>
+<button class="clr" onclick="clr()">🔄 下一手</button>
+<button class="clr" style="background:#1a3a5c" id="hotBtn" onclick="hotUpdate()">📡策略更新</button>
+<button class="clr" style="background:#3a1a1a;display:none" id="revertBtn" onclick="revertLocal()">↩恢复本地</button>
+<button class="clr" style="background:#1a3a2c" id="exportBtn" onclick="exportLog()">📤导出日志</button>
+<button class="clr" style="background:#1a2a3a" id="statsBtn" onclick="showStats()">📊统计</button>
+<button class="clr" style="background:#3a2a1a" id="reviewBtn" onclick="openReview()">📊复盘</button>
+<button class="clr" style="background:#2a1a3a" id="selfLearnBtn" onclick="openSelfLearn()">🧠学习</button>
+<div class="cam-mini"><button class="cam-mini-btn" id="camMiniBtn" onclick="toggleCamModal()">📷</button></div>
+<div class="modal" id="modal">
+  <div class="mt" id="mTitle">选牌</div>
+  <div class="ms-row" id="mSuit"></div>
+  <div class="m-grid" id="mGrid"></div>
+  <button class="m-cl" onclick="closeM()">关闭</button>
+</div>
+<!-- V2.9.130: 复盘弹窗 -->
+<div class="modal" id="reviewModal" style="display:none;z-index:9999;background:rgba(0,0,0,0.85);padding:10px;max-height:95vh;overflow-y:auto">
+  <div class="mt" style="background:linear-gradient(135deg,#1a237e,#0d47a1);color:#fff">📊 手牌复盘</div>
+  <div id="reviewContent" style="padding:6px 0;color:#fff"></div>
+  <button class="m-cl" onclick="closeReview()">关闭</button>
+</div>
+<!-- V2.9.516: SelfLearner自我学习面板 -->
+<div class="modal" id="selfLearnModal" style="display:none;z-index:9999;background:rgba(0,0,0,0.9);padding:10px;max-height:95vh;overflow-y:auto">
+  <div class="mt" style="background:linear-gradient(135deg,#4a148c,#6a1b9a);color:#fff">🧠 青云自我学习</div>
+  <div id="selfLearnContent" style="padding:6px 0;color:#fff"></div>
+  <button class="m-cl" onclick="closeSelfLearn()">关闭</button>
+</div>
+<!-- V2.9.131: 换桌建议弹窗 -->
+<div class="modal" id="tableChangeModal" style="display:none;z-index:9999;background:rgba(0,0,0,0.85);padding:10px;max-height:95vh;overflow-y:auto">
+  <div class="mt" style="background:linear-gradient(135deg,#3a3a1a,#5a4a1a);color:#ffd700">🔄 换桌建议</div>
+  <div id="tableChangeContent" style="padding:6px 0;color:#fff"></div>
+  <div style="display:flex;gap:6px;margin-top:6px">
+    <button class="m-cl" style="flex:1;background:#3a3a3a" onclick="TableChangeDialog.hide('know')">知道了</button>
+    <button class="m-cl" style="flex:1;background:linear-gradient(135deg,#7a1a1a,#a82a1a)" onclick="TableChangeDialog.hide('change')">现在换桌</button>
+  </div>
+</div>
+<div class="stats-modal" id="statsModal">
+  <div class="stats-title">📊 Session统计</div>
+  <div id="statsContent"></div>
+  <button class="m-cl" onclick="closeStats()">关闭</button>
+</div>
+<div class="cam-modal" id="camModal">
+  <div class="cam-header"><span class="cam-title">📷 实时扫描</span><button class="cam-close" onclick="closeCamModal()">关闭</button></div>
+  <div class="cam-wrap" id="camWrap"><video id="camVideo" autoplay playsinline muted></video><canvas id="camCanvas"></canvas><div class="cam-hint" id="camHint">对准牌面 · 自动识别</div></div>
+  <div class="cam-result" id="camResult"></div>
+  <div class="set-panel">
+    <div class="set-row"><span class="set-lbl">API Key</span><input type="password" class="set-inp" id="rfKeyInp" placeholder="Roboflow Key"><button class="set-btn save" onclick="saveKey()">保存</button></div>
+    <div class="set-row"><span class="yolo-badge off" id="yoloBadge">YOLO</span><button class="set-btn test" onclick="testKey()">测试</button></div>
+    <div class="set-info" id="setInfo">支持YOLO自动识别，也可本地识别</div>
+  </div>
+</div>
+<script>
 // ===== v14.25 GTO+DRTA融合引擎 =====
 
 // 全局常量
@@ -11981,3 +12412,324 @@ TableQualityMeter.init(); // V2.9.131: 桌质评估+换桌建议+悬浮球闪烁
 DRTA.init();
 _initMCWorker(); // V2.9.46: 预创建Worker
 mkMx();
+</script>
+<script>// ============================================================================
+// V2.9.180: 三大智能模块 - 全自动闭环 + 对手动态建模 + 牌面纹理分析
+// ============================================================================
+
+// ===== 模块1: AutoConfidence - 置信度分级自动执行 =====
+var AutoConfidence = {
+  compute: function(r) {
+    var eq = r.eq || 50;
+    var hClass = r.hClass;
+    var reliability = r._reliability || 'high';
+    var potConf = (typeof PotConfidence !== 'undefined' && PotConfidence.level) ? PotConfidence.level : 'high';
+    var action = r.a || 'fold';
+
+    // 低置信触发条件
+    if (reliability === 'low') return 'low';
+    if (potConf === 'low') return 'low';
+    if (hClass && (!hClass.name || hClass.name === '?' || hClass.name === 'UNKNOWN')) return 'low';
+    if (eq === 0 && reliability !== 'high') return 'low';
+
+    // 高置信触发条件
+    if (hClass && eq >= 80 && (hClass.name === 'NUTS' || hClass.name === 'STRONG')) return 'high';
+    if (hClass && eq >= 75 && (hClass.name === 'NUTS' || hClass.name === 'STRONG') && reliability === 'high') return 'high';
+    if (hClass && eq <= 20 && hClass.name === 'AIR' && reliability === 'high') return 'high';
+    if (action === 'fold' && eq <= 25 && reliability === 'high') return 'high';
+    if (hClass && hClass.name === 'NUTS' && reliability === 'high') return 'high';
+
+    return 'medium';
+  },
+
+  execute: function(r) {
+    var conf = this.compute(r);
+    var action = r.a || 'fold';
+    console.log('[AutoConf] confidence=' + conf + ' action=' + action + ' eq=' + (r.eq||'?') + ' hClass=' + (r.hClass?r.hClass.name:'?'));
+
+    if (conf === 'low') {
+      console.log('[AutoConf] LOW→强制弃牌');
+      return { action: 'fold', auto: true, reason: 'low_confidence', confidence: 'low' };
+    }
+
+    if (conf === 'medium') {
+      if (action === 'allin') {
+        console.log('[AutoConf] MEDIUM+allin→等待确认');
+        return { action: action, auto: false, reason: 'allin_needs_confirm', confidence: 'medium' };
+      }
+      console.log('[AutoConf] MEDIUM→自动执行');
+      return { action: action, auto: true, reason: 'medium_auto', confidence: 'medium' };
+    }
+
+    console.log('[AutoConf] HIGH→自动执行');
+    return { action: action, auto: true, reason: 'high_confidence', confidence: 'high' };
+  }
+};
+
+// ===== 模块2: OpponentTracker - 对手动态建模 =====
+var OpponentTracker = {
+  _data: {},
+  _sessionStart: Date.now(),
+
+  init: function() {
+    try {
+      var saved = localStorage.getItem('_oppTrack_v2');
+      if (saved) { this._data = JSON.parse(saved); console.log('[OppTrack] loaded ' + Object.keys(this._data).length + ' players'); }
+    } catch(e) { console.log('[OppTrack] init error: ' + e.message); }
+  },
+
+  _save: function() {
+    try { localStorage.setItem('_oppTrack_v2', JSON.stringify(this._data)); } catch(e) {}
+  },
+
+  // 用昵称或座位号作为key
+  _getKey: function(seatIdx, nickname) {
+    return nickname && nickname !== 'unknown' ? nickname : 'seat_' + seatIdx;
+  },
+
+  // 记录一手牌的结果
+  recordHand: function(oppSeats, heroAction, street, result) {
+    if (!oppSeats || !oppSeats.length) return;
+
+    for (var i = 0; i < oppSeats.length; i++) {
+      var s = oppSeats[i];
+      var key = this._getKey(s.seat, s.nickname);
+      if (!this._data[key]) {
+        this._data[key] = { hands: 0, vpip: 0, pfr: 0, folds: 0, calls: 0, raises: 0, threeBets: 0, cbets: 0, _actions: [], nickname: s.nickname || '', seat: s.seat };
+      }
+      var d = this._data[key];
+      d.hands++;
+      d.nickname = s.nickname || d.nickname;
+
+      var act = (s.action || '').toLowerCase();
+      if (act.indexOf('fold') >= 0) d.folds++;
+      else if (act.indexOf('raise') >= 0 || act.indexOf('bet') >= 0) {
+        d.raises++;
+        if (act.indexOf('3bet') >= 0 || act.indexOf('reraise') >= 0) d.threeBets++;
+        if (street === 'flop' || street === 'turn' || street === 'river') d.cbets++;
+      } else if (act.indexOf('call') >= 0 || act.indexOf('check') >= 0) d.calls++;
+
+      d._actions.push({ a: act, st: street, ts: Date.now() });
+      if (d._actions.length > 200) d._actions.shift();
+
+      // 重新计算频率
+      var total = d.hands;
+      if (total > 0) {
+        d.vpip = Math.round((d.calls + d.raises) / total * 100);
+        d.pfr = Math.round(d.raises / total * 100);
+        d.af = d.calls > 0 ? parseFloat((d.raises / d.calls).toFixed(1)) : (d.raises > 0 ? 99 : 0);
+      }
+    }
+    this._save();
+  },
+
+  // 自动分类对手
+  classify: function(seatIdx, nickname) {
+    var key = this._getKey(seatIdx, nickname);
+    var d = this._data[key];
+    if (!d || d.hands < 5) return 'unknown';
+
+    if (d.vpip >= 55 && d.pfr <= 8) return 'calling_station';
+    if (d.vpip >= 45 && d.pfr >= 25) return 'maniac';
+    if (d.vpip >= 30 && d.pfr >= 20) return 'lag';
+    if (d.vpip <= 12 && d.pfr <= 8) return 'nit';
+    if (d.vpip >= 25 && d.pfr <= 12) return 'fish';
+    if (d.vpip >= 18 && d.pfr >= 12) return 'tp';
+
+    return 'unknown';
+  },
+
+  // 获取对手数据
+  getStats: function(seatIdx, nickname) {
+    var key = this._getKey(seatIdx, nickname);
+    return this._data[key] || { hands: 0, vpip: 0, pfr: 0, af: 0, folds: 0, calls: 0, raises: 0 };
+  },
+
+  // 返回最活跃对手的类型
+  getMainOpponentType: function() {
+    if (!G.oppSeats || !G.oppSeats.length) return 'unknown';
+    var best = null, bestHands = 0;
+    for (var i = 0; i < G.oppSeats.length; i++) {
+      var s = G.oppSeats[i];
+      var key = this._getKey(s.seat, s.nickname);
+      var d = this._data[key];
+      if (d && d.hands > bestHands) { bestHands = d.hands; best = d; }
+    }
+    if (best && best.hands >= 5) return this.classify(best.seat, best.nickname);
+    return 'unknown';
+  },
+
+  reset: function() {
+    this._data = {};
+    this._save();
+  }
+};
+
+// ===== 模块3: BoardTexture - 牌面纹理深度分析 =====
+var BoardTexture = {
+  _rankVals: { A: 12, K: 11, Q: 10, J: 9, T: 8, '9': 7, '8': 6, '7': 5, '6': 4, '5': 3, '4': 2, '3': 1, '2': 0 },
+
+  analyze: function(comm) {
+    var cards = comm ? comm.filter(function(c) { return c; }) : [];
+    if (cards.length < 3) {
+      return { wetness: 'dry', connectivity: 'none', paired: false, trips: false, flushPossible: false, straightPossible: false, rank: 'low', cards: cards.length, desc: '翻前' };
+    }
+
+    var ranks = cards.map(function(c) { return c.rank; });
+    var suits = cards.map(function(c) { return c.suit; });
+    var self = this;
+
+    // 对子/三条
+    var rankCount = {};
+    ranks.forEach(function(r) { rankCount[r] = (rankCount[r] || 0) + 1; });
+    var paired = Object.values(rankCount).some(function(n) { return n >= 2; });
+    var trips = Object.values(rankCount).some(function(n) { return n >= 3; });
+
+    // 同花可能
+    var suitCount = {};
+    suits.forEach(function(s) { suitCount[s] = (suitCount[s] || 0) + 1; });
+    var maxSameSuit = Math.max.apply(null, Object.values(suitCount));
+    var flushPossible = maxSameSuit >= 3;
+    var flushDraw = maxSameSuit === 2; // 2同花+2张未发
+
+    // 顺子可能
+    var vals = ranks.map(function(r) { return self._rankVals[r] || 0; }).sort(function(a, b) { return a - b; });
+    // 去重
+    var uniqVals = [];
+    vals.forEach(function(v) { if (uniqVals.indexOf(v) === -1) uniqVals.push(v); });
+    var gaps = [];
+    for (var i = 1; i < uniqVals.length; i++) gaps.push(uniqVals[i] - uniqVals[i - 1]);
+    var maxGap = gaps.length > 0 ? Math.max.apply(null, gaps) : 99;
+    var straightPossible = uniqVals.length >= 3 && maxGap <= 4;
+
+    // 连接性
+    var connectivity = maxGap <= 2 ? 'high' : maxGap <= 3 ? 'medium' : 'low';
+
+    // 湿润度
+    var wetness = 'dry';
+    if (flushPossible && straightPossible) wetness = 'very_wet';
+    else if (flushPossible || straightPossible) wetness = 'wet';
+    else if (paired) wetness = 'paired';
+
+    // 最高牌等级
+    var maxRank = Math.max.apply(null, vals);
+    var rank = maxRank >= 10 ? 'high' : maxRank >= 7 ? 'medium' : 'low';
+
+    var desc = '';
+    if (wetness === 'very_wet') desc = '极湿(花+顺)';
+    else if (wetness === 'wet') desc = (flushPossible ? '同花面' : '顺子面');
+    else if (paired) desc = '对子面';
+    else desc = '干燥面';
+
+    return {
+      wetness: wetness, connectivity: connectivity, paired: paired, trips: trips,
+      flushPossible: flushPossible, flushDraw: flushDraw, straightPossible: straightPossible,
+      maxGap: maxGap, rank: rank, cards: cards.length, desc: desc, maxSameSuit: maxSameSuit
+    };
+  },
+
+  // 获取翻后调整因子
+  getAdjustment: function(texture, heroIsAggressor) {
+    var adj = { cbetFreq: 1.0, barrelFreq: 1.0, sizingMult: 1.0, checkFreq: 1.0 };
+
+    if (texture.wetness === 'very_wet') {
+      adj.cbetFreq = heroIsAggressor ? 0.75 : 1.15;
+      adj.sizingMult = 1.25;
+      adj.barrelFreq = heroIsAggressor ? 0.7 : 1.0;
+    } else if (texture.wetness === 'wet') {
+      adj.cbetFreq = heroIsAggressor ? 0.85 : 1.1;
+      adj.sizingMult = 1.1;
+      adj.barrelFreq = heroIsAggressor ? 0.8 : 1.0;
+    } else if (texture.paired) {
+      adj.cbetFreq = 1.35;
+      adj.sizingMult = 0.65;
+      adj.barrelFreq = 1.2;
+    }
+
+    if (texture.rank === 'high') {
+      adj.cbetFreq *= 0.8;
+      adj.checkFreq *= 1.3;
+    } else if (texture.rank === 'low') {
+      adj.cbetFreq *= 1.15;
+      adj.checkFreq *= 0.8;
+    }
+
+    return adj;
+  }
+};
+
+// ===== 自动执行桥接 =====
+var _autoExecEnabled = false;
+function enableAutoExec(){_autoExecEnabled=true;console.log("[AutoExec] enabled");}
+function disableAutoExec(){_autoExecEnabled=false;console.log("[AutoExec] disabled");}
+// 筹码重置——Kotlin端ChipTracker.reset()后回调，清空JS侧追踪状态
+function onChipReset(){
+  try{
+    G.hole=[null,null];G.comm=[null,null,null,null,null];
+    G.bet=0;G.pot=10;G.limpers=0;G._heroDid4bet=false;G._slowplayed=false;
+    if(typeof DRTA!=='undefined'&&DRTA.reset)DRTA.reset();
+    if(typeof HudLearner!=='undefined'&&HudLearner.reset)HudLearner.reset();
+    if(typeof uCards==='function')uCards();
+    if(typeof clr==='function')clr();
+    console.log('[onChipReset] JS侧筹码/追踪状态已重置');
+  }catch(e){console.log('[onChipReset] err:'+e.message);}
+}
+// 自动执行决策——在bridgeAdvice之后调用
+function autoExecuteDecision(r, isAutoMode) {
+  if (!isAutoMode) return false; // V2.9.553-rev9: 移除_autoExecEnabled依赖(Kotlin侧isAutoCaptureOn已是权威源)
+
+  var exec = AutoConfidence.execute(r);
+  console.log('[AutoExec] result=' + JSON.stringify(exec));
+
+  if (exec.confidence === 'low') {
+    // 低置信→强制弃牌
+    console.log('[AutoExec] 低置信→强制弃牌: eq='+(r.eq||0)+' hClass='+(r.hClass?r.hClass.name:'?')+' pot='+G.pot+' stk='+G.stk+' bet='+G.bet);
+    if (typeof AndroidBridge !== 'undefined' && AndroidBridge.autoDecision) {
+      AndroidBridge.autoDecision(JSON.stringify({
+        action: 'fold',
+        auto: true,
+        confidence: 'low',
+        reason: 'Low confidence, force fold',
+        eq: r.eq || 0,
+        hClass: r.hClass ? r.hClass.name : '?',
+        pot: G.pot || 0,
+        myChips: G.stk || 0,
+        toCall: G.bet || 0
+      }));
+    }
+    return true;
+  }
+
+  if (exec.auto) {
+    // 自动执行
+    if (typeof AndroidBridge !== 'undefined' && AndroidBridge.autoDecision) {
+      AndroidBridge.autoDecision(JSON.stringify({
+        action: exec.action,
+        auto: true,
+        confidence: exec.confidence,
+        reason: exec.reason,
+        eq: r.eq || 0,
+        hClass: r.hClass ? r.hClass.name : '?',
+        sizing: r.v || 0,
+        pot: G.pot || 0,
+        myChips: G.stk || 0,
+        toCall: G.bet || 0,
+        phase: G.phase || 'post',
+        nash: r._nash ? true : false
+      }));
+    }
+    return true;
+  }
+
+  // 中置信+全押→不自动执行，等用户确认
+  console.log('[AutoExec] 需要人工确认: ' + exec.action + ' (' + exec.reason + ')');
+  return false;
+}
+
+// ===== 初始化 =====
+(function() {
+  OpponentTracker.init();
+  console.log('[' + APP_VERSION + '] AutoConfidence + OpponentTracker + BoardTexture 已加载');
+})();</script>
+</body>
+</html>
