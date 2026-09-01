@@ -2867,7 +2867,7 @@ function decidePostflop(k){
   var comm=G.comm||[],bc=comm.filter(function(c){return c;});
   var pot=G.pot||1,bet=G.bet||0,stk=G.stk||100000;
   var spr=calcSPR();
-  var ip=pA(G.pos)>=0.5;
+  var ip=postflopIP(G.pos);
   var scene=G.scene||'check';
   var street=getCurrentStreet();
   var bTexture=boardTexture(bc);
@@ -6323,6 +6323,7 @@ function gO(p){p=_fp(p);var o=G.tt===2?O2:G.tt===3?O3:G.tt===4?O4:G.tt<=5?O5:G.t
 function gT(p){p=_fp(p);var t=G.tt===2?TB2:G.tt===3?TB3:G.tt===4?TB4:G.tt<=5?TB5:G.tt===6?TB6:G.tt===7?TB7:G.tt===8?TB8:TB9;return t[p]||t.btn||t.co||[];}
 function gC(p){p=_fp(p);var c=G.tt===2?CB2:G.tt===3?CB3:G.tt===4?CB4:G.tt<=5?CB5:G.tt===6?CB6:G.tt===7?CB7:G.tt===8?CB8:CB9;return c[p]||c.btn||c.co||[];}
 function pA(p){var m={utg:0,utg1:0.5,mp:1,mp1:1.5,hj:2,co:3,btn:4,sb:5,bb:5.5};return m[p]!==undefined?m[p]:3;}
+function postflopIP(pos){var _pfOrdPF={sb:1,bb:2,utg:3,utg1:4,mp:5,mp1:6,hj:7,co:8,btn:9};return(_pfOrdPF[pos]||5)>=7;}
 function calcSPR(){var h=G.hole.filter(function(c){return c;}).length;if(h<2)return 20;var effStk=G.stk;var p=G.pot>0?G.pot:1;return effStk/p;}
 function getSPRAdvice(spr){if(spr<1.5)return{label:'极短码',color:'us',zone:'ultra_short'};if(spr<3)return{label:'短码',color:'lo',zone:'short'};if(spr<6)return{label:'中短码',color:'ms',zone:'med_short'};if(spr<13)return{label:'标准码',color:'sd',zone:'standard'};return{label:'深码',color:'dp',zone:'deep'};}
 // ===== V2.9.59: SPR精细化 — 5区SPR策略引擎 =====
