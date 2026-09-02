@@ -3108,6 +3108,26 @@ class FloatingService : Service() {
                     jsonObj.put("errorLogEntries", org.json.JSONArray())
                     jsonObj.put("errorLogCount", 0)
                 }
+                // V2.9.559: 附加poker_log.txt中的JS console日志（WebChromeClient.onConsoleMessage捕获，
+                //   含JS异常原文+行号——排查0决策根因：JS静默失败路径只console.log不走error_logs.txt）
+                //   文件: DiagnosticLogger.getLogFile() = getExternalFilesDir(null)/poker_log.txt
+                //   JS行固定格式 "[HH:mm:ss] [JS_xxx] [来源:行号] 消息"，用 "] [JS" 精确过滤
+                //   （同文件识别日志为JSON行、ERROR为{type:ERROR...}行，均不含此前缀）
+                try {
+                    val jsLogFile = File(getExternalFilesDir(null) ?: filesDir, "poker_log.txt")
+                    if (jsLogFile.exists()) {
+                        val jsLines = jsLogFile.readLines().takeLast(500)
+                            .filter { it.contains("] [JS") }
+                        jsonObj.put("jsConsoleEntries", org.json.JSONArray(jsLines))
+                        jsonObj.put("jsConsoleCount", jsLines.size)
+                    } else {
+                        jsonObj.put("jsConsoleEntries", org.json.JSONArray())
+                        jsonObj.put("jsConsoleCount", 0)
+                    }
+                } catch (je: Exception) {
+                    jsonObj.put("jsConsoleEntries", org.json.JSONArray())
+                    jsonObj.put("jsConsoleCount", 0)
+                }
                 jsonObj.toString(2)
             } catch (e: Exception) {
                 logData  // fallback: enhancement失败不影响正常导出
