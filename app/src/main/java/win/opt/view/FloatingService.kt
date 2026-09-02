@@ -2028,6 +2028,22 @@ class FloatingService : Service() {
                     put("lastAction", _pipelineLastAction)
                 }.toString()
             }
+            // V2.9.560: JS导出路径获取poker_log.txt中的JS console日志
+            @JavascriptInterface
+            fun getJsConsoleEntries(): String {
+                return try {
+                    val jsLogFile = File(getExternalFilesDir(null) ?: filesDir, "poker_log.txt")
+                    if (jsLogFile.exists()) {
+                        val jsLines = jsLogFile.readLines().takeLast(500)
+                            .filter { it.contains("] [JS") }
+                        org.json.JSONArray(jsLines).toString()
+                    } else {
+                        "[]"
+                    }
+                } catch (e: Exception) {
+                    "[]"
+                }
+            }
             
             // P3-R3-9: 将setBlinkFreq移到JS接口对象中，修复JS调用静默失败
             @JavascriptInterface

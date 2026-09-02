@@ -1196,6 +1196,9 @@ function exportLog(){
   // V2.9.503: 获取Kotlin端完整诊断数据（识别/决策/ESP32点击/耗时统计）
   var kotlinDiag='';
   try{kotlinDiag=typeof AndroidBridge!=='undefined'&&AndroidBridge.getDiagData?AndroidBridge.getDiagData():'';}catch(e){}
+  // V2.9.560: 获取JS console日志（poker_log.txt中onConsoleMessage捕获的行）
+  var jsConsoleRaw='';
+  try{jsConsoleRaw=typeof AndroidBridge!=='undefined'&&AndroidBridge.getJsConsoleEntries?AndroidBridge.getJsConsoleEntries():'';}catch(e){}
   // V2.9.503: 获取pipeline耗时
   var pipelineTiming='';
   try{pipelineTiming=typeof AndroidBridge!=='undefined'&&AndroidBridge.getPipelineTiming?AndroidBridge.getPipelineTiming():'';}catch(e){}
@@ -1207,6 +1210,9 @@ function exportLog(){
     drtaType:DRTA.currentType,
     logs:LogBuffer.getAll(),
     nativeErrors:nativeErrors,
+    // V2.9.560: JS console日志（poker_log.txt中WebChromeClient捕获的异常/策略/识别日志）
+    jsConsoleEntries:jsConsoleRaw?JSON.parse(jsConsoleRaw):[],
+    jsConsoleCount:jsConsoleRaw?JSON.parse(jsConsoleRaw).length:0,
     // V2.9.503: Kotlin诊断数据（识别记录、决策记录、ESP32点击、统计）
     kotlinDiag:kotlinDiag?JSON.parse(kotlinDiag):null,
     // V2.9.503: Pipeline耗时（截图→CV→决策→ESP32点击）
@@ -1322,7 +1328,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.559',
+  CURRENT_VERSION:'2.9.560',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2737,7 +2743,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.559';
+var APP_VERSION='2.9.560';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
