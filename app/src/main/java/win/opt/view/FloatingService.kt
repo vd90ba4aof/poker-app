@@ -3096,10 +3096,26 @@ class FloatingService : Service() {
             // V2.9.215: 导出完整日志（识别+决策+错误）+ 复盘日志
             val logData = DiagnosticLogger.exportAsJson()
             val reviewData = DiagnosticLogger.exportReview()
+            // V2.9.558: 附加error_logs.txt到JSON导出（排查连续错误根因）
+            val enhancedLogData = try {
+                val jsonObj = org.json.JSONObject(logData)
+                val errorLogFile = File(filesDir, ERROR_LOG_FILE)
+                if (errorLogFile.exists()) {
+                    val errorLines = errorLogFile.readLines().takeLast(200)
+                    jsonObj.put("errorLogEntries", org.json.JSONArray(errorLines.toList()))
+                    jsonObj.put("errorLogCount", errorLines.size)
+                } else {
+                    jsonObj.put("errorLogEntries", org.json.JSONArray())
+                    jsonObj.put("errorLogCount", 0)
+                }
+                jsonObj.toString(2)
+            } catch (e: Exception) {
+                logData  // fallback: enhancement失败不影响正常导出
+            }
             val downloadDir = getExternalFilesDir(null) ?: filesDir
             val fileName = "poker_log_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}.json"
             val exportFile = File(downloadDir, fileName)
-            exportFile.writeText(logData, Charsets.UTF_8)
+            exportFile.writeText(enhancedLogData, Charsets.UTF_8)
             
             // V2.9.215: 同时导出复盘日志
             try {
@@ -3110,7 +3126,7 @@ class FloatingService : Service() {
             // 复制到剪贴板
             try {
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("poker_log", logData))
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("poker_log", enhancedLogData))
             } catch (_: Exception) {}
 
             // 弹出分享
