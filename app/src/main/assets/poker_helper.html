@@ -1328,7 +1328,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.564',
+  CURRENT_VERSION:'2.9.565',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2746,7 +2746,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.564';
+var APP_VERSION='2.9.565';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -11492,16 +11492,7 @@ function onVisionResult(data){
     }
   }
 
-  // ★ 优先级②：VLM blind_bb通过范围校验 ★
-  if(bbValue===0){
-    var _vBB=data.blind_bb?parseInt(data.blind_bb):0;
-    if(_vBB>=1 && _vBB<=50000){
-      bbValue=_vBB;
-      _bbSource='vlm_blind_bb_valid('+_vBB+')';
-      G._lockedBB=bbValue;
-      console.log('[V2.9.564 BB真相] '+_bbSource+' → 已锁存G._lockedBB='+bbValue);
-    }
-  }
+  // ★ V2.9.565: 优先级②已移除——VLM blind_bb不可信（v564日志证实单次误读20覆盖正确值100→stk=221BB）★
 
   // ★ 优先级③：锁存值（之前的可靠BB）★
   if(bbValue===0 && G._lockedBB && G._lockedBB>0){
@@ -11728,10 +11719,8 @@ function onVisionResult(data){
     G._playersCrossCheck=null;
   }
 
-  // V2.9.105: 存盲注供筹码深度计算
-  if(data.blind_bb&&data.blind_bb>0){
-    window._lastBlindBB=data.blind_bb;
-  }
+  // V2.9.105→V2.9.565: 不再存VLM原始blind_bb（不可信），_lastBlindBB统一用bbValue（已验证值）
+  window._lastBlindBB=bbValue;
   // V2.9.105: 推算座位角色
   if(data.d_button_position&&data.d_button_position!=='not_found'){
     var _roles=SeatRole.calc(data.d_button_position,data.total_players||G.tt||6);
@@ -11757,7 +11746,7 @@ function onVisionResult(data){
     G._raiserStackType='unknown';
     G._numCallersBefore=0;  // rev11 PRE-2: 冷跟者数(open后平跟未加注的活跃对手),squeeze判定用
     var _maxBet=0,_raiserPos='';
-    var _blindBB0=data.blind_bb||200;
+    var _blindBB0=bbValue||200;
     for(var i=0;i<data.opp_seats.length;i++){
       var os=data.opp_seats[i];
       if(os.bet>0&&(os.active!==false&&os.action!=='fold')){
