@@ -1409,9 +1409,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var localAction: ActionAreaResult? = null
                 var localPresets: List<Int> = emptyList()
                 var actionDiag = "skipped"
-                // V2.9.566: 新街过渡帧标志——本帧操作区黄色按钮为0但下注预设面板已亮
-                //   v565铁证：此类帧本地+VLM(整图)双返回0按钮，VLM纯浪费2.7~22.9s；等下帧按钮渲染后本地CV即可
-                var transitionFrameNoButtons = false
+                // V2.9.567: 移除v566过渡帧标志——本地CV无法区分过渡帧和free-check，判据误杀free-check让牌按钮
                 try {
                     val tLA = System.currentTimeMillis()
                     val larInstance = LocalActionRecognizer.getInstance(context)
@@ -1456,16 +1454,14 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                                 "presets=${lar.presets} btns=${buttons.size} conf=%.2f".format(lar.confidence))
                     } else if (lar != null) {
                         actionDiag += ";LOW_CONF(%.2f<%s)".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD)
-                        // V2.9.566: 过渡帧判定——facingBet=false且mr=null（按钮区全空）但预设面板已识别出金额。
-                        //   这是新街发牌/等前序对手时按钮尚未渲染的时间窗（v565三帧铁证presets=600/450/300），
-                        //   VLM整图同样返回0按钮，跳过VLM省2.7~22.9s卡顿；下帧4s后按钮渲染本地CV即可。
-                        if (!lar.facingBet && lar.minRaise == null && lar.presets.isNotEmpty()) {
-                            transitionFrameNoButtons = true
-                            actionDiag += ";TRANSITION_SKIP_VLM"
-                            Log.i(TAG, "🔍 新街过渡帧(按钮未渲染,预设${lar.presets.size}个)→跳过VLM操作区调用，等下帧")
-                        } else {
-                            Log.w(TAG, "🔍 本地CV操作区置信度不足(conf=%.2f<%.2f)，VLM兜底".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD))
-                        }
+                        // V2.9.567 FIX(P0): 移除v566过渡帧判据——本地CV无法区分过渡帧和free-check局面
+                        //   （两者特征完全相同：fb=0无跟注按钮/mr=None无加注额/presets非空底池百分比），
+                        //   v566判据(!fb && mr==null && presets非空)完美匹配free-check→误跳过VLM→让牌按钮永远找不到。
+                        //   v566日志铁证：13:17:34-13:17:54连续5帧free-check跳VLM(buttons=[])，
+                        //   而13:17:26同一手VLM正确返回['弃牌','让牌','加注 400']。
+                        //   过渡帧让VLM兜底（返回空按钮=等下帧），free-check让VLM识别（返回让牌按钮）→两者都正确。
+                        //   性能代价：少数过渡帧多一次VLM调用(2~23s)，但free-check局面更常见且影响更大。
+                        Log.w(TAG, "🔍 本地CV操作区置信度不足(conf=%.2f<%.2f)，VLM兜底".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD))
                     } else {
                         actionDiag += ";NULL_RESULT"
                     }
@@ -1551,7 +1547,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         val boardJob = if (boardBase64 != null && needBoardApi) {
                             async(Dispatchers.IO) { recognizeBoardArea(boardBase64, needHandApiFinal, newCommIndices.size, needPotApi) }
                         } else null
-                        val actionJob = if (actionBase64 != null && localAction == null && !transitionFrameNoButtons) {
+                        val actionJob = if (actionBase64 != null && localAction == null) {
                             async(Dispatchers.IO) { recognizeActionArea(actionBase64) }
                         } else null
 

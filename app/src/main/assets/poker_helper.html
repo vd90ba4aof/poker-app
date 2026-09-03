@@ -1332,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.566',
+  CURRENT_VERSION:'2.9.567',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2750,7 +2750,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.566';
+var APP_VERSION='2.9.567';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -11331,6 +11331,11 @@ function onVisionResult(data){
       }
     } else {
       G.phase='post';
+      // V2.9.567 FIX(P0): 翻牌/转牌/河牌街变化时清零G.bet——v566双保险仅在preflop块内（L11288），
+      //   街变化时G.bet保留上一手残留→571行后detectSceneFromButtons读到旧值→scene=bet（误判面对下注），
+      //   而L11906的F1-a清零在detectScene之后→scene=bet已定+bet=0矛盾→策略引擎决策全乱
+      //   （v566日志13:20:10铁证：bet_before=4/scene=bet/bet_after=0→go()收到scene=bet+bet=0→建议raise_big）
+      G.bet=0;
     }
     var detectedScene=detectSceneFromButtons(data.buttons||[],street,activeP);
     G.scene=detectedScene;
