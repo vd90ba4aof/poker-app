@@ -1328,7 +1328,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.562',
+  CURRENT_VERSION:'2.9.563',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2423,7 +2423,7 @@ function _isStreetChange(d){if(!d||!d.street)return false;var n=0;if(d.community
 
 // ===== V2.9.153: Layer1 PostValidation =====
 var PostValidation={
-  dedupCards:function(h,c){var s={};var r=[];for(var i=0;i<h.length;i++){if(!h[i])continue;var k=h[i].rank+(h[i].suit||'');if(s[k]){r.push('重复:'+k);h[i]=null;}else s[k]=true;}for(var j=0;j<c.length;j++){if(!c[j])continue;var k2=c[j].rank+(c[j].suit||'');if(s[k2]){r.push('重复:'+k2);c[j]=null;}else s[k2]=true;}if(r.length>0)console.log('[PV去重]'+r.join(';'));return r;},
+  dedupCards:function(h,c){var s={};var r=[];for(var i=0;i<h.length;i++){if(!h[i])continue;var k=h[i].rank+(h[i].suit||'');if(s[k]){r.push('重复:'+k);h[i]=null;}else s[k]=true;}for(var j=0;j<c.length;j++){if(!c[j])continue;var k2=c[j].rank+(c[j].suit||'');if(s[k2]){r.push('重复:'+k2);c[j]=null;}else s[k2]=true;}while(h.indexOf(null)!==-1)h.splice(h.indexOf(null),1);while(c.indexOf(null)!==-1)c.splice(c.indexOf(null),1);if(r.length>0)console.log('[PV去重]'+r.join(';'));return r;},
   validateSuits:function(h,c){var sc={s:0,h:0,d:0,c:0};var r=[];var a=h.concat(c);for(var i=0;i<a.length;i++){if(!a[i]||!a[i].suit)continue;sc[a[i].suit]=(sc[a[i].suit]||0)+1;}for(var s in sc){if(sc[s]>4){r.push(s+'='+sc[s]+'>4');var n=0;for(var j=a.length-1;j>=0;j--){if(a[j]&&a[j].suit===s){n++;if(n>4){a[j].suit='';break;}}}}}if(r.length>0)console.log('[PV花色]'+r.join(';'));return r;},
   validatePotChips:function(p,s,t,b,cc){var r=[];var n=cc?cc.filter(function(x){return x!==null;}).length:0;if(p>0&&p<1.5&&b>0)r.push('pot<1.5BB');if(t>0&&p>0&&t>p*2)r.push('to_call>2xpot');if(p===0&&n>=3)r.push('翻后pot=0');return r;},
   applyHudData:function(hud){if(!hud||!hud.length)return;for(var i=0;i<hud.length;i++){var h=hud[i];if(!h.seat||(!h.vpip&&!h.pfr))continue;if(!G._hudData)G._hudData={};G._hudData[h.seat]={vpip:h.vpip||0,pfr:h.pfr||0,ats:h.ats||0,threeBet:h.threeBet||0,_ts:Date.now()};var t='unknown',v=h.vpip||0;if(v<=22)t='nit';else if(v<=30)t='tag';else if(v<=40)t='lag';else t='fish';if(typeof OppProfiler!=='undefined'){var p=seatToPosStr(h.seat);for(var nk in OppProfiler._profiles){if(OppProfiler._profiles[nk].pos===p&&v>0){OppProfiler._profiles[nk]._hudVpip=v;OppProfiler._profiles[nk]._hudPfr=h.pfr||0;if(OppProfiler._profiles[nk].hands<50)OppProfiler._profiles[nk].type=t;break;}}}console.log('[SmartHUD]s'+h.seat+' v='+v+'→'+t);}},
@@ -2746,7 +2746,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.562';
+var APP_VERSION='2.9.563';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -12767,4 +12767,4 @@ function autoExecuteDecision(r, isAutoMode) {
   console.log('[' + APP_VERSION + '] AutoConfidence + OpponentTracker + BoardTexture 已加载');
 })();</script>
 </body>
-</h
+</html>
