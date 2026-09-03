@@ -988,7 +988,11 @@ var HandHistory={
       comm:G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}),
       pos:G.pos,tt:G.tt,phase:G.phase,scene:G.scene,
       stk:G.stk,pot:G.pot,bet:G.bet,
-      action:result.a,reason:result.r,
+      action:result.a,
+      // V2.9.566 FIX: execAction=实际执行动作（低置信强制fold时action仍是策略原始call），
+      // v565前handHistory记call但实际执行fold，复盘数据失真
+      execAction:result.a,
+      reason:result.r,
       eq:result.eq,hClass:result.hClass?result.hClass.name:'?',
       opp:G.opp,
       rawPot:window._lastVisionPot||0,
@@ -1328,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.565',
+  CURRENT_VERSION:'2.9.566',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2746,7 +2750,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.565';
+var APP_VERSION='2.9.566';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -10280,7 +10284,19 @@ function bridgeAdvice(r){
     //   若先showAdvice则autoDecision的R7守卫因FSM=IDLE而拦截所有auto-tap
     var _autoExecResult='skip';
     var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;
-    if(typeof AndroidBridge!=='undefined'){try{var _execRet=false;if(typeof autoExecuteDecision==="function"&&_am){_execRet=autoExecuteDecision(r,_am);_autoExecResult=_execRet?'executed':'manual';console.log('[V2.9.553-rev9] autoExec:_am='+_am+' ret='+_execRet+' _autoExecEnabled='+_autoExecEnabled);}if(AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+bridgeData.substring(0,80));AndroidBridge.showAdvice(bridgeData);}}catch(_ae){console.log("[autoExec] err:"+_ae.message);_autoExecResult='error';if(AndroidBridge.showAdvice){AndroidBridge.showAdvice(bridgeData);}}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
+    // V2.9.566 FIX: 悬浮窗显示与实际执行一致——低置信强制fold/空按钮等待时覆盖策略原始建议
+    //   （v565铁证：实际执行fold但showAdvice显示"💡按【跟注】COLOR:CALL"，误导且状态错乱）
+    var _dispData=bridgeData;
+    if(typeof AndroidBridge!=='undefined'){try{var _execRet=false;if(typeof autoExecuteDecision==="function"&&_am){_execRet=autoExecuteDecision(r,_am);_autoExecResult=_execRet?'executed':'manual';console.log('[V2.9.553-rev9] autoExec:_am='+_am+' ret='+_execRet+' _autoExecEnabled='+_autoExecEnabled);}
+      // autoExecuteDecision后根据本帧实际执行结果覆盖显示文案
+      if(G._frameAutoLabel==='lowfold'){
+        _dispData='🛑 低置信→强制弃牌|COLOR:FOLD|SIGNAL:LOW_CONF'+(_eqPct!==''?'|EQ:'+_eqPct:'');
+        // V2.9.566: handHistory最新记录补真实执行动作（HandHistory.add在go()回调中先于本函数，故在此回写）
+        try{ if(HandHistory.records&&HandHistory.records[0]){ HandHistory.records[0].execAction='fold'; try{localStorage.setItem(HandHistory.STORAGE_KEY,JSON.stringify(HandHistory.records));}catch(_){} } }catch(_hhErr){}
+      }else if(G._frameAutoLabel==='wait'){
+        _dispData='⏳ 未识别到行动按钮·等待渲染|COLOR:CHECK|SIGNAL:NONE';
+      }
+      if(AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+_dispData.substring(0,80));AndroidBridge.showAdvice(_dispData);}}catch(_ae){console.log("[autoExec] err:"+_ae.message);_autoExecResult='error';if(AndroidBridge.showAdvice){AndroidBridge.showAdvice(_dispData);}}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
     if(typeof AndroidBridge!=='undefined'&&AndroidBridge.updateNotification){AndroidBridge.updateNotification(fullAdv,reason);}
     // V2.9.503: 记录决策到Kotlin端诊断日志
     try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.logDecision){
@@ -10378,6 +10394,8 @@ function togAdv(){document.getElementById('adv').classList.toggle('show');}
 function clr(){
   document.body.classList.remove('speed-mode');
   G.hole=[null,null];G.comm=[null,null,null,null,null];G._heroDid4bet=false;G._slowplayed=false;
+  // V2.9.566: 与vision新手牌清零同步（跨手标记残留防护）
+  G._facing3bet=false;G._raiserRole='unknown';G._raiserStackType='unknown';G._numCallersBefore=0;G.oppSeats=[];
   G.scene=G.phase==='pre'?'open':'check';
   G.bet=0;G.pot=10;G.limpers=0;mxVisible=true;
   document.getElementById('mxWrap').classList.remove('collapsed');
@@ -11177,6 +11195,9 @@ function onVisionResult(data){
         ||b.indexOf('Check')>=0||b.indexOf('check')>=0||b.indexOf('Raise')>=0||b.indexOf('Bet')>=0
         ||b.indexOf('All-in')>=0||b.indexOf('all-in')>=0||b.indexOf('ALL IN')>=0;
   });
+  // V2.9.566: 每帧重置按钮计数/自动执行标记（帧新鲜信号，禁止跨帧残留）
+  G._frameBtnCount = (data && data.buttons) ? data.buttons.length : 0;
+  G._frameAutoLabel = '';
   var _noTableSignals = (_noHole?1:0)+(_noD?1:0)+(_noBtn?1:0);
   var _isNoTable = _modelNoTable || _noTableSignals>=2;
   if(_isNoTable){
@@ -11264,6 +11285,20 @@ function onVisionResult(data){
       if(typeof PotConfidence!=='undefined') PotConfidence.resetForNewHand();
       // V2.9.75: 新一手牌清空位置锁定
       G._lastHandKey='';G._lastPos='';
+      // V2.9.566 FIX(P0双保险): 新一手牌清零G.bet——防止上一手全下/下注额跨手残留
+      // （v565日志：上一手call=4682→23BB残留到下一手flop，致空按钮帧误判bet场景）
+      G.bet=0;
+      // V2.9.566 FIX(P1): 跨手策略标记清零——与G.bet同类的"条件赋值+跨手不清零"残留
+      //   _facing3bet/_raiserRole/_raiserStackType/_numCallersBefore 仅在opp_seats非空帧重置，
+      //   opp_seats识别失败帧(过渡/观战)残留上一手→翻前误判面对3bet/翻后加注者角色+squeeze错误；
+      //   _heroDid4bet/_slowplayed 决策中置true但vision链路无新手牌清零→误激活4bet反击/翻后check-raise；
+      //   oppSeats数组残留→定位到上一手加注者座位。
+      //   仅_isNewHand时清：同手opp_seats单帧失败保持旧值=V2.9.76"识别不准保持旧值"设计不变。
+      if(_isNewHand){
+        G._facing3bet=false; G._raiserRole='unknown'; G._raiserStackType='unknown'; G._numCallersBefore=0;
+        G._heroDid4bet=false; G._slowplayed=false; G.oppSeats=[];
+        console.log('[V2.9.566新手牌] 跨手策略标记已清零(3bet/raiser/4bet/slowplay/oppSeats)');
+      }
       // V2.9.79: 新一手牌→重置行动线
       var _newHandId=(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'');
       ActionLine.startHand(_newHandId);
@@ -11488,7 +11523,7 @@ function onVisionResult(data){
       _bbSource='preflop_pot_derived('+_rawPotCheck+'*2/3='+_derivedBB+')';
       // 确定性值，立即锁存
       G._lockedBB=bbValue;
-      console.log('[V2.9.564 BB真相] '+_bbSource+' → 已锁存G._lockedBB='+bbValue);
+      console.log('[V2.9.566 BB真相] '+_bbSource+' → 已锁存G._lockedBB='+bbValue);
     }
   }
 
@@ -11498,14 +11533,14 @@ function onVisionResult(data){
   if(bbValue===0 && G._lockedBB && G._lockedBB>0){
     bbValue=G._lockedBB;
     _bbSource='locked('+G._lockedBB+')';
-    console.log('[V2.9.564 BB真相] '+_bbSource);
+    console.log('[V2.9.566 BB真相] '+_bbSource);
   }
 
   // ★ 优先级④：都没有 → 默认200（统一兜底，消除||100和||200不一致）★
   if(bbValue===0){
     bbValue=200;
     _bbSource='default_200';
-    console.log('[V2.9.564 BB真相] '+_bbSource+' (无任何可靠来源)');
+    console.log('[V2.9.566 BB真相] '+_bbSource+' (无任何可靠来源)');
   }
   // [REV4_DIAG] bbValue计算完成后的快照
   console.log("[bbValue_DIAG] final_bbValue="+bbValue+" data.blind_bb="+data.blind_bb+" data.blind_sb="+data.blind_sb+" G._lockedBB="+(G._lockedBB||'undef')+" data.my_chips="+data.my_chips);
@@ -11865,7 +11900,10 @@ function onVisionResult(data){
     var _rawBet=parseInt(data.to_call)||0;
     if(_rawPot>0){ G.pot=Math.round(_rawPot/bbValue); }
     if(_rawChips>0){ G.stk=Math.round(_rawChips/bbValue); }
-    if(_rawBet>0){ G.bet=Math.round(_rawBet/bbValue); }
+    // V2.9.566 FIX(P0): to_call=0时必须显式清零G.bet——旧逻辑仅在_rawBet>0时赋值，
+    // 0值帧保留上一手残留（v565日志铁证：Qc3c全下4682chips=23BB残留到下一手8hQh，
+    // 空按钮帧经"按钮为空但G.bet>0→bet场景"误判面对下注，且toCall=23绕开Kotlin free-check保护致盲fold）
+    G.bet= _rawBet>0 ? Math.round(_rawBet/bbValue) : 0;
     console.log("[V2.9.527 数据链路修复] bbValue="+bbValue+"(_bbSource) pot: "+_rawPot+"chips→"+G.pot+"BB | stk: "+_rawChips+"chips→"+G.stk+"BB | bet: "+_rawBet+"chips→"+G.bet+"BB");
   } else {
     console.log("[V2.9.564 DIAG_SKIP] bbValue超出安全范围, 块被跳过! bbValue="+bbValue);
@@ -12727,11 +12765,21 @@ function onChipReset(){
 function autoExecuteDecision(r, isAutoMode) {
   if (!isAutoMode) return false; // V2.9.553-rev9: 移除_autoExecEnabled依赖(Kotlin侧isAutoCaptureOn已是权威源)
 
+  // V2.9.566 FIX: 本帧未识别到任何行动按钮（新街过渡/按钮未渲染，本地CV+VLM双失败）→不盲点击，等下帧
+  //   v565铁证：空按钮帧点击(195,2250)fold位，但按钮未渲染点空；若渲染则是free→左按钮实为check。
+  //   盲fold可能误弃强牌，盲check在真bet面反而是fold→安全方向不成立。不点击=等4s重抓，按钮渲染后再决策。
+  if (!G._frameBtnCount) {
+    console.log('[AutoExec] 本帧0按钮(过渡帧)→跳过自动点击，等下帧按钮渲染');
+    G._frameAutoLabel = 'wait';
+    return false;
+  }
+
   var exec = AutoConfidence.execute(r);
   console.log('[AutoExec] result=' + JSON.stringify(exec));
 
   if (exec.confidence === 'low') {
     // 低置信→强制弃牌
+    G._frameAutoLabel = 'lowfold'; // V2.9.566: 供showAdvice显示真实执行动作（v565前显示策略原始call建议与实际fold不符）
     console.log('[AutoExec] 低置信→强制弃牌: eq='+(r.eq||0)+' hClass='+(r.hClass?r.hClass.name:'?')+' pot='+G.pot+' stk='+G.stk+' bet='+G.bet);
     if (typeof AndroidBridge !== 'undefined' && AndroidBridge.autoDecision) {
       AndroidBridge.autoDecision(JSON.stringify({

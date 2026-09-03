@@ -1409,6 +1409,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var localAction: ActionAreaResult? = null
                 var localPresets: List<Int> = emptyList()
                 var actionDiag = "skipped"
+                // V2.9.566: 新街过渡帧标志——本帧操作区黄色按钮为0但下注预设面板已亮
+                //   v565铁证：此类帧本地+VLM(整图)双返回0按钮，VLM纯浪费2.7~22.9s；等下帧按钮渲染后本地CV即可
+                var transitionFrameNoButtons = false
                 try {
                     val tLA = System.currentTimeMillis()
                     val larInstance = LocalActionRecognizer.getInstance(context)
@@ -1453,7 +1456,16 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                                 "presets=${lar.presets} btns=${buttons.size} conf=%.2f".format(lar.confidence))
                     } else if (lar != null) {
                         actionDiag += ";LOW_CONF(%.2f<%s)".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD)
-                        Log.w(TAG, "🔍 本地CV操作区置信度不足(conf=%.2f<%.2f)，VLM兜底".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD))
+                        // V2.9.566: 过渡帧判定——facingBet=false且mr=null（按钮区全空）但预设面板已识别出金额。
+                        //   这是新街发牌/等前序对手时按钮尚未渲染的时间窗（v565三帧铁证presets=600/450/300），
+                        //   VLM整图同样返回0按钮，跳过VLM省2.7~22.9s卡顿；下帧4s后按钮渲染本地CV即可。
+                        if (!lar.facingBet && lar.minRaise == null && lar.presets.isNotEmpty()) {
+                            transitionFrameNoButtons = true
+                            actionDiag += ";TRANSITION_SKIP_VLM"
+                            Log.i(TAG, "🔍 新街过渡帧(按钮未渲染,预设${lar.presets.size}个)→跳过VLM操作区调用，等下帧")
+                        } else {
+                            Log.w(TAG, "🔍 本地CV操作区置信度不足(conf=%.2f<%.2f)，VLM兜底".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD))
+                        }
                     } else {
                         actionDiag += ";NULL_RESULT"
                     }
@@ -1539,7 +1551,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         val boardJob = if (boardBase64 != null && needBoardApi) {
                             async(Dispatchers.IO) { recognizeBoardArea(boardBase64, needHandApiFinal, newCommIndices.size, needPotApi) }
                         } else null
-                        val actionJob = if (actionBase64 != null && localAction == null) {
+                        val actionJob = if (actionBase64 != null && localAction == null && !transitionFrameNoButtons) {
                             async(Dispatchers.IO) { recognizeActionArea(actionBase64) }
                         } else null
 
