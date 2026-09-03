@@ -1328,7 +1328,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.563',
+  CURRENT_VERSION:'2.9.564',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2746,7 +2746,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.563';
+var APP_VERSION='2.9.564';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8627,7 +8627,7 @@ function _decideInner(){
         if(!_hasShortOpp){
           try{
             if(G.oppSeats && G.oppSeats.length > 0){
-              var _bbRef = window._lastVisionBB || G._lockedBB || 100;
+              var _bbRef = window._lastVisionBB || G._lockedBB || 200;
               for(var _psi=0; _psi < G.oppSeats.length; _psi++){
                 var _os = G.oppSeats[_psi];
                 if(_os.active !== false && _os.stack && _os.stack > 0){
@@ -11470,30 +11470,51 @@ function onVisionResult(data){
   }
   
   // 5. 更新筹码/底池/面对下注
-  // V2.9.43: 精确BB计算——GG非标准比例(SB:BB=1:2.5或0.4:1)
+  // V2.9.564 FIX: ★ 建立唯一BB真相源 ★
+  // 问题根因：VLM翻后返回垃圾blind_bb(如17100200)，_lastVisionBB每帧盲从，7个消费点全部被污染
+  // 修复策略：4级优先级，preflop底池反推(确定性数学)→VLM范围校验→锁存降级→默认值
   var bbValue=0;
-  if(data.blind_bb && parseInt(data.blind_bb)>0){
-    bbValue=parseInt(data.blind_bb);
-    console.log('[盲注识别] BB='+bbValue+' (来自API识别)');
-  } else if(data.blind_sb && parseInt(data.blind_sb)>0){
-    // V2.9.43: 只有SB没有BB时——GG非标准比例不能用简单*2
-    // GG常见非标准比例：SB:BB=1:2.5 或 SB:BB=0.4:1
-    var sbVal=parseInt(data.blind_sb);
-    // 保守策略：假设BB≈2.5*SB（GG最常见非标准比例），确保≥2*SB
-    bbValue=Math.round(sbVal*2.5);
-    bbValue=Math.max(bbValue, sbVal*2);
-    console.log('[盲注推断] BB='+bbValue+' (从SB推算，GG非标准比例)');
-  } else {
-    // V2.9.144 P1: 降级时优先用锁存BB，不再假设100BB买入
-    // 旧bug: chips/100假设100BB买入，50BB短码时BB=50→全算错
-    if(G._lockedBB && G._lockedBB>0){
-      bbValue=G._lockedBB;
-      console.log('[盲注降级] BB='+bbValue+' (用锁存值，非100BB假设)');
-    }else{
-      // 首次且Vision未识别→才用筹码推算(最后手段)
-      bbValue=Math.max(100,Math.round((parseInt(data.my_chips)||10000)/100));
-      console.log('[盲注降级] BB='+bbValue+' (从筹码推算，不精确，待锁存)');
+  var _bbSource='unknown';
+
+  // ★ 优先级①：preflop + to_call=0(无人加注/limp) + pot>0 → BB=pot×2/3 ★
+  // 数学原理：此时底池仅含SB+BB=0.5BB+BB=1.5BB，故BB=pot/1.5=pot×2/3
+  // 不依赖VLM任何盲注字段，是确定性数学关系（GG平台标准现金桌盲注比1:2）
+  var _rawPotCheck=parseInt(data.pot_size)||0;
+  var _rawCallCheck=parseInt(data.to_call)||0;
+  if(data.street==='preflop' && _rawCallCheck===0 && _rawPotCheck>0){
+    var _derivedBB=Math.round(_rawPotCheck*2/3);
+    if(_derivedBB>=1 && _derivedBB<=50000){
+      bbValue=_derivedBB;
+      _bbSource='preflop_pot_derived('+_rawPotCheck+'*2/3='+_derivedBB+')';
+      // 确定性值，立即锁存
+      G._lockedBB=bbValue;
+      console.log('[V2.9.564 BB真相] '+_bbSource+' → 已锁存G._lockedBB='+bbValue);
     }
+  }
+
+  // ★ 优先级②：VLM blind_bb通过范围校验 ★
+  if(bbValue===0){
+    var _vBB=data.blind_bb?parseInt(data.blind_bb):0;
+    if(_vBB>=1 && _vBB<=50000){
+      bbValue=_vBB;
+      _bbSource='vlm_blind_bb_valid('+_vBB+')';
+      G._lockedBB=bbValue;
+      console.log('[V2.9.564 BB真相] '+_bbSource+' → 已锁存G._lockedBB='+bbValue);
+    }
+  }
+
+  // ★ 优先级③：锁存值（之前的可靠BB）★
+  if(bbValue===0 && G._lockedBB && G._lockedBB>0){
+    bbValue=G._lockedBB;
+    _bbSource='locked('+G._lockedBB+')';
+    console.log('[V2.9.564 BB真相] '+_bbSource);
+  }
+
+  // ★ 优先级④：都没有 → 默认200（统一兜底，消除||100和||200不一致）★
+  if(bbValue===0){
+    bbValue=200;
+    _bbSource='default_200';
+    console.log('[V2.9.564 BB真相] '+_bbSource+' (无任何可靠来源)');
   }
   // [REV4_DIAG] bbValue计算完成后的快照
   console.log("[bbValue_DIAG] final_bbValue="+bbValue+" data.blind_bb="+data.blind_bb+" data.blind_sb="+data.blind_sb+" G._lockedBB="+(G._lockedBB||'undef')+" data.my_chips="+data.my_chips);
@@ -11510,8 +11531,10 @@ function onVisionResult(data){
   
   // V2.9.76: ★ Vision数据保险层 ★
   // 原则：手牌/公共牌以外的数据，识别不准就不更新，保持旧值，不让策略引擎乱
-  // V2.9.133 BUG D: 用锁定后的 bbValue 更新 _lastVisionBB (rawBB 来源)
+  // V2.9.564 FIX: bbValue已通过4级优先级验证(范围1~50000)，安全赋值
+  // 同时确保G._lockedBB被锁存（修复旧版从未赋值的死代码BUG）
   window._lastVisionBB=bbValue;
+  if(!G._lockedBB || G._lockedBB<=0){ G._lockedBB=bbValue; }
   // 新一手牌时重置底池连续性追踪
   if(G.phase==='pre'){G._lastPotBB=0;}
   // V2.9.144: 追踪进池人数——翻前从底池推断，翻后沿用
@@ -11845,16 +11868,18 @@ function onVisionResult(data){
   // [REV4_DIAG] 进入V2.9.527块前的状态快照
   console.log("[V2.9.527_DIAG_ENTER] pot_before="+G.pot+" stk_before="+G.stk+" bet_before="+G.bet+" bbValue="+bbValue+" data.pot_size="+data.pot_size+" data.my_chips="+data.my_chips+" data.to_call="+data.to_call+" data.blind_bb="+data.blind_bb+" data.blind_sb="+data.blind_sb+" G._lockedBB="+(G._lockedBB||'undef'));
   try {
-  if(bbValue>0){
+  // V2.9.564 FIX: 范围守卫——bbValue必须在1~50000之间（由4级优先级保证）
+  // 防御性编程：即使上游逻辑有变，此处也不让垃圾值进入策略引擎
+  if(bbValue>=1 && bbValue<=50000){
     var _rawPot=parseInt(data.pot_size)||0;
     var _rawChips=parseInt(data.my_chips)||0;
     var _rawBet=parseInt(data.to_call)||0;
     if(_rawPot>0){ G.pot=Math.round(_rawPot/bbValue); }
     if(_rawChips>0){ G.stk=Math.round(_rawChips/bbValue); }
     if(_rawBet>0){ G.bet=Math.round(_rawBet/bbValue); }
-    console.log("[V2.9.527 数据链路修复] bbValue="+bbValue+" pot: "+_rawPot+"chips→"+G.pot+"BB | stk: "+_rawChips+"chips→"+G.stk+"BB | bet: "+_rawBet+"chips→"+G.bet+"BB");
+    console.log("[V2.9.527 数据链路修复] bbValue="+bbValue+"(_bbSource) pot: "+_rawPot+"chips→"+G.pot+"BB | stk: "+_rawChips+"chips→"+G.stk+"BB | bet: "+_rawBet+"chips→"+G.bet+"BB");
   } else {
-    console.log("[V2.9.527_DIAG_SKIP] bbValue<=0, 块被跳过! bbValue="+bbValue);
+    console.log("[V2.9.564 DIAG_SKIP] bbValue超出安全范围, 块被跳过! bbValue="+bbValue);
   }
   } catch(_v29527err) {
     console.log("[V2.9.527_DIAG_EXCEPTION] "+_v29527err.message+" stack="+_v29527err.stack);
