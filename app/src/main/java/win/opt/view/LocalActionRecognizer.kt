@@ -98,7 +98,11 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         val callAmount: Int?,
         val minRaise: Int?,
         val presets: List<Int>,
-        val confidence: Float
+        val confidence: Float,
+        // V2.9.572 根因①: 按钮行黄色像素物理计数(屏幕真相)——内容信号(call/mr/presets)
+        // 会被非行动帧残影污染(presets=3:500,375,250假阳性), 物理计数不会
+        val btn2Yellow: Int = 0,
+        val btn3Yellow: Int = 0
     )
 
     @Volatile
@@ -924,7 +928,9 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                 callAmount = callAmount,
                 minRaise = minRaise,
                 presets = presets,
-                confidence = if (minConf >= 1.0f) 1.0f else minConf
+                confidence = if (minConf >= 1.0f) 1.0f else minConf,
+                btn2Yellow = yellowCount,
+                btn3Yellow = btn3Yellow
             )
             lastDiag = diagSb.toString()
             Log.d(TAG, "🔍 Action diag: $lastDiag")

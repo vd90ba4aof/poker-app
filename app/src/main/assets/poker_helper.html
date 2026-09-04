@@ -1332,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.571',
+  CURRENT_VERSION:'2.9.572',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2750,7 +2750,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.571';
+var APP_VERSION='2.9.572';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3141,7 +3141,10 @@ function decidePreflop(k){
 
   // V2.9.556 P1(深/短码接入): 直读码深 — 头像下数字÷盲注BB,不走底池反推
   var _blindBB=window._lastBlindBB||200;
-  var _myEffBB=_blindBB>0?Math.round(stk/_blindBB):0;
+  // V2.9.572 根因⑥修复: G.stk经v527归一化后已是BB单位, _blindBB(=bbValue)是chips单位,
+  // 旧公式 stk(BB)/_blindBB(chips)=无意义小值(Math.round(50/100)=1→误判1BB最紧Nash表);
+  // 直接用stk(BB)。对手侧 _oc(raw chips)/_blindBB(chips) 单位一致保持不变。
+  var _myEffBB=stk>0?Math.round(stk):0;
   // 对手码深感知: 取池内最浅对手码深, 池里有人短码按有效码深打
   var _oppEffBB=_myEffBB;
   try{var _os=G.opp_seats||[];for(var _oi=0;_oi<_os.length;_oi++){var _oc=parseInt(_os[_oi]&&_os[_oi].chips)||0;var _of=(_os[_oi]&&_os[_oi].active!==false&&_os[_oi].action!=='fold');if(_oc>0&&_of){var _ebb=Math.round(_oc/_blindBB);if(_ebb<_oppEffBB)_oppEffBB=_ebb;}}}catch(eOe){}
@@ -3439,7 +3442,7 @@ function decidePostflop(k){
   // ★ V3.34: River纹理表决策 (旧引擎v2.9.164, 有完整IP/OOP纹理表)
   if(street==='river' && typeof _riverDecision==='function'){
     try{
-      var _rivR=_riverDecision(k,hcKey,didPFR,scene,bet,pot,btKey,ip,null,_is3betPot,_isMultiway);
+      var _rivR=_riverDecision(k,hcKey,didPFR,scene,bet,pot,btKey,ip,null,_is3betPot,_isMultiway,eq);
       if(_rivR&&_rivR.a){return _rivR;}
     }catch(e){}
   }
@@ -3456,7 +3459,7 @@ function decidePostflop(k){
   // ★ V3.11: Flop/River面对下注 — 补全场景覆盖
   if(!didPFR && scene==='raise' && (street==='flop'||street==='river') && typeof _facingCBet==='function'){
     try{
-      var _fcbR=_facingCBet(k,hcKey,btKey,ip,bet,pot,street,false);
+      var _fcbR=_facingCBet(k,hcKey,btKey,ip,bet,pot,street,false,eq);
       if(_fcbR&&_fcbR.a){return _fcbR;}
     }catch(e){}
   }
@@ -3464,7 +3467,7 @@ function decidePostflop(k){
   // ★ V3.12: 面对Check-Raise (我们CBet后被反加)
   if(didPFR && scene==='reraise' && typeof _facingCR==='function'){
     try{
-      var _fcrR=_facingCR(k,hcKey,btKey,bet,pot);
+      var _fcrR=_facingCR(k,hcKey,btKey,bet,pot,eq);
       if(_fcrR&&_fcrR.a){return _fcrR;}
     }catch(e){}
   }
@@ -3481,7 +3484,7 @@ function decidePostflop(k){
   }catch(e){}
   if(!didPFR && scene==='raise' && typeof _donkDecision==='function' && _isDonk){
     try{
-      var _donkR=_donkDecision(k,hcKey,btKey,ip,pot,oppType,null,_is3betPot,_isMultiway,street);
+      var _donkR=_donkDecision(k,hcKey,btKey,ip,pot,oppType,null,_is3betPot,_isMultiway,street,eq);
       if(_donkR&&_donkR.a){return _donkR;}
     }catch(e){}
   }
@@ -3496,7 +3499,7 @@ function decidePostflop(k){
   // (旧引擎_donkDecision表的freq/sz数值本就是防守方领先下注频率/尺度,语义与probe一致,直接复用)
   if(street==='turn' && !didPFR && scene==='check' && typeof _donkDecision==='function'){
     try{
-      var _probeR=_donkDecision(k,hcKey,btKey,ip,pot,oppType,{cbet:1,fcb:1,bluff:1},_is3betPot,_isMultiway,'turn');
+      var _probeR=_donkDecision(k,hcKey,btKey,ip,pot,oppType,{cbet:1,fcb:1,bluff:1},_is3betPot,_isMultiway,'turn',eq);
       if(_probeR&&_probeR.a){_probeR.scene='Turn Probe';_probeR.r='GTO Turn probe '+(hcKey<=4?'价值':'诈唬')+'('+Math.round((_probeR._seFreq||0)*100)+'%)';return _probeR;}
     }catch(e){}
   }
@@ -3507,7 +3510,7 @@ function decidePostflop(k){
   if(street==='turn' && didPFR && typeof _turnBarrel==='function'){
     try{
       var _didFCB=ActionLine.didFlopCBet();
-      var _tbR=_turnBarrel(k,hcKey,btKey,'b',bet,pot,_didFCB,ip,oppType,{cbet:1,fcb:1,bluff:1},_is3betPot,_isMultiway);
+      var _tbR=_turnBarrel(k,hcKey,btKey,'b',bet,pot,_didFCB,ip,oppType,{cbet:1,fcb:1,bluff:1},_is3betPot,_isMultiway,eq);
       if(_tbR&&_tbR.a){return _tbR;}
     }catch(e){}
   }
@@ -3777,7 +3780,7 @@ var _TB_OOP={
     '6_w':{0:[0.3,0.49],1:[0.3,0.49],2:[0.27,0.38],3:[0.26,0.38],4:[0.24,0.38],5:[0.18,0.3],6:[0.15,0.3],7:[0.09,0.25],8:[0.25,0.38],9:[0.22,0.38],10:[0.18,0.38],11:[0.25,0.49],12:[0.11,0.38],13:[0.07,0.38],14:[0.04,0.38],15:[0.04,0.38]}
   };
 
-function _turnBarrel(k,hcKey,btKey,turnType,betSz,pot,didFlopCBet,ip,_oppType,_sprAdj2,_is3bP2,_isMW2){
+function _turnBarrel(k,hcKey,btKey,turnType,betSz,pot,didFlopCBet,ip,_oppType,_sprAdj2,_is3bP2,_isMW2,eq){
     var btFallback={6:'4',1:'0',3:'2'};
     var _tbTable=ip?_TB_IP:_TB_OOP;
     if(!_tbTable[btKey+'_'+turnType]){btKey=btFallback[btKey]||btKey;}
@@ -3793,10 +3796,10 @@ function _turnBarrel(k,hcKey,btKey,turnType,betSz,pot,didFlopCBet,ip,_oppType,_s
       bSz=Math.min(bSz,G.stk||100000);
       var _oppStatStr1i='';
       try{if(OppProfiler&&OppProfiler._profiles){var _oppNk1i=OppProfiler._getOppNk?OppProfiler._getOppNk():null;if(_oppNk1i){var _ftCB1i=OppProfiler.getFoldToTurnCBetPct(_oppNk1i);var _cbt1i=OppProfiler.getCbetTurnPct(_oppNk1i);if(_ftCB1i!==null||_cbt1i!==null)_oppStatStr1i=' H:'+(_ftCB1i!==null?_ftCB1i+'%ftcb':'')+(_cbt1i!==null?'/'+_cbt1i+'%cb':'');}}}catch(e){}
-      return{a:'raise',v:bSz,r:'GTO Turn barrel '+btKey+'/'+turnType+'/'+hcKey+'('+Math.round(e[0]*100)+'%)'+_oppStatStr1i,eq:0,c:e[0]>.7?'h':'m',sizing:bSz,scene:'Turn Barrel',_se:true,_seFreq:e[0]};
+      return{a:'raise',v:bSz,r:'GTO Turn barrel '+btKey+'/'+turnType+'/'+hcKey+'('+Math.round(e[0]*100)+'%)'+_oppStatStr1i,eq:eq||0,c:e[0]>.7?'h':'m',sizing:bSz,scene:'Turn Barrel',_se:true,_seFreq:e[0]};
     }
     // 不Barrel → check
-    return{a:'check',r:'GTO Turn giveup '+btKey+'/'+turnType+'/'+hcKey,eq:0,c:'m',scene:'Turn Check',spr:spr,_se:true};
+    return{a:'check',r:'GTO Turn giveup '+btKey+'/'+turnType+'/'+hcKey,eq:eq||0,c:'m',scene:'Turn Check',spr:spr,_se:true};
   }
 
 // ====== V3.34: _RIV表 (从v2.9.164合并) ======
@@ -3824,7 +3827,7 @@ var _RIV={
     }
   };
 
-function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,_is3bP3,_isMW3){
+function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,_is3bP3,_isMW3,eq){
     // V3.36: _sprAdj默认值改为局部变量(避免隐式全局污染)
     var _sprAdjLocal=(typeof _sprAdj!=='undefined'&&_sprAdj)?_sprAdj:{fcb:1,cbet:1,bluff:1};
     if(!_sprAdj3)_sprAdj3=_sprAdjLocal;
@@ -3838,9 +3841,19 @@ function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,
     // rev12修复POST-12: _RIV face兜底表无尺度维度——对手1/3pot小注(MDF=75%,只需20%权益)
     // 时hcKey7-10弱对/弱听一律fold会被小注诈唬直接剥削。小注(szRatio<0.4)且我们非纯空气(hc<=10):
     // fold/call类降级为call(raise类保留);枚举器主路径自带pot odds,此处仅兜底
+    // V2.9.572 P0(根因④): 旧逻辑无eq门槛——UNKNOWN牌(hcKey=6兜底)在小注面也被改call,
+    // 全量回归铁证7条eq=0河牌空气call。加pot odds硬门槛:真实eq低于跟注所需权益+5%余量时保持fold
     if(scene!=='check'&&e.a==='fold'){
       var _rivSzRatio=betSz/Math.max(pot,1);
-      if(_rivSzRatio<0.4&&hcKey<=10){e={a:'call',s:0};console.log('[SE] river小注防守: sz='+Math.round(_rivSzRatio*100)+'%pot hc='+hcKey+' fold->call');}
+      var _rivEqReq=Math.max(1,betSz)/Math.max(pot+betSz,1); // 跟注所需最小权益(break-even)
+      if(_rivSzRatio<0.4&&hcKey<=10){
+        var _rivCanCall=true;
+        if(eq!==undefined&&eq!==null&&eq>=0){
+          if(eq/100<_rivEqReq+0.05){_rivCanCall=false;}
+        }
+        if(_rivCanCall){e={a:'call',s:0};console.log('[SE] river小注防守: sz='+Math.round(_rivSzRatio*100)+'%pot hc='+hcKey+' eq='+(eq===undefined?'?':Math.round(eq))+'%/需'+Math.round(_rivEqReq*100)+'% fold->call');}
+        else{console.log('[SE] river小注防守拦截: sz='+Math.round(_rivSzRatio*100)+'%pot hc='+hcKey+' eq='+Math.round(eq)+'%<需'+Math.round(_rivEqReq*100)+'% 保持fold');}
+      }
     }
     // V2.9.161: River SPR/3bet/Multiway调整
         var _rivAdj=1;
@@ -3856,25 +3869,40 @@ function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,
           if(_is3betPot)_rivAdj*=0.7;
         }
         if(_rivAdj<0.3&&e.a==='bluff'){e={a:'check',s:0};} // 调整后诈唬概率太低→check
+    // V2.9.572 P0(根因④): bluff必须有频率门控——旧逻辑只要表说bluff就100%执行,
+    // 短码/3bet/多人池算出的_rivAdj诈唬频率(可低至0.09)是死系数,诈唬0%仍执行(0904_132105铁证)
+    var _rivIsBluff=e.a==='bluff';
+    if(_rivIsBluff){
+      var _rivBluffFreq=Math.max(0,Math.min(1,_rivAdj));
+      if(Math.random()>=_rivBluffFreq){e={a:'check',s:0};console.log('[SE] river诈唬未中频率门控: freq='+Math.round(_rivBluffFreq*100)+'%→check');}
+      else{console.log('[SE] river诈唬命中: freq='+Math.round(_rivBluffFreq*100)+'% hc='+hcKey);}
+    }
     var spr=calcSPR();
     if(e.a==='bet'||e.a==='bluff'){
       var rSz=Math.round(pot*e.s);
       rSz=Math.min(rSz,G.stk||100000);
-      return{a:'raise',v:rSz,r:'GTO River '+(e.a==='bluff'?'诈唬':'价值')+' '+hcKey+'('+Math.round(e.s*100)+'%pot)',eq:0,c:e.a==='bluff'?'l':'h',sizing:rSz,scene:'River '+(e.a==='bluff'?'诈唬':'价值'),spr:spr,_se:true};
+      return{a:'raise',v:rSz,r:'GTO River '+(e.a==='bluff'?'诈唬':'价值')+' '+hcKey+'('+Math.round(e.s*100)+'%pot)',eq:eq||0,c:e.a==='bluff'?'l':'h',sizing:rSz,scene:'River '+(e.a==='bluff'?'诈唬':'价值'),spr:spr,_se:true,_seFreq:_rivIsBluff?_rivBluffFreq:undefined};
     }
     if(e.a==='call'){
-      return{a:'call',r:'GTO River call '+hcKey,eq:0,c:'m',scene:'River Call',spr:spr,_se:true};
+      // V2.9.572 P0(根因④): call分支pot odds硬校验——真实eq不足且eq有效时转fold,
+      // 空气牌/0权益送钱call的最后一道闸(小注防守已先行处理小注面)
+      var _rivCallReq=Math.max(1,betSz)/Math.max(pot+betSz,1);
+      if(eq!==undefined&&eq!==null&&eq>=0&&eq/100<_rivCallReq-0.05){
+        console.log('[SE] river call pot odds拦截: eq='+Math.round(eq)+'%<需'+Math.round(_rivCallReq*100)+'% hc='+hcKey+' call→fold');
+        return _fold(eq||0,'River fold(odds) '+hcKey+' eq='+Math.round(eq)+'%<'+Math.round(_rivCallReq*100)+'%',spr);
+      }
+      return{a:'call',r:'GTO River call '+hcKey,eq:eq||0,c:'m',scene:'River Call',spr:spr,_se:true};
     }
     if(e.a==='raise'){
       var rrSz=Math.round(Math.max(betSz*2.5,pot*e.s));
       rrSz=Math.min(rrSz,G.stk||100000);
-      return{a:'raise',v:rrSz,r:'GTO River raise '+hcKey,eq:0,c:'h',sizing:rrSz,scene:'River Raise',spr:spr,_se:true};
+      return{a:'raise',v:rrSz,r:'GTO River raise '+hcKey,eq:eq||0,c:'h',sizing:rrSz,scene:'River Raise',spr:spr,_se:true};
     }
     if(e.a==='check'){
-      return{a:'check',r:'GTO River check '+hcKey,eq:0,c:'m',scene:'River Check',spr:spr,_se:true};
+      return{a:'check',r:'GTO River check '+hcKey,eq:eq||0,c:'m',scene:'River Check',spr:spr,_se:true};
     }
     if(e.a==='fold'){
-      return _fold(0,'River fold '+hcKey,spr);
+      return _fold(eq||0,'River fold '+hcKey,spr);
     }
     return null;
   }
@@ -4161,7 +4189,7 @@ function _applyPipeline(baseFreq,action,hcKey,oppType,street,context,sprAdj,is3b
     return f;
   }
 
-function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk){
+function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk,eq){
     var szRatio=betSz/Math.max(pot,1);
     // V2.9.161: 尺度三档 s/m/l (34-66%不再被当大注)
     var szKey=szRatio<=.33?'s':szRatio<=.66?'m':'l';
@@ -4216,12 +4244,18 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk){
     if(r<adjR){
       var rSz=Math.round(Math.max(betSz*2.5,pot*.66));
       rSz=Math.min(rSz,G.stk||100000);
-      return{a:'raise',v:rSz,r:'GTO 面CBet raise '+btKey+'/'+hcKey+'('+Math.round(adjR*100)+'%)',eq:0,c:'h',sizing:rSz,scene:isDonk?'面对Donk':'面对CBet',_se:true,_seFreq:adjR};
+      return{a:'raise',v:rSz,r:'GTO 面CBet raise '+btKey+'/'+hcKey+'('+Math.round(adjR*100)+'%)',eq:eq||0,c:'h',sizing:rSz,scene:isDonk?'面对Donk':'面对CBet',_se:true,_seFreq:adjR};
     }
     if(r<adjR+adjC){
-      return{a:'call',r:'GTO 面CBet call '+btKey+'/'+hcKey+'('+Math.round(adjC*100)+'%)',eq:0,c:'m',scene:isDonk?'面对Donk':'面对CBet',spr:spr,_se:true,_seFreq:adjC};
+      // V2.9.572 P0(根因④): 面CBet call前pot odds硬校验——真实eq显著低于跟注所需时转fold,空气牌送钱拦截
+      var _fcbCallReq=Math.max(1,betSz)/Math.max(pot+betSz,1);
+      if(eq!==undefined&&eq!==null&&eq>=0&&eq/100<_fcbCallReq-0.05){
+        console.log('[SE] 面CBet call pot odds拦截: eq='+Math.round(eq)+'%<需'+Math.round(_fcbCallReq*100)+'% '+street+' hc='+hcKey+' call→fold');
+        return _fold(eq||0,'面CBet fold(odds) '+btKey+'/'+hcKey+' eq='+Math.round(eq)+'%<'+Math.round(_fcbCallReq*100)+'%('+Math.round(adjF*100)+'%)',spr);
+      }
+      return{a:'call',r:'GTO 面CBet call '+btKey+'/'+hcKey+'('+Math.round(adjC*100)+'%)',eq:eq||0,c:'m',scene:isDonk?'面对Donk':'面对CBet',spr:spr,_se:true,_seFreq:adjC};
     }
-    return _fold(0,'面CBet fold '+btKey+'/'+hcKey+'('+Math.round(adjF*100)+'%)',spr);
+    return _fold(eq||0,'面CBet fold '+btKey+'/'+hcKey+'('+Math.round(adjF*100)+'%)',spr);
   }
 
 // ====== V3.12: FCR/DONK表 (从v2.9.164合并) ======
@@ -4244,7 +4278,7 @@ var _DONK={
     '3_oop':{0:[0.34,0.68],1:[0.28,0.59],2:[0.22,0.59],3:[0.2,0.45],4:[0.17,0.45],5:[0.11,0.36],6:[0.08,0.3],7:[0.03,0],8:[0.14,0.72],9:[0.11,0.72],10:[0.08,0.68],11:[0.17,0.68],12:[0.04,0.72],13:[0.02,0.72]}
   };
 
-function _facingCR(k,hcKey,btKey,betSz,pot){
+function _facingCR(k,hcKey,btKey,betSz,pot,eq){
     var btFallback={6:'4',1:'0',3:'2'};
     if(!_FCR[btKey]){btKey=btFallback[btKey]||btKey;}
     var table=_FCR[btKey];
@@ -4255,15 +4289,21 @@ function _facingCR(k,hcKey,btKey,betSz,pot){
     if(r<e.rr){
       var rrSz=Math.round(Math.max(betSz*2.5,pot*2));
       rrSz=Math.min(rrSz,G.stk||100000);
-      return{a:'raise',v:rrSz,r:'GTO 面CR reraise '+btKey+'/'+hcKey+'('+Math.round(e.rr*100)+'%)',eq:0,c:'h',sizing:rrSz,scene:'面对CR',_se:true,_seFreq:e.rr};
+      return{a:'raise',v:rrSz,r:'GTO 面CR reraise '+btKey+'/'+hcKey+'('+Math.round(e.rr*100)+'%)',eq:eq||0,c:'h',sizing:rrSz,scene:'面对CR',_se:true,_seFreq:e.rr};
     }
     if(r<e.rr+e.c){
-      return{a:'call',r:'GTO 面CR call '+btKey+'/'+hcKey+'('+Math.round(e.c*100)+'%)',eq:0,c:'m',scene:'面对CR',spr:spr,_se:true,_seFreq:e.c};
+      // V2.9.572 P0(根因④): 面CR call前pot odds硬校验
+      var _fcrCallReq=Math.max(1,betSz)/Math.max(pot+betSz,1);
+      if(eq!==undefined&&eq!==null&&eq>=0&&eq/100<_fcrCallReq-0.05){
+        console.log('[SE] 面CR call pot odds拦截: eq='+Math.round(eq)+'%<需'+Math.round(_fcrCallReq*100)+'% hc='+hcKey+' call→fold');
+        return _fold(eq||0,'面CR fold(odds) '+btKey+'/'+hcKey+' eq='+Math.round(eq)+'%<'+Math.round(_fcrCallReq*100)+'%('+Math.round(e.f*100)+'%)',spr);
+      }
+      return{a:'call',r:'GTO 面CR call '+btKey+'/'+hcKey+'('+Math.round(e.c*100)+'%)',eq:eq||0,c:'m',scene:'面对CR',spr:spr,_se:true,_seFreq:e.c};
     }
-    return _fold(0,'面CR fold '+btKey+'/'+hcKey+'('+Math.round(e.f*100)+'%)',spr);
+    return _fold(eq||0,'面CR fold '+btKey+'/'+hcKey+'('+Math.round(e.f*100)+'%)',spr);
   }
 
-function _donkDecision(k,hcKey,btKey,ip,pot,_oppType2,_sprAdj2,_is3bP2,_isMW2,_street2){
+function _donkDecision(k,hcKey,btKey,ip,pot,_oppType2,_sprAdj2,_is3bP2,_isMW2,_street2,eq){
     var dkTable=ip?_DONK[btKey+'_ip']:_DONK[btKey+'_oop'];
     if(!dkTable){dkTable=_DONK['0_'+(ip?'ip':'oop')];}
     if(!dkTable||!dkTable[hcKey])return null;
@@ -4278,7 +4318,7 @@ function _donkDecision(k,hcKey,btKey,ip,pot,_oppType2,_sprAdj2,_is3bP2,_isMW2,_s
 freq=_applyPipeline(freq,'bet',hcKey,_oppType2||'unknown',_street2||'flop','donk',_sprAdj2||{cbet:1,fcb:1,bluff:1},_is3bP2||false,_isMW2||false);    if(Math.random()>freq)return null;
     var donkSz=Math.round(pot*sz);
     donkSz=Math.min(donkSz,G.stk||100000);
-    return{a:'raise',v:donkSz,r:'SE160 Donk '+hcKey+'('+Math.round(freq*100)+'%)',eq:0,c:hcKey<=4?'h':'l',sizing:donkSz,scene:'Donk',_se:true};
+    return{a:'raise',v:donkSz,r:'SE160 Donk '+hcKey+'('+Math.round(freq*100)+'%)',eq:eq||0,c:hcKey<=4?'h':'l',sizing:donkSz,scene:'Donk',_se:true};
   }
 
 
@@ -7038,6 +7078,11 @@ function handClassify(hole,comm){
   comm.filter(function(c){return c;}).forEach(function(c){_boardSuits[c.suit]=(_boardSuits[c.suit]||0)+1;});
   var _boardHas4Flush=false;
   for(var _bs in _boardSuits){if(_boardSuits[_bs]>=4)_boardHas4Flush=true;}
+  // V2.9.572 根因⑤: 三花面(公共牌>=3张同花)——set不再是NUTS:
+  //   翻牌3花面: 转/河任一来该花=同花beat set; 转牌3花面: 河牌来花即beat。
+  //   003745双证: 三条Q在QJQ三花面判NUTS(多人池n=4 eq实折30.7%)→过度加注白输。
+  var _boardHas3Flush=false;
+  for(var _bs3 in _boardSuits){if(_boardSuits[_bs3]>=3)_boardHas3Flush=true;}
   var _boardRanks={};
   comm.filter(function(c){return c;}).forEach(function(c){_boardRanks[c.rank]=(_boardRanks[c.rank]||0)+1;});
   var _boardHasPair=false;
@@ -7079,7 +7124,10 @@ function handClassify(hole,comm){
     else{madeType='NUTS';}
   }else if(madeHand2==='set'){
     // set+板面4同花(可能被同花beat)→STRONG
-    if(_boardHas4Flush){madeType='STRONG';}
+    // V2.9.572 根因⑤: 板面3同花(三花听牌面,翻/转)→再来一花即beat set→STRONG不再NUTS;
+    //   河牌cc===5且仅3花(听牌破产)保持NUTS。葫芦/四条/同花顺不受影响(前面已判NUTS)。
+    var _setWetFlush=_boardHas4Flush||(_boardHas3Flush&&cc<5);
+    if(_setWetFlush){madeType='STRONG';console.log('[V2.9.572牌力] set三花面降级NUTS→STRONG cc='+cc);}
     else{madeType='NUTS';}
   }else if(madeHand2==='twoPair'){
     // V2.9.142: 区分手牌参与的两对 vs 板面双对子面的弱两对
@@ -11436,8 +11484,15 @@ function onVisionResult(data){
     var seatMap={'bottom-center':0,'right-bottom':1,'right-top':2,'top-center':3,'left-top':4,'left-bottom':5};
     var dSeat=seatMap[dPos];
     if(dSeat!==undefined){
-      // CW距离：从D按钮顺时针数几格到我们(seat 0)
-      var dist=(6-dSeat)%6;
+      // V2.9.572 P0(根因③): 距离方向修正——旧公式(6-dSeat)%6是逆时针,与SeatRole(L4720起)
+      // 顺时针发牌模型(BU→SB→BB→UTG...)自相矛盾。全量回归铁证:57个翻前让牌帧(hero=BB)全算错,
+      // D=right-top时旧得mp/co,真值应为bb。统一到SeatRole同款CW模型:
+      // CW=['top-center','right-top','right-bottom','bottom-center','left-bottom','left-top'],
+      // hero固定bottom-center(CW idx=3),顺时针距离=(heroCwIdx-dCwIdx+6)%6
+      var _cwSeats=['top-center','right-top','right-bottom','bottom-center','left-bottom','left-top'];
+      var _dCwIdx=_cwSeats.indexOf(dPos);
+      var _heroCwIdx=_cwSeats.indexOf('bottom-center'); // =3
+      var dist=(_heroCwIdx-_dCwIdx+6)%6;
       var positions;
       if(G.tt<=2){positions=['btn','bb'];dist=dist===0?0:1;}
       else if(G.tt===3){positions=['btn','sb','bb'];}
@@ -11561,25 +11616,98 @@ function onVisionResult(data){
   var _preHasCall=_btnArrForBB.some(function(b){return b.indexOf('跟注')>=0||b.indexOf('call')>=0||b.indexOf('Call')>=0;});
   var _preActionFrame=_btnArrForBB.length>0;  // 有按钮=行动窗口帧（屏幕真相）
 
-  // ★ 优先级①：preflop + 免费看牌帧(有让牌无跟注) + pot>0 → BB=pot×2/3 ★
-  // 数学原理：此时底池仅含SB+BB=0.5BB+BB=1.5BB，故BB=pot/1.5=pot×2/3
-  // 不依赖VLM任何盲注字段，是确定性数学关系（GG平台标准现金桌盲注比1:2）
+  // V2.9.572 P0(根因③): 翻前位置硬规则反校——扑克铁规则:翻前无人加注时只有大盲(BB)能"让牌"免费看牌,
+  // 非BB位(SB/UTG/...)面对的是"跟注X"而非"让牌"。D按钮VLM误判致位置公式错时,屏幕按钮真相反校。
+  // 全量回归铁证:57个让牌帧旧公式位置全错(如D=right-top给mp/co,真值bb)。仅翻前生效,翻后check人人可点不反校。
+  try{
+    if(data.street==='preflop' && _preActionFrame && _preHasCheck && !_preHasCall){
+      if(G.pos!=='bb'){
+        console.log('[V2.9.572位置反校] 翻前免费看牌帧(让牌无跟注) hero必为BB: 位置'+G.pos+'→bb (D='+data.d_button_position+')');
+        G.pos='bb';
+        G._lastPos='bb';
+      }
+    }
+  }catch(_posFixErr){console.log('[V2.9.572位置反校] 异常: '+_posFixErr.message);}
+
+  // ★ V2.9.572 P0(根因②): BB多源交叉真相源——替代v571单一pot×2/3假设 ★
+  // v571铁证:pot×2/3假设"底池=SB+BB=1.5BB"仅单挑无人limp成立;实战免费看牌帧多为多人limp池
+  // (50/100桌pot=500=5BB×333被锁,真实BB=100;全量回归4个有锁存日志全部锁错400/533/333)。
+  // 多源交叉,矛盾时保守(降级锁存/默认),绝不单源锁存:
+  //   源A(最硬): VLM blinds字符串严格正则 ^小盲/大盲$ 且 大盲=2×小盲(标准现金桌),垃圾值天然被正则排除
+  //   源B(次硬): 翻前"跟注N"按钮额——非盲注位面对limp/无人加注时跟注额恰=BB,且须与源A/锁存一致才采信
+  //   源C(弱):   pot×2/3——仅在免费看牌帧 且 pot∈[1.3,1.7]BB(单挑无limp数学区间)与源A/B一致时成立
   var _rawPotCheck=parseInt(data.pot_size)||0;
   var _rawCallCheck=parseInt(data.to_call)||0;
+  var _bbCandidates=[];  // {v,src,hard} 硬源(源A)可直接锁存,软源需交叉
+  // 源A: blinds正则(兼容compact "50/100"与字段blind_bb/blind_sb)
+  try{
+    var _blindsStr=String(data.blinds||'');
+    var _bm=_blindsStr.match(/^\s*(\d+)\s*\/\s*(\d+)\s*$/);
+    var _aBB=0,_aSB=0;
+    if(_bm){_aSB=parseInt(_bm[1]);_aBB=parseInt(_bm[2]);}
+    else{
+      var _fBB=parseInt(data.blind_bb)||0,_fSB=parseInt(data.blind_sb)||0;
+      // 字段路径同样要求比值1:2且都是合理整数(垃圾17100200/7天然过不了比值校验)
+      if(_fBB>=20&&_fBB<=10000&&_fSB>0&&Math.abs(_fBB-2*_fSB)<=Math.max(2,_fBB*0.05)){_aBB=_fBB;_aSB=_fSB;}
+    }
+    if(_aBB>=20&&_aBB<=10000&&_aSB>0&&Math.abs(_aBB-2*_aSB)<=Math.max(2,_aBB*0.05)){
+      _bbCandidates.push({v:_aBB,src:'blinds('+_aSB+'/'+_aBB+')',hard:true});
+    }else if(_blindsStr||(parseInt(data.blind_bb)||0)>0){
+      console.log('[V2.9.572 BB真相] blinds源拒绝: blinds="'+_blindsStr+'" blind_bb='+data.blind_bb+' blind_sb='+data.blind_sb+' (非标准X/2X格式)');
+    }
+  }catch(_bAErr){}
+  // 源B: 翻前"跟注N"按钮额(非盲注位面对limp/无人加注时N=BB;盲注位/面对加注时N≠BB,用场景排除)
+  try{
+    if(data.street==='preflop' && _preActionFrame && _preHasCall && _rawCallCheck>0){
+      var _isBbPos=(G.pos==='bb');
+      var _isSbPos=(G.pos==='sb');
+      // BB位面对加注跟注额≠BB(是加注额-1);SB位面对limp跟0.5BB;都排除。
+      // btn/co/mp/utg位且前面无人加注(无3bet信号):跟注额=1BB
+      if(!_isBbPos && !_isSbPos && _rawCallCheck>=20 && _rawCallCheck<=10000 && !G._facing3bet){
+        _bbCandidates.push({v:_rawCallCheck,src:'跟注按钮额('+_rawCallCheck+')',hard:false});
+      }
+    }
+  }catch(_bBErr){}
+  // 源C: pot×2/3——仅免费看牌行动帧,且要求pot在单挑区间(1.3~1.7BB反推)与硬源一致才采信
   if(data.street==='preflop' && _rawCallCheck===0 && _rawPotCheck>0 && _preActionFrame && _preHasCheck && !_preHasCall){
     var _derivedBB=Math.round(_rawPotCheck*2/3);
     if(_derivedBB>=20 && _derivedBB<=10000){
-      bbValue=_derivedBB;
-      _bbSource='preflop_pot_derived('+_rawPotCheck+'*2/3='+_derivedBB+',免费看牌帧)';
-      // 确定性值，立即锁存
-      G._lockedBB=bbValue;
-      console.log('[V2.9.571 BB真相] '+_bbSource+' → 已锁存G._lockedBB='+bbValue);
+      _bbCandidates.push({v:_derivedBB,src:'pot×2/3('+_rawPotCheck+'→'+_derivedBB+',免费看牌帧)',hard:false});
     }
   }else if(data.street==='preflop' && _rawCallCheck===0 && _rawPotCheck>0 && !_preActionFrame){
-    console.log('[V2.9.571 BB真相] 无按钮帧(非行动窗口) pot='+_rawPotCheck+' → 不做pot×2/3锁存，防止垃圾BB污染');
+    console.log('[V2.9.572 BB真相] 无按钮帧(非行动窗口) pot='+_rawPotCheck+' → 不参与BB推断，防止垃圾BB污染');
   }
-
-  // ★ V2.9.565: 优先级②已移除——VLM blind_bb不可信（v564日志证实单次误读20覆盖正确值100→stk=221BB）★
+  // 多源交叉裁决
+  var _hardSrcs=_bbCandidates.filter(function(c){return c.hard;});
+  function _bbConsistent(v1,v2){return Math.abs(v1-v2)<=Math.max(5,v1*0.1);} // ±10%或±5视为一致
+  var _bbDefaultUsed=false; // 优先级④默认兜底标记(默认值不落锁存,防硬源首手被误拦死锁)
+  if(_hardSrcs.length>0){
+    // 硬源(blinds正则+1:2比值)为准;软源仅作交叉验证记录,矛盾时硬源优先
+    bbValue=_hardSrcs[0].v;
+    var _softConflict=_bbCandidates.filter(function(c){return !c.hard&&!_bbConsistent(c.v,bbValue);});
+    _bbSource=_hardSrcs[0].src;
+    if(_softConflict.length>0){
+      console.log('[V2.9.572 BB真相] 软源矛盾(疑limp池/加注帧): 硬源'+bbValue+' vs '+_softConflict.map(function(c){return c.src+'='+c.v;}).join(',')+' → 采信硬源');
+    }else if(_bbCandidates.length>1){
+      console.log('[V2.9.572 BB真相] 多源一致✓ '+_bbCandidates.map(function(c){return c.src+'='+c.v;}).join(' | ')+' → '+bbValue);
+    }else{
+      console.log('[V2.9.572 BB真相] 硬源采信: '+_bbSource+' → '+bbValue);
+    }
+    // 锁存保护:真实锁存(非默认兜底)与新硬源矛盾>10%时不覆盖(防单帧误读);默认兜底不拦截硬源
+    if(G._lockedBB && G._lockedBB>0 && !G._bbLockedDefault && !_bbConsistent(G._lockedBB,bbValue)){
+      console.log('[V2.9.572 BB真相] 与真实锁存矛盾: 新值'+bbValue+' vs 锁存'+G._lockedBB+' → 不覆盖(防单帧误读),沿用锁存');
+      bbValue=G._lockedBB;_bbSource='locked_keep('+G._lockedBB+',新值'+_hardSrcs[0].v+'矛盾)';
+    }else{
+      G._lockedBB=bbValue;G._bbLockedDefault=false;
+    }
+  }else{
+    // 无硬源:软源(pot×2/3/跟注额)一律不锁存、不当帧采信——同帧软源互斥(跟注/让牌按钮不同帧),
+    // 单软源pot×2/3正是v571锁错路径(多人limp池pot≠1.5BB)。保守沿用锁存/默认,仅记录候选供排查
+    if(_bbCandidates.length>0){
+      console.log('[V2.9.572 BB真相] 无硬源(blinds不可用),软源仅记录不采信: '+_bbCandidates.map(function(c){return c.src+'='+c.v;}).join(' | ')+' → 沿用锁存/默认');
+    }
+  }
+  // 无任何候选源 → 落到下方优先级③锁存/④默认
 
   // ★ 优先级③：锁存值（之前的可靠BB）★
   if(bbValue===0 && G._lockedBB && G._lockedBB>0){
@@ -11589,10 +11717,13 @@ function onVisionResult(data){
   }
 
   // ★ 优先级④：都没有 → 默认200（统一兜底，消除||100和||200不一致）★
+  // V2.9.572 P0(根因②): 默认值仅当帧兜底,绝不落锁存——旧逻辑默认200写入_lockedBB后,
+  // 首手硬源(blinds=100)反被"锁存矛盾保护"拦成死锁。默认值标记_bbLockedDefault,不拦截后续硬源
   if(bbValue===0){
     bbValue=200;
     _bbSource='default_200';
-    console.log('[V2.9.566 BB真相] '+_bbSource+' (无任何可靠来源)');
+    if(!G._lockedBB || G._lockedBB<=0){ G._bbLockedDefault=true; }
+    console.log('[V2.9.572 BB真相] '+_bbSource+' (无任何可靠来源,仅当帧兜底不落锁存)');
   }
   // [REV4_DIAG] bbValue计算完成后的快照
   console.log("[bbValue_DIAG] final_bbValue="+bbValue+" data.blind_bb="+data.blind_bb+" data.blind_sb="+data.blind_sb+" G._lockedBB="+(G._lockedBB||'undef')+" data.my_chips="+data.my_chips);
@@ -11610,9 +11741,10 @@ function onVisionResult(data){
   // V2.9.76: ★ Vision数据保险层 ★
   // 原则：手牌/公共牌以外的数据，识别不准就不更新，保持旧值，不让策略引擎乱
   // V2.9.564 FIX: bbValue已通过4级优先级验证(范围1~50000)，安全赋值
-  // 同时确保G._lockedBB被锁存（修复旧版从未赋值的死代码BUG）
+  // V2.9.572 P0(根因②): 锁存只由硬源(blinds正则)建立;默认兜底200不写锁存(标记_bbLockedDefault),
+  //   否则首手默认200落锁后会拦截真实硬源100→BB死锁。锁存保护已在BB真相块内完成
   window._lastVisionBB=bbValue;
-  if(!G._lockedBB || G._lockedBB<=0){ G._lockedBB=bbValue; }
+  if((!G._lockedBB || G._lockedBB<=0) && !G._bbLockedDefault){ G._lockedBB=bbValue; }
   // 新一手牌时重置底池连续性追踪
   if(G.phase==='pre'){G._lastPotBB=0;}
   // V2.9.144: 追踪进池人数——翻前从底池推断，翻后沿用
@@ -12528,8 +12660,8 @@ var NashPushFold={
     if(effectiveBB<=0){
       // V2.9.556: 直读兜底(不再用stk/pot反推,避免小数桌码深算错)
       var _gStk=(typeof G!=='undefined'&&G.stk)?G.stk:100000;
-      var _gBB=(typeof window!=='undefined'&&window._lastBlindBB>0)?window._lastBlindBB:200;
-      effectiveBB=Math.round(_gStk/_gBB);
+      // V2.9.572 根因⑥修复: G.stk已是BB单位, 直接使用; 旧公式除_lastBlindBB(chips)单位不匹配
+      effectiveBB=Math.round(_gStk);
     }
     if(effectiveBB>15||effectiveBB<=0)return false;
     return true;

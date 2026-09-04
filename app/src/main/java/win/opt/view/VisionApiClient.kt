@@ -1417,8 +1417,11 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var localAction: ActionAreaResult? = null
                 var localPresets: List<Int> = emptyList()
                 var actionDiag = "skipped"
-                // V2.9.571: 本地CV确认"非行动帧"（无跟注额/无加注额/无预设=非我们行动窗口），
-                //   供非行动帧门控使用；与置信度无关（LOW_CONF帧同样带这些空信号）
+                // V2.9.572 根因①: 非行动帧确认改用按钮行物理信号（黄色像素计数），
+                //   旧v571用内容信号(无跟注额/无加注额/无预设)被非行动帧残影污染：
+                //   18日志双证22帧btn2Y=btn3Y=0(按钮行物理不存在)却识别出presets=3:500,375,250假阳性
+                //   →门控漏网→云VLM 3~24s+垃圾数据上游。物理判据：两行按钮区黄像素均<300
+                //   (真按钮帧实测最小681，2倍余量；free-check帧btn3Y=1262/1583天然放行，不重演v566误杀)。
                 var localNoActionWindow = false
                 // V2.9.567: 移除v566过渡帧标志——本地CV无法区分过渡帧和free-check，判据误杀free-check让牌按钮
                 try {
@@ -1428,10 +1431,10 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     actionDiag = larInstance.lastDiag
                     if (lar != null) {
                         localPresets = lar.presets
-                        // V2.9.571: 三信号齐空=非行动窗口（free-check帧presets非空/mr存在，天然排除；
-                        //   v566教训场景不受影响）
-                        if (!(lar.facingBet && lar.callAmount != null && lar.callAmount > 0) &&
-                            lar.minRaise == null && lar.presets.isNullOrEmpty()) {
+                        // V2.9.572: 物理判据——按钮行(跟注/让牌行+加注行)黄像素均<300=非行动窗口。
+                        //   残影帧(btn2Y=587/btn3Y=1160等)物理信号>=300一律放行VLM兜底，宁慢勿漏；
+                        //   presets/mr等内容信号一律不作门控依据(会被残影污染)。
+                        if (lar.btn2Yellow < 300 && lar.btn3Yellow < 300) {
                             localNoActionWindow = true
                         }
                     }
@@ -1535,13 +1538,13 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 //   慢帧全在非行动窗口（本地btn2Y=0无按钮+LOW_CONF）：手牌区动画/切桌hash抖动→
                 //   缓存未命中→云VLM 3~24s，占着链路拖累后续行动帧；且VLM对非行动帧回读的是
                 //   旧手残影牌+错乱pot（JS侧pot×2/3误锁垃圾BB，v570两次fold误点check白输钱的上游）。
-                //   门控：本地确认非行动窗口（三信号齐空，free-check帧presets非空天然排除，
-                //   不重演v566误杀）且本手已有锁定手牌 → 跳过牌面+操作区两个云VLM，行动数据
-                //   沿用锁定手牌+公牌/底池缓存。新一手（isNewHand已清锁）不触发。
+                //   V2.9.572门控：物理双行无按钮(btn2Y<300&btn3Y<300，22帧漏网残影全拦,
+                //   真按钮帧最小681/free-check帧1262+零误杀)且本手已有锁定手牌 → 跳过牌面+操作区
+                //   两个云VLM，行动数据沿用锁定手牌+公牌/底池缓存。新一手（isNewHand已清锁）不触发。
                 val skipCloudVlm = localNoActionWindow && localAction == null &&
                         holeCardsLocked != null && holeCardsLocked!!.size == 2
                 if (skipCloudVlm) {
-                    Log.w(TAG, "⏭ V2.9.571非行动帧: 无行动按钮+手牌已锁定→跳过云VLM(沿用锁定/缓存)")
+                    Log.w(TAG, "⏭ V2.9.572非行动帧: 按钮行物理不存在(btn2Y/btn3Y<300)+手牌已锁定→跳过云VLM(沿用锁定/缓存)")
                 }
                 val boardParts = mutableListOf<Bitmap>()
                 if (!skipCloudVlm && needHandApiFinal && handStitch != null) boardParts.add(handStitch)
