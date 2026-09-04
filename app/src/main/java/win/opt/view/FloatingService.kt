@@ -211,9 +211,16 @@ class FloatingService : Service() {
             when (intent?.action) {
                 ACTION_CAPTURE -> triggerCapture()
                 ACTION_OPEN -> {
+                    // V2.9.570: getLaunchIntentForPackage在系统冻结/组件异常时可能返回null，
+                    // 直接startActivity(null)会NPE闪退；显式Intent兜底+try-catch
                     val openIntent = packageManager.getLaunchIntentForPackage(packageName)
-                    openIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(openIntent)
+                        ?: Intent(this@FloatingService, MainActivity::class.java)
+                    openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    try {
+                        startActivity(openIntent)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "ACTION_OPEN 打开主界面失败", e)
+                    }
                 }
                 ACTION_EXPORT -> exportLogFromNotification()
             }
@@ -2183,9 +2190,16 @@ class FloatingService : Service() {
                         if (!isStealthMode) {
                             toggleExpand()
                         } else {
+                            // V2.9.570: getLaunchIntentForPackage可能返回null（系统冻结/组件异常），
+                            // startActivity(null)会NPE闪退（22:17:06实机崩溃根因）；显式Intent兜底+try-catch
                             val openIntent = packageManager.getLaunchIntentForPackage(packageName)
-                            openIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            startActivity(openIntent)
+                                ?: Intent(this@FloatingService, MainActivity::class.java)
+                            openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            try {
+                                startActivity(openIntent)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "长按悬浮球打开主界面失败", e)
+                            }
                         }
                     }
                     handler.postDelayed(longPressRunnable!!, 500)

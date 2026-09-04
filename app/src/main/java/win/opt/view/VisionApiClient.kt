@@ -1590,6 +1590,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 }
 
                 // 11. 获取最终牌面数据（V2.9.528: 三级优先级 + LOW回退）
+                var handFromLockedFallback = false  // V2.9.570: 标记手牌是否来自locked回退，公共牌需成套回退缓存
                 val finalHoleCards = when {
                     localHandOk -> localHoleCards!!
                     holeCards != null -> holeCards!!                        // 缓存命中
@@ -1598,16 +1599,27 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         Log.w(TAG, "🔍 VLM空手牌，回退本地CV LOW结果: ${localHoleCards!!.map{"${it.rank}${it.suit}"}}")
                         localHoleCards!!
                     }
-                    board != null -> board.handCards                        // VLM有部分结果
-                    // V2.9.569: 本地CV+VLM双失败时，回退之前帧已锁定的手牌（截图过渡帧兜底）
-                    holeCardsLocked != null && holeCardsLocked!!.isNotEmpty() -> {
+                    // V2.9.569/570: 本地CV+VLM双失败时，回退之前帧已锁定的手牌（截图过渡帧兜底）
+                    // 必须在"board != null -> board.handCards"之前：VLM解析失败也会返回空手牌的非空对象，
+                    // 放后面会被短路导致回退永不生效（22:15:57实机帧 holeCardsLocked=true 但final手牌为空）
+                    holeCardsLocked != null && holeCardsLocked!!.size == 2 -> {
+                        handFromLockedFallback = true
                         Log.w(TAG, "🔍 本地CV+VLM双失败，回退锁定手牌: ${holeCardsLocked!!.map{"${it.rank}${it.suit}"}}")
                         holeCardsLocked!!
                     }
+                    board != null -> board.handCards                        // VLM有部分结果（空/1张）
                     else -> emptyList()
                 }
                 val finalCommCards = when {
                     localCommOk -> localCommCards!!
+                    // V2.9.570: 手牌走锁定回退的帧=截图过渡帧，公共牌必须成套回退缓存（上一VLM成功帧局面），
+                    // 否则公共牌空→determineStreet误判preflop→postflop局面按preflop决策，
+                    // 且streetLocked被错误覆盖为preflop连锁污染后续帧。缓存与锁定手牌同手（fold/新一手同时清锁清缓存）
+                    handFromLockedFallback -> {
+                        val cachedComm = RegionCropper.getCachedCommunityCards()
+                        Log.w(TAG, "🔍 手牌锁定回退帧，公共牌成套沿用缓存(${cachedComm.size}张)保证街/牌面一致")
+                        cachedComm
+                    }
                     newCommIndices.isEmpty() && !needHandApiFinal -> RegionCropper.getCachedCommunityCards()
                     localHandLowFallback && (board == null || board.commCards.isEmpty()) -> localCommCards ?: emptyList()
                     else -> mergeCommCards(newCommIndices, board?.commCards ?: emptyList())
