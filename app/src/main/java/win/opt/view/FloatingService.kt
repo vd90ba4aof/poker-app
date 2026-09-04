@@ -1726,10 +1726,25 @@ class FloatingService : Service() {
                         // V2.9.553-rev9-fix-v3: free check局面fold→check（豪哥规则）。
                         //   无需跟注(toCall=0)时弃牌=白白放弃底池，是策略错误；且GG左按钮在check局面文字就是"让牌/弃牌"
                         //   点下去实际执行check，系统却记成fold造成状态错乱。任何"free+fold"一律改为check过牌。
+                        // V2.9.571 P0修复：toCallJs是BB归一化值，JS侧BB被无按钮帧垃圾锁存污染时会误判free
+                        //   （v570实机铁证：跟注100帧toCallJs=0→fold改check→中间按钮点中"跟注 100"白输钱×2）。
+                        //   屏幕真相优先：按钮文字含"跟注X"=面对真下注，绝不是free check；cachedToCall(Kotlin
+                        //   原始chips值，不经BB归一化)>0同理。三者都确认无跟注时才允许fold→check。
                         val toCallJs = data.optInt("toCall", -1)
                         if (action == "fold" && (toCallJs == 0 || (toCallJs < 0 && cachedToCall == 0))) {
-                            Log.w(TAG, "★ free-check保护: action=fold但toCall=$toCallJs/cached=$cachedToCall(无需跟注)→改执行check")
-                            action = "check"
+                            val screenCallBtn = latestButtonPositions.any { bp ->
+                                val t = bp.text ?: ""
+                                val hasCallText = t.contains("跟注") || t.contains("call", ignoreCase = true)
+                                val amt = t.replace(Regex("[^0-9]"), "").toIntOrNull() ?: 0
+                                hasCallText && amt > 0
+                            }
+                            if (screenCallBtn || cachedToCall > 0) {
+                                Log.w(TAG, "★ free-check保护拦截: 屏幕有跟注按钮(screenCall=$screenCallBtn)/cachedToCall=$cachedToCall>0→保持fold不转check (toCallJs=$toCallJs)")
+                                try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "free-check保护误触发拦截: 屏幕显示跟注按钮但JS判free(BB污染?)", "toCallJs=$toCallJs cachedToCall=$cachedToCall btns=${latestButtonPositions.joinToString(","){it.text}}") } catch (_: Exception) {}
+                            } else {
+                                Log.w(TAG, "★ free-check保护: action=fold但toCall=$toCallJs/cached=$cachedToCall(无需跟注)→改执行check")
+                                action = "check"
+                            }
                         }
                         Log.d(TAG, "★ autoDecision收到决策: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq% json=${jsonData.take(200)} | state=${pipelineFSM.getCurrentState()}")
 

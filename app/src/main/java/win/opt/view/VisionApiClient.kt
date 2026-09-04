@@ -1417,6 +1417,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var localAction: ActionAreaResult? = null
                 var localPresets: List<Int> = emptyList()
                 var actionDiag = "skipped"
+                // V2.9.571: 本地CV确认"非行动帧"（无跟注额/无加注额/无预设=非我们行动窗口），
+                //   供非行动帧门控使用；与置信度无关（LOW_CONF帧同样带这些空信号）
+                var localNoActionWindow = false
                 // V2.9.567: 移除v566过渡帧标志——本地CV无法区分过渡帧和free-check，判据误杀free-check让牌按钮
                 try {
                     val tLA = System.currentTimeMillis()
@@ -1425,6 +1428,12 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     actionDiag = larInstance.lastDiag
                     if (lar != null) {
                         localPresets = lar.presets
+                        // V2.9.571: 三信号齐空=非行动窗口（free-check帧presets非空/mr存在，天然排除；
+                        //   v566教训场景不受影响）
+                        if (!(lar.facingBet && lar.callAmount != null && lar.callAmount > 0) &&
+                            lar.minRaise == null && lar.presets.isNullOrEmpty()) {
+                            localNoActionWindow = true
+                        }
                     }
                     // V2.9.526: 没轮到我时，本地操作区结果不USE（灰色预处理按钮），
                     // 但仍执行识别用于诊断日志
@@ -1522,8 +1531,20 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val potHash = if (needPotApi && potBmp != null) RegionCropper.bitmapHash(potBmp) else null
 
                 // 7.5 构建牌面API图（仅在本地CV失败时）
+                // V2.9.571: ★ 非行动帧门控（v570实机21慢帧根因）★
+                //   慢帧全在非行动窗口（本地btn2Y=0无按钮+LOW_CONF）：手牌区动画/切桌hash抖动→
+                //   缓存未命中→云VLM 3~24s，占着链路拖累后续行动帧；且VLM对非行动帧回读的是
+                //   旧手残影牌+错乱pot（JS侧pot×2/3误锁垃圾BB，v570两次fold误点check白输钱的上游）。
+                //   门控：本地确认非行动窗口（三信号齐空，free-check帧presets非空天然排除，
+                //   不重演v566误杀）且本手已有锁定手牌 → 跳过牌面+操作区两个云VLM，行动数据
+                //   沿用锁定手牌+公牌/底池缓存。新一手（isNewHand已清锁）不触发。
+                val skipCloudVlm = localNoActionWindow && localAction == null &&
+                        holeCardsLocked != null && holeCardsLocked!!.size == 2
+                if (skipCloudVlm) {
+                    Log.w(TAG, "⏭ V2.9.571非行动帧: 无行动按钮+手牌已锁定→跳过云VLM(沿用锁定/缓存)")
+                }
                 val boardParts = mutableListOf<Bitmap>()
-                if (needHandApiFinal && handStitch != null) boardParts.add(handStitch)
+                if (!skipCloudVlm && needHandApiFinal && handStitch != null) boardParts.add(handStitch)
                 val newCommBitmaps = newCommIndices.mapNotNull { idx -> commBitmaps.getOrNull(idx) }
                 if (newCommBitmaps.isNotEmpty()) {
                     val newCommStitch = stitchBitmapsHorizontally(newCommBitmaps, gap = 6)
@@ -1556,10 +1577,10 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
 
                 runBlocking {
                     coroutineScope {
-                        val boardJob = if (boardBase64 != null && needBoardApi) {
+                        val boardJob = if (!skipCloudVlm && boardBase64 != null && needBoardApi) {
                             async(Dispatchers.IO) { recognizeBoardArea(boardBase64, needHandApiFinal, newCommIndices.size, needPotApi) }
                         } else null
-                        val actionJob = if (actionBase64 != null && localAction == null) {
+                        val actionJob = if (!skipCloudVlm && actionBase64 != null && localAction == null) {
                             async(Dispatchers.IO) { recognizeActionArea(actionBase64) }
                         } else null
 

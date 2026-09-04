@@ -1332,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.570',
+  CURRENT_VERSION:'2.9.571',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2750,7 +2750,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.570';
+var APP_VERSION='2.9.571';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8788,6 +8788,52 @@ function _decideInner(){
         }
       }catch(e){console.log('[SelfTiltGuard] decide末尾异常: '+e.message);}
     }
+    // V2.9.571 P1修复：★ 动作-理由-尺度-颜色一致性同步 ★
+    //   v570实机字段错位铁证：applyOppActionShift/applyEquityGuard/EV护栏/PKO等漂移点
+    //   只改result.a不改result.r/result.v——决策日志出现"action=call+reason=价值(55%pot)"、
+    //   "action=raise_big+reason=QJs跟注"、"action=call+reason=RFI开池"。
+    //   所有漂移在出口处统一同步：动作类前缀标注漂移来源，call/check/fold清加注尺度，
+    //   加注类缺尺度补默认值，颜色随动作重映射。原始reason保留在前缀后供复盘。
+    try{
+      if(result && result.a){
+        var _syncA=result.a;
+        var _syncRaise=(_syncA==='raise'||_syncA==='raise_big'||_syncA==='allin');
+        // 已有漂移前缀(如[EV]/[PKO]/[池驱])说明reason已同步过，不重复标注
+        var _hasDriftPrefix=/^\[(EV|PKO|池驱|纠错)\]/.test(result.r||'');
+        if(!_syncRaise && _syncA!=='fold' && _syncA!=='check'){
+          // call/weak_call：加注尺度必须清零（call不带sizing）
+          if(result.v){console.log('[V2.9.571一致性] '+_syncA+'动作残留sizing='+result.v+'→清零');result.v=0;}
+        }
+        if(_syncRaise){
+          if(!result.v||result.v<=0){
+            // 加注类缺尺度：用引擎默认（翻前~2.5BB/翻后66%pot），防止raise按sizing=0执行
+            var _defV=Math.max(2,Math.round((G.pot||1)*0.66));
+            console.log('[V2.9.571一致性] '+_syncA+'缺sizing→补默认'+_defV+'BB (origReason='+(result.r||'').substring(0,30)+')');
+            result.v=_defV;
+          }
+        }
+        if(!_hasDriftPrefix){
+          // 漂移标注：action与GTO引擎原始动作不同（result._se为GTO产物，reason是引擎写的）
+          // 仅当前缀未标注时补充，说明这是护栏/偏移层改的动作
+          var _rStr=result.r||'';
+          var _actionCN={fold:'弃牌',check:'过牌',call:'跟注',weak_call:'弱跟',raise:'加注',raise_big:'重加注',allin:'全下'}[_syncA]||_syncA;
+          // 判据：raise类reason却描述跟注/弃牌，或call/fold类reason却描述加注/开池/价值
+          var _reasonSaysRaise=/(RFI|3bet|4bet|开池|加注|价值|raise|C-bet|cbet|挤压|Squeeze)/i.test(_rStr);
+          var _reasonSaysCall=/(跟注|call)/i.test(_rStr);
+          var _reasonSaysFold=/(弃牌|弃|fold)/i.test(_rStr);
+          var _mismatch=(_syncRaise&&_reasonSaysCall)||((_syncA==='call'||_syncA==='weak_call')&&_reasonSaysRaise&&!_reasonSaysCall)||((_syncA==='fold')&&_reasonSaysRaise&&!_reasonSaysFold);
+          if(_mismatch){
+            result.r='[动作修正→'+_actionCN+'] '+_rStr;
+            console.log('[V2.9.571一致性] reason与action不符(action='+_syncA+',reason='+_rStr.substring(0,30)+')→加标注');
+          }
+        }
+        // 颜色随动作重映射（actionToColor是纯函数，幂等安全）
+        try{
+          var _syncColorKey=actionToColor(_syncA);
+          if(result._colorInfo){result._colorInfo.colorKey=_syncColorKey;result._colorInfo.color=ColorStrategy.COLORS[_syncColorKey];}
+        }catch(_ce){}
+      }
+    }catch(_syncErr){console.log('[V2.9.571一致性] 同步异常: '+_syncErr.message);}
   }
   return result;
 }
@@ -11503,20 +11549,34 @@ function onVisionResult(data){
   var bbValue=0;
   var _bbSource='unknown';
 
-  // ★ 优先级①：preflop + to_call=0(无人加注/limp) + pot>0 → BB=pot×2/3 ★
+  // V2.9.571 P0修复：pot×2/3数学只在"BB免费看牌行动帧"成立 ★
+  //   v570实机铁证：旧逻辑对无按钮帧（非行动窗口：动画/切桌/他人行动中）也锁存，
+  //   这些帧pot是VLM回读的错乱值（300~48132乱飞），41次锁存40次来自无按钮帧，
+  //   BB被锁成200~32088（真实100）→G.bet归一化→0→free-check保护把fold改成check，
+  //   中间按钮点中"跟注 100"白输钱×2。
+  //   数学前提：pot仅含SB+BB(1.5BB)仅当"翻前轮到BB行动且无人加注/无人limp"——
+  //   屏幕判据=按钮中有让牌且无跟注(免费过牌)。无按钮帧不锁存，沿用旧锁/默认值。
+  var _btnArrForBB=(data.buttons||[]);
+  var _preHasCheck=_btnArrForBB.some(function(b){return b.indexOf('让牌')>=0||b.indexOf('过牌')>=0||b.indexOf('check')>=0||b.indexOf('Check')>=0||((b.indexOf('让牌')>=0||b.indexOf('过牌')>=0)&&b.indexOf('弃牌')>=0);});
+  var _preHasCall=_btnArrForBB.some(function(b){return b.indexOf('跟注')>=0||b.indexOf('call')>=0||b.indexOf('Call')>=0;});
+  var _preActionFrame=_btnArrForBB.length>0;  // 有按钮=行动窗口帧（屏幕真相）
+
+  // ★ 优先级①：preflop + 免费看牌帧(有让牌无跟注) + pot>0 → BB=pot×2/3 ★
   // 数学原理：此时底池仅含SB+BB=0.5BB+BB=1.5BB，故BB=pot/1.5=pot×2/3
   // 不依赖VLM任何盲注字段，是确定性数学关系（GG平台标准现金桌盲注比1:2）
   var _rawPotCheck=parseInt(data.pot_size)||0;
   var _rawCallCheck=parseInt(data.to_call)||0;
-  if(data.street==='preflop' && _rawCallCheck===0 && _rawPotCheck>0){
+  if(data.street==='preflop' && _rawCallCheck===0 && _rawPotCheck>0 && _preActionFrame && _preHasCheck && !_preHasCall){
     var _derivedBB=Math.round(_rawPotCheck*2/3);
-    if(_derivedBB>=1 && _derivedBB<=50000){
+    if(_derivedBB>=20 && _derivedBB<=10000){
       bbValue=_derivedBB;
-      _bbSource='preflop_pot_derived('+_rawPotCheck+'*2/3='+_derivedBB+')';
+      _bbSource='preflop_pot_derived('+_rawPotCheck+'*2/3='+_derivedBB+',免费看牌帧)';
       // 确定性值，立即锁存
       G._lockedBB=bbValue;
-      console.log('[V2.9.566 BB真相] '+_bbSource+' → 已锁存G._lockedBB='+bbValue);
+      console.log('[V2.9.571 BB真相] '+_bbSource+' → 已锁存G._lockedBB='+bbValue);
     }
+  }else if(data.street==='preflop' && _rawCallCheck===0 && _rawPotCheck>0 && !_preActionFrame){
+    console.log('[V2.9.571 BB真相] 无按钮帧(非行动窗口) pot='+_rawPotCheck+' → 不做pot×2/3锁存，防止垃圾BB污染');
   }
 
   // ★ V2.9.565: 优先级②已移除——VLM blind_bb不可信（v564日志证实单次误读20覆盖正确值100→stk=221BB）★
@@ -11706,7 +11766,35 @@ function onVisionResult(data){
   } else {
     G.buttons=[];
   }
-  
+
+  // V2.9.571 P0修复：★ 屏幕按钮真相纠正G.bet（翻前版，翻后版见V2.9.51块）★
+  //   v570实机铁证：翻前按钮["弃牌","跟注 100","加注 400"]+to_call=100，但BB被无按钮帧
+  //   垃圾锁存(4833)→G.bet=round(100/4833)=0→free-check保护fold改check→点中跟注白输钱。
+  //   规则：翻前出现"跟注X"按钮=面对下注，G.bet必须≥1BB（与翻后V2.9.51防御对齐）；
+  //   翻前"让牌/过牌"无跟注=免费，G.bet必须=0。按钮文字=屏幕真相，优先于归一化数值。
+  try{
+    var _pfBtns=G.buttons||[];
+    var _pfHasCall=_pfBtns.some(function(b){return b.indexOf('跟注')>=0||b.indexOf('call')>=0||b.indexOf('Call')>=0;});
+    var _pfHasCheck=_pfBtns.some(function(b){return b.indexOf('让牌')>=0||b.indexOf('过牌')>=0||b.indexOf('check')>=0||b.indexOf('Check')>=0;});
+    var _pfCallAmt=0;
+    for(var _pfi=0;_pfi<_pfBtns.length;_pfi++){
+      if(_pfBtns[_pfi].indexOf('跟注')>=0||_pfBtns[_pfi].indexOf('call')>=0||_pfBtns[_pfi].indexOf('Call')>=0){
+        var _pfNum=parseInt((_pfBtns[_pfi].match(/\d[\d,]*/)||['0'])[0].replace(/,/g,''))||0;
+        if(_pfNum>_pfCallAmt)_pfCallAmt=_pfNum;
+      }
+    }
+    if(G.phase==='pre' && _pfHasCall && !_pfHasCheck){
+      var _pfBetBB=_pfCallAmt>0 && bbValue>0 ? Math.max(1,Math.round(_pfCallAmt/bbValue)) : 1;
+      if(G.bet!==_pfBetBB){
+        console.log('[V2.9.571屏幕真相] 翻前有跟注按钮(额='+_pfCallAmt+')但G.bet='+G.bet+'→纠正为'+_pfBetBB+'BB (bbValue='+bbValue+')');
+        G.bet=_pfBetBB;
+      }
+    } else if(G.phase==='pre' && _pfHasCheck && !_pfHasCall && G.bet>0){
+      console.log('[V2.9.571屏幕真相] 翻前让牌免费帧但G.bet='+G.bet+'→纠正为0');
+      G.bet=0;
+    }
+  }catch(_pfBtnErr){console.log('[V2.9.571屏幕真相] 异常: '+_pfBtnErr.message);}
+
   // V2.9.72: ★ 对手位置信息交叉校验 ★
   // 原则: players数据只做校验,不直接覆盖策略引擎输入,识别不准不影响决策
   if(data.players && data.players.length>0){
@@ -11903,6 +11991,26 @@ function onVisionResult(data){
   } catch(_v29527err) {
     console.log("[V2.9.527_DIAG_EXCEPTION] "+_v29527err.message+" stack="+_v29527err.stack);
   }
+  // V2.9.571 P0后置：归一化后再以屏幕按钮真相终裁G.bet（上面归一化用垃圾BB会把真bet→0，
+  //   此处是go()前最后一道；屏幕"跟注X"按钮=面对下注，G.bet必须≥1；"让牌"=免费，G.bet=0）
+  try{
+    var _pf2=G.buttons||[];
+    var _pf2Call=_pf2.some(function(b){return b.indexOf('跟注')>=0||b.indexOf('call')>=0||b.indexOf('Call')>=0;});
+    var _pf2Check=_pf2.some(function(b){return b.indexOf('让牌')>=0||b.indexOf('过牌')>=0||b.indexOf('check')>=0||b.indexOf('Check')>=0;});
+    var _pf2Amt=0;
+    for(var _pf2i=0;_pf2i<_pf2.length;_pf2i++){
+      if(_pf2[_pf2i].indexOf('跟注')>=0||_pf2[_pf2i].indexOf('call')>=0||_pf2[_pf2i].indexOf('Call')>=0){
+        var _pf2n=parseInt((_pf2[_pf2i].match(/\d[\d,]*/)||['0'])[0].replace(/,/g,''))||0;
+        if(_pf2n>_pf2Amt)_pf2Amt=_pf2n;
+      }
+    }
+    if(_pf2Call && !_pf2Check){
+      var _pf2Bet=_pf2Amt>0&&bbValue>0?Math.max(1,Math.round(_pf2Amt/bbValue)):1;
+      if(G.bet!==_pf2Bet){console.log('[V2.9.571后置真相] 归一化后G.bet='+G.bet+'但屏幕有跟注(额'+_pf2Amt+')→终裁'+_pf2Bet+'BB');G.bet=_pf2Bet;}
+    } else if(_pf2Check && !_pf2Call && G.bet>0){
+      console.log('[V2.9.571后置真相] 归一化后G.bet='+G.bet+'但屏幕让牌免费→终裁0');G.bet=0;
+    }
+  }catch(_pf2Err){console.log('[V2.9.571后置真相] 异常: '+_pf2Err.message);}
   // [REV4_DIAG] V2.9.527块后的状态快照
   console.log("[V2.9.527_DIAG_EXIT] pot_after="+G.pot+" stk_after="+G.stk+" bet_after="+G.bet);
 
