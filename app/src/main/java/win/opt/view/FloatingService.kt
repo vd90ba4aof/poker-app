@@ -88,25 +88,7 @@ class FloatingService : Service() {
     // V2.9.153: AutoCapture
     private var autoCaptureEnabled = false
     private var autoCaptureRunnable: Runnable? = null
-    private var autoCaptureInterval = 4000L
-    // V2.9.215: 根据street+人数双维自适应截屏间隔——人少节奏快，间隔短
-    private fun updateAutoCaptureInterval(street: String, playerCount: Int = 6) {
-        // 基础间隔按人数：HU最快2s，3人2.5s，4-5人3s，6+人4s
-        val baseInterval = when {
-            playerCount <= 2 -> 2000L   // HU极快
-            playerCount <= 3 -> 2500L   // 3人快
-            playerCount <= 5 -> 3000L   // 4-5人中等
-            else -> 4000L               // 6+人常规
-        }
-        // street系数：翻后更短（行动更快）
-        autoCaptureInterval = when (street.lowercase()) {
-            "preflop" -> baseInterval
-            "flop" -> (baseInterval * 0.85).toLong().coerceAtLeast(1500L)
-            "turn" -> (baseInterval * 0.70).toLong().coerceAtLeast(1500L)
-            "river" -> (baseInterval * 0.70).toLong().coerceAtLeast(1500L)
-            else -> baseInterval
-        }
-    }
+    private var autoCaptureInterval = 3500L  // V2.9.569: 固定3.5秒间隔（AntiDetection±15%抖动≈3-4秒）
     // V2.9.180: 最新按钮坐标（Vision API返回，用于全自动执行）
     private var latestButtonPositions = emptyList<VisionApiClient.ButtonPosition>()
     // V2.9.207: 缓存场景数据——用于本地CV快速通道（跳过VLM）
@@ -696,7 +678,7 @@ class FloatingService : Service() {
             }
         }
     }
-    private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; pipelineFSM.reset(); autoCaptureInterval=4000L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture() }
+    private fun startAutoCapture() { autoCaptureEnabled=true; autoConsecutiveErrors=0; lastDecisionTime=0; handStartTime=0; pipelineFSM.reset(); autoCaptureInterval=3500L; executeJs("if(typeof enableAutoExec==='function')enableAutoExec()"); scheduleNextAutoCapture() }
     private fun stopAutoCapture() { autoCaptureEnabled=false; autoCaptureRunnable?.let{handler.removeCallbacks(it)}; autoCaptureRunnable=null; _shotClockRunnable?.let{handler.removeCallbacks(it)}; _shotClockRunnable=null; _screenshotTimeoutRunnable?.let{handler.removeCallbacks(it)}; _screenshotTimeoutRunnable=null; _bleAckTimeoutRunnable?.let{handler.removeCallbacks(it)}; _bleAckTimeoutRunnable=null; cancelPendingTap(); _screenshotGate.set(false); handStartTime=0; latestButtonPositions=emptyList(); cachedPotSize=0; cachedToCall=0; cachedMinRaise=0; pipelineFSM.reset(); executeJs("if(typeof disableAutoExec==='function')disableAutoExec()") }  // R1-fix: cancelPendingTap撤销延迟点击; R9-7-fix: 清空场景缓存
     private fun scheduleNextAutoCapture() {
         if(!autoCaptureEnabled)return; autoCaptureRunnable?.let{handler.removeCallbacks(it)}
@@ -2952,7 +2934,7 @@ class FloatingService : Service() {
                         autoConsecutiveErrors = 0
                         // V2.9.70: 正常识别→停止闪烁
                         isBlinkingError = false
-                        updateAutoCaptureInterval(result.street, result.totalPlayers)  // V2.9.215: 自适应截屏间隔(按人数+street)
+                        // V2.9.569: 截屏间隔固定3.5秒，不再按street/人数动态调整
                         updateAdviceNotification("3/4 API识别OK", "策略计算中... WV:$webViewReady")
                         val hole = result.holeCards.map { (if(it.rank=="T") "10" else it.rank) + it.suit }.joinToString(" ")
                         tvStatus?.text = "✅ $hole | ${result.street} | ${result.totalPlayers}人"

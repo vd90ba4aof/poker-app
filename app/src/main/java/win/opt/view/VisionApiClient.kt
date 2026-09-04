@@ -1228,7 +1228,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val localRecognizer = LocalCardRecognizer.getInstance(context)
                 var localHoleCards: List<CardInfo>? = null
                 var localCommCards: List<CardInfo>? = null
-                var localMinConfidence = 0f  // V2.9.528: 本地CV最低置信度（供HIGH/LOW分级）
+                var localMinConfidence = 0f  // V2.9.528: 本地CV手牌最低置信度
+                var localCommConfOk = true   // V2.9.569: 公共牌置信度独立标志
                 // V2.9.544: 分离操作区/牌面置信度阈值——操作区数字0.62+即正确，牌面黑色花色plateau分类天然0.50+
                 val LOCAL_CONFIDENCE_THRESHOLD = 0.60f  // 操作区按钮金额阈值
                 val CARD_CONFIDENCE_THRESHOLD = 0.50f   // 牌面阈值（黑色花色plateau_ratio置信度上限0.90）
@@ -1270,17 +1271,24 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     }
                     val minCommConf = if (localComms.isNotEmpty()) localComms.minOf { it.confidence } else 1.0f
                     val minHandConf = if (localHands.isNotEmpty()) localHands.minOf { it.confidence } else 1.0f
-                    val minCardConf = minOf(minHandConf, minCommConf)
-                    localMinConfidence = minCardConf
-                    // V2.9.544: HIGH(>=0.50)直接使用跳过VLM；<0.50丢弃VLM兜底（黑色花色plateau分类天然0.50+）
-                    if (minCardConf >= CARD_CONFIDENCE_THRESHOLD) {
+                    // V2.9.569: 手牌和公共牌置信度独立判断，互不连坐
+                    val handConfOk = localHands.size == 2 && minHandConf >= CARD_CONFIDENCE_THRESHOLD
+                    val commConfOk = localComms.isEmpty() || minCommConf >= CARD_CONFIDENCE_THRESHOLD
+                    localCommConfOk = commConfOk
+                    localMinConfidence = minHandConf
+                    if (handConfOk && commConfOk) {
                         Log.d(TAG, "🔍 本地CV HIGH: ${localCVElapsed}ms | " +
                                 "hand=${localHands.map { "${it.rank}${it.suit}(${it.confidence})" }} | " +
-                                "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }} minConf=$minCardConf")
+                                "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }} minHand=$minHandConf minComm=$minCommConf")
+                    } else if (handConfOk && !commConfOk) {
+                        // 手牌置信度够，公共牌置信度不够——丢弃公共牌，保留手牌
+                        Log.w(TAG, "🔍 公共牌置信度过低(minComm=%.2f<0.50)，丢弃公共牌，手牌保留".format(minCommConf))
+                        localCommCards = emptyList()
                     } else {
-                        Log.w(TAG, "🔍 本地CV置信度过低(min=%.2f<0.50)，丢弃，VLM兜底".format(minCardConf))
+                        // 手牌置信度不够——丢弃手牌（公共牌也不可靠）
+                        Log.w(TAG, "🔍 手牌置信度过低(minHand=%.2f<0.50)，丢弃，VLM兜底".format(minHandConf))
                         localHoleCards = null
-                        localCommCards = null
+                        localCommCards = emptyList()
                     }
                 } catch (e: Exception) {
                     lastLocalCVTimeMs = 0
@@ -1296,8 +1304,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // V2.9.544: 牌面用CARD_CONFIDENCE_THRESHOLD(0.50)，操作区用LOCAL_CONFIDENCE_THRESHOLD(0.60)
                 val localHandOk = localHoleCards != null && localHoleCards!!.size == 2 &&
                         localMinConfidence >= CARD_CONFIDENCE_THRESHOLD
-                // 公共牌：手牌HIGH置信时信任本地结果（含空列表=翻前）
-                val localCommOk = localHandOk
+                // V2.9.569: 公共牌独立判断——手牌HIGH且公共牌置信度OK时才信任本地结果
+                val localCommOk = localHandOk && localCommConfOk
                 // LOW置信标志：本地有结果但置信度不够高，VLM返回空时回退本地
                 val localHandLowFallback = localHoleCards != null && localHoleCards!!.size == 2 &&
                         localMinConfidence >= LOCAL_LOW_CONFIDENCE && !localHandOk
@@ -1493,7 +1501,11 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // 5. 新手牌检测
                 if (needHandApiFinal && RegionCropper.isNewHand(handHash)) {
                     RegionCropper.clearBoardCache()
-                    Log.d(TAG, "🆕 新手牌检测到，公共牌/底池缓存已清空")
+                    // V2.9.569: 新手牌时清空手牌锁定，防止旧手锁定值跨手污染
+                    holeCardsLocked = null
+                    holeCardsRankLocked = null
+                    streetLocked = null
+                    Log.d(TAG, "🆕 新手牌检测到，公共牌/底池/手牌锁定已清空")
                 }
 
                 // 6. 公共牌增量检查（本地CV成功时直接使用本地结果）
@@ -1587,6 +1599,11 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         localHoleCards!!
                     }
                     board != null -> board.handCards                        // VLM有部分结果
+                    // V2.9.569: 本地CV+VLM双失败时，回退之前帧已锁定的手牌（截图过渡帧兜底）
+                    holeCardsLocked != null && holeCardsLocked!!.isNotEmpty() -> {
+                        Log.w(TAG, "🔍 本地CV+VLM双失败，回退锁定手牌: ${holeCardsLocked!!.map{"${it.rank}${it.suit}"}}")
+                        holeCardsLocked!!
+                    }
                     else -> emptyList()
                 }
                 val finalCommCards = when {

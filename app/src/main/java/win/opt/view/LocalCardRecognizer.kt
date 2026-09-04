@@ -865,7 +865,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val result = recognizeCommunityCard(screenshot, i)
             if (result != null) {
                 communityCards.add(result)
-                diag.append("C$i=OK(${result.rank}${result.suit});")
+                diag.append("C$i=OK(${result.rank}${result.suit},c=%.2f);".format(result.confidence))
             }
         }
 
