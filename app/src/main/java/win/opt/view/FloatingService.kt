@@ -807,7 +807,8 @@ class FloatingService : Service() {
         handler.postDelayed(r, humanDelay)
     }
 
-    private fun executeAutoTap(action: String, decisionData: org.json.JSONObject) {
+    private fun executeAutoTap(actionIn: String, decisionData: org.json.JSONObject) {
+        var action = actionIn  // V2.9.573 物理闸可降级动作(allin/raise→call, check→fold)，故var
         try {
             // V2.9.503: BLE连接检查——未连接时记录警告并跳过，避免无效tap
             if (bleManager?.isConnected != true) {
@@ -877,7 +878,7 @@ class FloatingService : Service() {
                         // 屏幕无加注行: 全押面→call(有跟注)；free-check/过渡无跟注→不点击(raise无意义)
                         if (physCall) {
                             Log.w(TAG, "★物理闸: $action 但屏幕无加注按钮(面对全押)→降级call | btns=${latestButtonPositions.joinToString(","){it.text}}")
-                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "物理闸拦截: $action无加注按钮→降级call(面对全押)", "btns=${latestButtonPositions.joinToString(","){it.text}}") } catch (_: Exception) {}
+                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "物理闸拦截: ${action}无加注按钮→降级call(面对全押)", "btns=${latestButtonPositions.joinToString(","){it.text}}") } catch (_: Exception) {}
                             action = "call"
                         } else {
                             Log.w(TAG, "★物理闸: $action 但屏幕无加注按钮且无跟注(free-check误判/过渡帧)→取消点击 | btns=${latestButtonPositions.size}")
