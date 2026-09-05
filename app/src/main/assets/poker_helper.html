@@ -1332,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.574',
+  CURRENT_VERSION:'2.9.575',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2428,10 +2428,10 @@ function _isStreetChange(d){if(!d||!d.street)return false;var n=0;if(d.community
 // ===== V2.9.153: Layer1 PostValidation =====
 var PostValidation={
   dedupCards:function(h,c){var s={};var r=[];for(var i=0;i<h.length;i++){if(!h[i])continue;var k=h[i].rank+(h[i].suit||'');if(s[k]){r.push('手牌重复:'+k);h[i]=null;}else s[k]=true;}while(h.indexOf(null)!==-1)h.splice(h.indexOf(null),1);var s2={};for(var j=0;j<c.length;j++){if(!c[j])continue;var k2=c[j].rank+(c[j].suit||'');if(s2[k2]){r.push('公共牌重复(保留):'+k2);}else s2[k2]=true;}
-    // V2.9.574 闸⑦: 52张物理唯一性——手牌与公共牌之间同rank+suit=一副牌不可能事件（旧版只查组内）
+    // V2.9.575 闸⑦: 52张物理唯一性——手牌与公共牌之间同rank+suit=一副牌不可能事件（旧版只查组内）
     for(var k3 in s2){if(s[k3]){r.push('手公牌重复:'+k3);}}
     if(r.length>0){
-      // V2.9.574 闸⑨: 任何重复=识别结果物理不可能→硬标记，autoExecuteDecision入口拒帧转人工（不自动点击）
+      // V2.9.575 闸⑨: 任何重复=识别结果物理不可能→硬标记，autoExecuteDecision入口拒帧转人工（不自动点击）
       G._cardsIllegal='PV重复:'+r.join(';');
       console.log('[PV去重]🚫牌面非法→拒帧转人工: '+r.join(';'));
     }
@@ -2763,7 +2763,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.574';
+var APP_VERSION='2.9.575';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -11340,7 +11340,7 @@ function onVisionResult(data){
   // V2.9.153: Layer2
   if(data&&data._frameTag==='primary'){MultiFrameConsensus.onPrimaryFrame(data);}
   else if(data&&data._frameTag==='verify'){var cs=MultiFrameConsensus.onVerifyFrame(data);if(cs&&cs._s&&cs._s.length>0)data=MultiFrameConsensus.applyConsensus(data);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.autoCaptureVisionComplete)AndroidBridge.autoCaptureVisionComplete(true);window._visionUpdating=false;return;}
-  // V2.9.574 闸⑨: Kotlin终验非法信号（52张重复/公共牌结构非法，在PV之后、VPP之前，任何纠错都不得清除）
+  // V2.9.575 闸⑨: Kotlin终验非法信号（52张重复/公共牌结构非法，在PV之后、VPP之前，任何纠错都不得清除）
   if(data&&data.cards_illegal===true){
     G._cardsIllegal='Kotlin:'+(data.cards_illegal_reason||'unknown');
     console.log('[闸⑨]🚫Kotlin牌面非法→拒帧转人工: '+G._cardsIllegal);
@@ -11362,7 +11362,7 @@ function onVisionResult(data){
   // V2.9.566: 每帧重置按钮计数/自动执行标记（帧新鲜信号，禁止跨帧残留）
   G._frameBtnCount = (data && data.buttons) ? data.buttons.length : 0;
   G._frameAutoLabel = '';
-  // V2.9.574 闸⑨: 牌面非法标志帧初清空（dedupCards或Kotlin终验会在本帧后置位）
+  // V2.9.575 闸⑨: 牌面非法标志帧初清空（dedupCards或Kotlin终验会在本帧后置位）
   G._cardsIllegal = '';
   var _noTableSignals = (_noHole?1:0)+(_noD?1:0)+(_noBtn?1:0);
   var _isNoTable = _modelNoTable || _noTableSignals>=2;
@@ -13108,7 +13108,7 @@ function autoExecuteDecision(r, isAutoMode) {
     return false;
   }
 
-  // V2.9.574 闸⑨: 牌面物理非法（52张重复/结构非法）→拒帧转人工，禁止自动点击。
+  // V2.9.575 闸⑨: 牌面物理非法（52张重复/结构非法）→拒帧转人工，禁止自动点击。
   //   识别结果在物理上不可能时任何决策都不可信；不点击=等下帧重识别（3.5s内按钮仍在），
   //   连续非法则策略超时兜底（灰等待非FOLD），方向安全于盲打。
   if (G._cardsIllegal) {
