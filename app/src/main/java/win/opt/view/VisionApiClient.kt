@@ -175,7 +175,10 @@ object VisionApiClient {
         // V2.9.230: 本地suit识别标记——标记最终suit是否来自本地推断（用于前端判断可信度）
         val localSuitUsed: Boolean = false,
         // V2.9.526: 是否轮到我行动（绿色进度条检测，预处理状态不点击）
-        val isMyTurn: Boolean = true
+        val isMyTurn: Boolean = true,
+        // V2.9.574: 牌面物理非法标志（52张重复/公共牌结构非法）→JS侧拒帧转人工，禁止自动点击
+        val cardsIllegal: Boolean = false,
+        val cardsIllegalReason: String = ""
     )
 
     data class CardInfo(val rank: String, val suit: String)
@@ -1038,6 +1041,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 if(p.nickname.isNotEmpty()) put("nickname", p.nickname)
             } }))
             put("is_poker_table", result.isPokerTable); put("d_button_position", result.dButtonPosition); put("suit_uncertain", result.suitUncertain); put("hole_cards_locked", holeCardsLocked != null); put("rank_locked", holeCardsRankLocked != null); put("rank_lock_values", holeCardsRankLocked?.joinToString(",") ?: ""); put("lock_reason", lockReason)
+            // V2.9.574: 牌面物理非法（52张重复/结构非法）→JS拒帧转人工
+            put("cards_illegal", result.cardsIllegal); put("cards_illegal_reason", result.cardsIllegalReason)
             put("prompt_mode", lastPromptMode)
             // V2.9.143: 摊牌信息
             if (result.showdownCards.isNotEmpty()) {
@@ -1269,24 +1274,37 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                             Log.w(TAG, "诊断截图保存失败: ${e.message}")
                         }
                     }
-                    val minCommConf = if (localComms.isNotEmpty()) localComms.minOf { it.confidence } else 1.0f
-                    val minHandConf = if (localHands.isNotEmpty()) localHands.minOf { it.confidence } else 1.0f
-                    // V2.9.569: 手牌和公共牌置信度独立判断，互不连坐
-                    val handConfOk = localHands.size == 2 && minHandConf >= CARD_CONFIDENCE_THRESHOLD
-                    val commConfOk = localComms.isEmpty() || minCommConf >= CARD_CONFIDENCE_THRESHOLD
+                    // V2.9.574: 置信度双独立——rank/suit各自过阈，禁止互相背书；
+                    //   uncertain标志（match双门槛0.55绝对分/0.05分差 或 拓扑否决残差）的牌一律不采信。
+                    //   rank真牌实机0.85+，误认0.55-0.80区间；suit红牌IoU 0.80+，黑色plateau天然0.50+地板保留旧行为。
+                    val RANK_MIN = 0.55f
+                    val SUIT_MIN = 0.50f
+                    fun rankOk(c: LocalCardRecognizer.CardResult) =
+                        !c.rankUncertain && c.rankScore >= RANK_MIN
+                    fun suitOk(c: LocalCardRecognizer.CardResult) =
+                        !c.suitUncertain && c.suitScore >= SUIT_MIN
+                    val handBad = localHands.filter { !rankOk(it) || !suitOk(it) }
+                    // V2.9.574: 公共牌槽位结构硬约束——GG竖屏空槽位白像素=0(实测18:58翻牌帧C3/C4=0.000)，
+                    //   合法公共牌只可能是0/3/4/5张且槽位0起连续；不满足=识别结果物理不可能，丢弃公共牌走VLM/缓存
+                    val slots = localComms.map { it.slot }.filter { it in 0..4 }.sorted()
+                    val commStructOk = localComms.isEmpty() ||
+                        (localComms.size in 3..5 && slots.size == localComms.size && slots == (0 until localComms.size).toList())
+                    val commBad = localComms.filter { !rankOk(it) || !suitOk(it) }
+                    val handConfOk = localHands.size == 2 && handBad.isEmpty()
+                    val commConfOk = localComms.isEmpty() || (commBad.isEmpty() && commStructOk)
                     localCommConfOk = commConfOk
-                    localMinConfidence = minHandConf
+                    localMinConfidence = if (localHands.isNotEmpty()) localHands.minOf { it.confidence } else 1.0f
                     if (handConfOk && commConfOk) {
                         Log.d(TAG, "🔍 本地CV HIGH: ${localCVElapsed}ms | " +
                                 "hand=${localHands.map { "${it.rank}${it.suit}(${it.confidence})" }} | " +
-                                "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }} minHand=$minHandConf minComm=$minCommConf")
+                                "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }}")
                     } else if (handConfOk && !commConfOk) {
-                        // 手牌置信度够，公共牌置信度不够——丢弃公共牌，保留手牌
-                        Log.w(TAG, "🔍 公共牌置信度过低(minComm=%.2f<0.50)，丢弃公共牌，手牌保留".format(minCommConf))
+                        // 手牌可信，公共牌不可信（置信/uncertain/槽位结构）——丢弃公共牌，保留手牌
+                        Log.w(TAG, "🔍 公共牌不可信(bad=${commBad.map { "${it.rank}${it.suit}@C${it.slot}(r=%.2f%s,s=%.2f%s)".format(it.rankScore, if (it.rankUncertain) "U" else "", it.suitScore, if (it.suitUncertain) "U" else "") }} struct=$commStructOk)，丢弃公共牌，手牌保留")
                         localCommCards = emptyList()
                     } else {
-                        // 手牌置信度不够——丢弃手牌（公共牌也不可靠）
-                        Log.w(TAG, "🔍 手牌置信度过低(minHand=%.2f<0.50)，丢弃，VLM兜底".format(minHandConf))
+                        // 手牌不可信——丢弃手牌（公共牌也不可靠）
+                        Log.w(TAG, "🔍 手牌不可信(bad=${handBad.map { "${it.rank}${it.suit}@H${it.slot}(r=%.2f%s,s=%.2f%s)".format(it.rankScore, if (it.rankUncertain) "U" else "", it.suitScore, if (it.suitUncertain) "U" else "") }})，丢弃，VLM兜底")
                         localHoleCards = null
                         localCommCards = emptyList()
                     }
@@ -1302,6 +1320,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 lastLocalDiag = localRecognizer.lastDiag
 
                 // V2.9.544: 牌面用CARD_CONFIDENCE_THRESHOLD(0.50)，操作区用LOCAL_CONFIDENCE_THRESHOLD(0.60)
+                // V2.9.574: 此0.50仅控制VLM回退开关；采信硬门禁在上方（rank 0.55+suit 0.50双独立+uncertain标志，
+                //   不可信的localHoleCards已被置null），两层互补：uncertain牌丢手→localHandOk=false→VLM兜底。
                 val localHandOk = localHoleCards != null && localHoleCards!!.size == 2 &&
                         localMinConfidence >= CARD_CONFIDENCE_THRESHOLD
                 // V2.9.569: 公共牌独立判断——手牌HIGH且公共牌置信度OK时才信任本地结果
@@ -1655,6 +1675,23 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 }
                 val finalPot = (potValue ?: board?.potAmount ?: 0L).toInt()
 
+                // V2.9.574 闸: 52张物理唯一性终验（标准德州一副牌，手牌+公共牌共7张内同rank+suit不可能重复）
+                //   + 公共牌结构（0/3/4/5张）。非法=识别结果物理不可能→cardsIllegal→JS拒帧转人工，禁止自动点击。
+                val deck = ArrayList<String>()
+                finalHoleCards.forEach { deck.add(it.rank + it.suit) }
+                finalCommCards.forEach { deck.add(it.rank + it.suit) }
+                val dupCards = deck.groupingBy { it }.eachCount().filter { it.value > 1 }.keys
+                val boardStructBad = finalCommCards.isNotEmpty() && finalCommCards.size !in 3..5
+                val cardsIllegal = dupCards.isNotEmpty() || boardStructBad
+                val cardsIllegalReason = when {
+                    dupCards.isNotEmpty() -> "dup:" + dupCards.joinToString(",")
+                    boardStructBad -> "board_size:" + finalCommCards.size
+                    else -> ""
+                }
+                if (cardsIllegal) {
+                    Log.w(TAG, "🚫 牌面物理非法: $cardsIllegalReason | hand=${finalHoleCards.map { "${it.rank}${it.suit}" }} comm=${finalCommCards.map { "${it.rank}${it.suit}" }} →拒帧转人工")
+                }
+
                 // 12. 构建结果（本地CV操作区优先）
                 val action = localAction ?: actionResult
                 val finalToCall = action?.toCall ?: 0
@@ -1720,7 +1757,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     gameMode = "cash",
                     detectedPlatform = "GGPOKER",
                     localSuitUsed = false,
-                    isMyTurn = isMyTurn
+                    isMyTurn = isMyTurn,
+                    cardsIllegal = cardsIllegal,
+                    cardsIllegalReason = cardsIllegalReason
                 )
 
                 // V2.9.540: 动态玩家追踪——对比前后帧，检测谁加入/谁离场

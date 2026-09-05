@@ -33,8 +33,8 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         }
     }
 
-    // 模板：key -> 二值数组(0=内容, 1=背景), width, height
-    private data class Template(val data: BooleanArray, val w: Int, val h: Int) {
+    // 模板：key -> 二值数组(0=内容, 1=背景), width, height, topo=拓扑签名(V2.9.574)
+    private data class Template(val data: BooleanArray, val w: Int, val h: Int, val topo: TopoSig) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is Template) return false
@@ -58,7 +58,12 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         val suit: String,
         val confidence: Float,
         val rankScore: Float,
-        val suitScore: Float
+        val suitScore: Float,
+        // V2.9.574: 槽位号（手牌0/1，公共牌0-4；默认-1=未标注）
+        val slot: Int = -1,
+        // V2.9.574: 双门槛不确定标志（IoU绝对分/分差不足 或 拓扑否决后残差候选），下游不得采信
+        val rankUncertain: Boolean = false,
+        val suitUncertain: Boolean = false
     )
 
     @Volatile
@@ -117,11 +122,129 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 val gray = ((p shr 16 and 0xFF) * 30 + (p shr 8 and 0xFF) * 59 + (p and 0xFF) * 11) / 100
                 data[i] = gray >= 128
             }
-            Template(data, w, h)
+            // V2.9.574: 模板预裁剪过（fgBBox=全图），签名直接基于全图；模板换资产自动跟随
+            val sig = computeTopoSig(data, w, h)
+            Template(data, w, h, sig)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to load template: $path", e)
             null
         }
+    }
+
+    // ========== V2.9.574: rank字形拓扑签名（孔数/孔面积比/宽高比/孔中心） ==========
+    // 离线26张模板实测（2026-09-05 analyze_templates.py）：
+    //   孔数: 2/3/5/7/J/K=0孔, 8=2孔, 4/6/9/10/A/Q=1孔
+    //   孔面积比: Q最大(comm 0.184/hand 0.113)，A最小(0.055/0.036)，4/6/9≈0.07-0.09，10=0.08-0.10
+    //   宽高比: Q=0.50最窄, A=1.04最宽(单字符), 10=1.62, 4=0.83, 6/9=0.75-0.77
+    //   孔中心y: 9=0.32(上), 6=0.66(下), A/4/10/Q=0.43-0.50(中)
+    // 作用：模板match()的IoU argmax对Q的圆形封闭笔画有机制性偏好（实机Q占41% vs 概率7.7%），
+    //   拓扑是rank物理不变量，对IoU误认做一票否决。阈值全部按离线表最近对抗对2倍以上余量设定。
+    private data class TopoSig(
+        val holes: Int,          // 孔数（背景中不与边框连通的4连通域数）
+        val mainHoleArea: Float, // 最大孔面积 / 裁剪框面积（无孔=0）
+        val aspect: Float,       // 前景裁剪宽高比
+        val holeCy: Float,       // 最大孔中心y比例（无孔=-1）
+        val holeCx: Float,       // 最大孔中心x比例（无孔=-1）
+        val ok: Boolean          // 前景量是否足够可信（噪声碎片不启用否决，fail-open）
+    )
+
+    /** 计算二值mask的拓扑签名（mask极性: false=内容, true=背景；模板与query同构） */
+    private fun computeTopoSig(mask: BooleanArray, w: Int, h: Int): TopoSig {
+        if (w < 6 || h < 10) return TopoSig(0, 0f, 0f, -1f, -1f, false)
+        // 1. trim到内容边界
+        var minX = w; var maxX = -1; var minY = h; var maxY = -1
+        var fgCount = 0
+        for (y in 0 until h) for (x in 0 until w) {
+            if (!mask[y * w + x]) {
+                fgCount++
+                if (x < minX) minX = x; if (x > maxX) maxX = x
+                if (y < minY) minY = y; if (y > maxY) maxY = y
+            }
+        }
+        if (maxX < 0) return TopoSig(0, 0f, 0f, -1f, -1f, false)
+        val tw = maxX - minX + 1
+        val th = maxY - minY + 1
+        if (fgCount < tw * th * 0.18f) return TopoSig(0, 0f, 0f, -1f, -1f, false) // 碎片不足，不启用否决
+        // 2. 4连通flood fill从边框标记可达背景
+        // reachable语义：背景中已确认与边框连通的像素（=外部背景）；孔=背景且reachable=false
+        val reachable = BooleanArray(tw * th)
+        val queue = ArrayDeque<Int>()
+        // 邻居入队：仅当目标格是背景且尚未标记（fg/已标记一律不入队，禁止跨fg扩散）
+        fun seed(x: Int, y: Int) {
+            if (x in 0 until tw && y in 0 until th) {
+                val idx = y * tw + x
+                if (!reachable[idx] && mask[(minY + y) * w + (minX + x)]) { reachable[idx] = true; queue.add(idx) }
+            }
+        }
+        for (x in 0 until tw) { seed(x, 0); seed(x, th - 1) }
+        for (y in 0 until th) { seed(0, y); seed(tw - 1, y) }
+        while (queue.isNotEmpty()) {
+            val idx = queue.poll()
+            val cx = idx % tw; val cy = idx / tw
+            if (cx > 0) seed(cx - 1, cy)
+            if (cx < tw - 1) seed(cx + 1, cy)
+            if (cy > 0) seed(cx, cy - 1)
+            if (cy < th - 1) seed(cx, cy + 1)
+        }
+        // 3. 不可达背景=孔，统计各孔（面积<裁剪框2%视为噪点不计）
+        //    v574调参: 4%→2%——9/5真实截图验证0孔字J/K在2%下无假孔（H1方向安全）；
+        //    2%可恢复hand组A孔(0.036)与8上孔(0.035)，避免小尺寸真实孔被滤导致签名退化
+        var holes = 0
+        var bestArea = 0; var bestCy = 0f; var bestCx = 0f
+        val minHolePx = (tw * th * 0.02f).toInt().coerceAtLeast(3)
+        for (sy in 0 until th) for (sx in 0 until tw) {
+            val idx = sy * tw + sx
+            if (!reachable[idx] && mask[(minY + sy) * w + (minX + sx)]) {
+                // 新孔：flood fill统计（复用reachable标记，填true避免重复；seed同样不跨fg）
+                var area = 0; var sumX = 0; var sumY = 0
+                reachable[idx] = true
+                queue.add(idx)
+                while (queue.isNotEmpty()) {
+                    val j = queue.poll()
+                    val jx = j % tw; val jy = j / tw
+                    area++; sumX += jx; sumY += jy
+                    // 显式坐标4邻居（禁止用j±1索引：x=0时j-1跨行错位）
+                    if (jx > 0) seed(jx - 1, jy)
+                    if (jx < tw - 1) seed(jx + 1, jy)
+                    if (jy > 0) seed(jx, jy - 1)
+                    if (jy < th - 1) seed(jx, jy + 1)
+                }
+                if (area >= minHolePx) {
+                    holes++
+                    if (area > bestArea) { bestArea = area; bestCy = sumY.toFloat() / area / th; bestCx = sumX.toFloat() / area / tw }
+                }
+            }
+        }
+        return TopoSig(holes, bestArea.toFloat() / (tw * th), tw.toFloat() / th, bestCy, bestCx, true)
+    }
+
+    /**
+     * 拓扑否决：query与candidate模板签名矛盾时返回true（跳过该候选）。
+     * 触发规则（满足任意一条即否决；阈值均为离线表对抗对2倍+余量）：
+     *  H1 孔数: query孔数>模板（孔不会被噪声"长"出来，query 2孔→Q(1)必错）或孔数差≥2
+     *  H2 大孔: query 0孔 但模板有大孔(≥0.10)——Q/8类封闭字形冒充不了0孔字（5/K/2/3/7/J）
+     *  H3 孔面积断层: query 1孔但模板孔显著更大（Q孔面积0.11-0.20为全rank最大，其余≤0.09；
+     *      tmpl孔≥0.10且≥query孔1.3倍→小孔字冒充不了Q；真实9/4/6投Q比值1.42-2.08，真Q投自身≈1）
+     *  H4 孔位+孔面积双矛盾: 同1孔时孔面积差>0.045 且 孔心垂直距离>0.10
+     *      （9孔在上cy0.32/6在下0.66/Q居中0.43，孔位是跨字体物理不变量，真实牌面实测一致）
+     *  注: aspect宽高比已废弃——模板为宽无衬线字体、真实GG为窄粗体，同字aspect系统偏差0.54-0.67
+     *      会误杀真牌，且真9/4(asp0.46-0.56)与Q(0.50)无区分力（9/5真实截图实测）。
+     *  阈值来源: 26张模板签名表 + 8张9/5真实公牌牌面（A/Q/4/9/8/J/K）实测对抗全绿。
+     */
+    private fun topoVeto(query: TopoSig, tmpl: TopoSig): Boolean {
+        if (!query.ok || !tmpl.ok) return false // 签名不可信→fail-open，交给IoU
+        // H1: 孔数硬矛盾
+        if (query.holes > tmpl.holes || kotlin.math.abs(query.holes - tmpl.holes) >= 2) return true
+        // H2: query无孔 vs 模板大封闭孔（Q/8类封闭字形冒充0孔字）
+        if (query.holes == 0 && tmpl.holes >= 1 && tmpl.mainHoleArea >= 0.10f) return true
+        // H3: 孔面积断层（小孔字投Q类大孔模板）
+        if (query.holes == 1 && tmpl.holes == 1 && tmpl.mainHoleArea >= 0.10f &&
+            tmpl.mainHoleArea >= query.mainHoleArea * 1.3f) return true
+        // H4: 孔位+孔面积双矛盾（cy与面积都是跨字体稳定特征）
+        if (query.holes == 1 && tmpl.holes == 1 &&
+            kotlin.math.abs(query.mainHoleArea - tmpl.mainHoleArea) > 0.045f &&
+            kotlin.math.abs(query.holeCy - tmpl.holeCy) > 0.10f) return true
+        return false
     }
 
     // ========== 像素工具 ==========
@@ -236,16 +359,28 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         return result
     }
 
-    /** 模板匹配：缩放到模板高度，取min宽对齐，前景并集上的像素重合度 */
-    private fun match(query: Triple<BooleanArray, Int, Int>?, templates: Map<String, Template>): Pair<String?, Float> {
-        if (query == null) return Pair(null, 0f)
+    // V2.9.574: match结果——best/second双分数+不确定标志（拓扑否决残差候选或双门槛不过）
+    private data class MatchOutcome(val label: String?, val score: Float, val uncertain: Boolean)
+
+    /**
+     * 模板匹配：缩放到模板高度，水平居中对齐，前景并集上的像素重合度。
+     * V2.9.574: ①rank模板先过拓扑否决（孔数/孔面积比/宽高比/孔中心物理不变量）；
+     *   ②双门槛——绝对分<0.55 或 与第二名分差<0.05 → uncertain=true（下游按不采信处理）。
+     * @param useTopology true=rank模板启用拓扑否决；suit模板传false
+     */
+    private fun match(query: Triple<BooleanArray, Int, Int>?, templates: Map<String, Template>, useTopology: Boolean = true): MatchOutcome {
+        if (query == null) return MatchOutcome(null, 0f, true)
         val (qData, qW, qH) = query
-        if (qH == 0 || qW == 0) return Pair(null, 0f)
+        if (qH == 0 || qW == 0) return MatchOutcome(null, 0f, true)
+
+        val qSig = if (useTopology) computeTopoSig(qData, qW, qH) else null
 
         var bestLabel: String? = null
         var bestScore = 0f
-
+        var secondScore = 0f
         for ((label, tmpl) in templates) {
+            // V2.9.574: 拓扑一票否决——签名矛盾的候选不参与IoU argmax
+            if (useTopology && qSig != null && topoVeto(qSig, tmpl.topo)) continue
             val scale = tmpl.h.toFloat() / qH
             val newW = (qW * scale).toInt().coerceAtLeast(1)
             val qResized = resizeBinary(qData, qW, qH, newW, tmpl.h)
@@ -292,12 +427,17 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             if (totalUnion > 0) {
                 val score = agree.toFloat() / totalUnion
                 if (score > bestScore) {
+                    secondScore = bestScore
                     bestScore = score
                     bestLabel = label
+                } else if (score > secondScore) {
+                    secondScore = score
                 }
             }
         }
-        return Pair(bestLabel, bestScore)
+        // 双门槛：绝对分0.55 + 与第二名分差0.05（实机误认0.55-0.80区间分差普遍<0.05，真牌0.85+）
+        val uncertain = bestLabel == null || bestScore < 0.55f || (bestScore - secondScore) < 0.05f
+        return MatchOutcome(bestLabel, bestScore, uncertain)
     }
 
     // ========== 公共牌识别 ==========
@@ -346,15 +486,18 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val rankTrimmed = trim(rankMask, rx2 - rx1, ry2 - ry1)
             val suitTrimmed = trim(suitMask, sx2 - sx1, sy2 - sy1)
 
-            val (bestRank, rankScore) = match(rankTrimmed, commRankTemplates)
+            // V2.9.574: rank走拓扑否决+双门槛；suit只走双门槛（花色形状不走rank拓扑）
+            val rm = match(rankTrimmed, commRankTemplates, useTopology = true)
             val candidateSuits = if (isRed)
                 commSuitTemplates.filterKeys { it in RED_SUITS }
             else
                 commSuitTemplates.filterKeys { it in BLACK_SUITS }
-            val (bestSuit, suitScore) = match(suitTrimmed, candidateSuits)
+            val sm = match(suitTrimmed, candidateSuits, useTopology = false)
 
-            if (bestRank == null || bestSuit == null) return null
-            CardResult(bestRank, bestSuit, (rankScore + suitScore) / 2, rankScore, suitScore)
+            if (rm.label == null || sm.label == null) return null
+            // V2.9.574: 置信度取两门min（保守值，禁止花色分给rank背书）；不确定标志独立携带
+            CardResult(rm.label, sm.label, minOf(rm.score, sm.score), rm.score, sm.score,
+                slot = cardIndex, rankUncertain = rm.uncertain, suitUncertain = sm.uncertain)
         } catch (e: Exception) {
             Log.w(TAG, "Community card $cardIndex failed: ${e.message}")
             null
@@ -596,14 +739,17 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
             val bestRank: String?
             val rankConf: Double
+            // V2.9.574: rank不确定标志（双门槛/拓扑否决残差）；"10"双component特判视为确定
+            var rankUnc = false
 
             if (tenResult != null) {
                 bestRank = "10"
                 rankConf = tenResult
             } else {
-                val rm = match(rankTrimmed, handRankTemplates)
-                bestRank = rm.first
-                rankConf = rm.second.toDouble()
+                val rm = match(rankTrimmed, handRankTemplates, useTopology = true)
+                bestRank = rm.label
+                rankConf = rm.score.toDouble()
+                rankUnc = rm.uncertain
             }
 
             // ===== Suit识别 =====
@@ -630,6 +776,8 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
             var bestSuit: String? = null
             var suitConf = 0.0
+            // V2.9.574: suit不确定标志；黑色plateau分类天然0.50+地板，标记uncertain供下游独立判
+            var suitUnc = false
 
             if (isBlack && suitTrimmed != null) {
                 // plateau_ratio分类：club>0.30, spade<0.20
@@ -640,21 +788,25 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 else
                     0.5 + (0.30 - ratio) * 1.5
                 suitConf = suitConf.coerceIn(0.5, 0.9)
+                suitUnc = true // plateau分类无IoU分差可验，置信地板0.50，保守标记
             } else {
-                // 红色suit用IoU匹配（♥ vs ♦）
-                val sm = match(suitTrimmed, suitTemplates)
-                bestSuit = sm.first
-                suitConf = sm.second.toDouble()
+                // 红色suit用IoU匹配（♥ vs ♦），双门槛验分差
+                val sm = match(suitTrimmed, suitTemplates, useTopology = false)
+                bestSuit = sm.label
+                suitConf = sm.score.toDouble()
+                suitUnc = sm.uncertain
             }
 
             if (bestRank == null || bestSuit == null) {
                 return failReason("match_fail rank=$bestRank suit=$bestSuit")
             }
 
-            val conf = (rankConf * 0.55 + suitConf * 0.45).coerceIn(0.0, 1.0)
+            // V2.9.574: confidence取两门min（保守值，禁止rank/suit互相背书）；旧加权0.55/0.45废弃
+            val conf = minOf(rankConf, suitConf).coerceIn(0.0, 1.0)
             if (handIndex == 0) hand0FailReason = "" else hand1FailReason = ""
-            Log.d(TAG, "H${handIndex}: ${bestRank}${bestSuit} conf=${String.format("%.2f", conf)} r=${String.format("%.2f", rankConf)} s=${String.format("%.2f", suitConf)}")
-            CardResult(bestRank, bestSuit, conf.toFloat(), rankConf.toFloat(), suitConf.toFloat())
+            Log.d(TAG, "H${handIndex}: ${bestRank}${bestSuit} conf=${String.format("%.2f", conf)} r=${String.format("%.2f", rankConf)}${if (rankUnc) "(U)" else ""} s=${String.format("%.2f", suitConf)}${if (suitUnc) "(U)" else ""}")
+            CardResult(bestRank, bestSuit, conf.toFloat(), rankConf.toFloat(), suitConf.toFloat(),
+                slot = handIndex, rankUncertain = rankUnc, suitUncertain = suitUnc)
         } catch (e: Exception) {
             failReason("exception: ${e.message}")
         }
@@ -853,7 +1005,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val result = recognizeHandCard(screenshot, i)
             if (result != null) {
                 holeCards.add(result)
-                diag.append("H$i=OK(${result.rank}${result.suit},c=%.2f);".format(result.confidence))
+                // V2.9.574: r/s分别带不确定标记，便于diag定位是rank还是suit不可信
+                val u = (if (result.rankUncertain) "rU" else "") + (if (result.suitUncertain) "sU" else "")
+                diag.append("H$i=OK(${result.rank}${result.suit},c=%.2f%s);".format(result.confidence, if (u.isNotEmpty()) ",$u" else ""))
             } else {
                 val reason = if (i == 0) hand0FailReason else hand1FailReason
                 diag.append("H$i=FAIL($reason);")
@@ -865,7 +1019,8 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val result = recognizeCommunityCard(screenshot, i)
             if (result != null) {
                 communityCards.add(result)
-                diag.append("C$i=OK(${result.rank}${result.suit},c=%.2f);".format(result.confidence))
+                val u = (if (result.rankUncertain) "rU" else "") + (if (result.suitUncertain) "sU" else "")
+                diag.append("C$i=OK(${result.rank}${result.suit},c=%.2f%s);".format(result.confidence, if (u.isNotEmpty()) ",$u" else ""))
             }
         }
 
