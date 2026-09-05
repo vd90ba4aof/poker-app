@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.572 · BB多源硬锁+码深单位修复+门控物理信号+河牌eq回填+位置方向+set三花面降级"
+        android:text="V2.9.573 · 物理动作可行性闸(全押面禁raise+禁点空气+blindBB补传+全押识别物理重写)"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

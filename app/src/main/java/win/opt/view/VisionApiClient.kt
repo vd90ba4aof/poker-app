@@ -1438,13 +1438,18 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                             localNoActionWindow = true
                         }
                     }
-                    // V2.9.526: 没轮到我时，本地操作区结果不USE（灰色预处理按钮），
-                    // 但仍执行识别用于诊断日志
+                    // V2.9.573 闸1: useLocal物理一致性——按钮集合必须与物理行数严格一致：
+                    //   A 三按钮(free-check/面对下注可加注)：加注行(btn3)物理存在(>=300黄像素) 且 mr OCR有效
+                    //     (LocalActionRecognizer内mr已绑定btn3黄像素门控，minRaise!=null隐含canRaise)；
+                    //   B 全押两按钮(弃牌+跟注)：跟注行(btn2)物理存在(facingBet=btn2>=100) 且 callAmount>0；
+                    //   加注行不存在时绝不组"加注"按钮(16日志铁证: 全押帧btn3Y=0只有弃牌+跟注)。
                     val useLocal = isMyTurn && lar != null && lar.confidence >= LOCAL_CONFIDENCE_THRESHOLD && (
-                        // A: 三按钮正常
-                        (lar.minRaise != null) ||
-                        // B: 全押两按钮
-                        (lar.facingBet && lar.callAmount != null && lar.callAmount > 0)
+                        // A: 三按钮正常——加注行物理存在且mr有效(闸1门控已在LocalActionRecognizer内)
+                        (lar.btn3Yellow >= LocalActionRecognizer.BTN_PHYSICAL_THRESHOLD && lar.minRaise != null) ||
+                        // B: 全押两按钮——跟注行物理存在(btn2黄像素>=300硬判据)，且加注行物理不存在
+                        (lar.facingBet && lar.btn2Yellow >= LocalActionRecognizer.BTN_PHYSICAL_THRESHOLD
+                            && lar.callAmount != null && lar.callAmount > 0
+                            && lar.btn3Yellow < LocalActionRecognizer.BTN_PHYSICAL_THRESHOLD)
                     )
                     if (lar != null && useLocal) {
                         val buttons = mutableListOf<String>()

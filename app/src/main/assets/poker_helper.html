@@ -1332,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.572',
+  CURRENT_VERSION:'2.9.573',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2630,13 +2630,18 @@ var HandStateMachine=(function(){
     var hasCall=_hasBtn(btns,'跟注');
     var hasCheck=_hasBtn(btns,'过牌')||_hasBtn(btns,'让牌');
     var hasAllin=_hasBtn(btns,'全下')||_hasBtn(btns,'全押');
+    var hasRaise=_hasBtn(btns,'加注')||_hasBtn(btns,'下注')||_hasBtn(btns,'Raise')||_hasBtn(btns,'Bet');
+    // V2.9.573 闸1: 全押子状态物理判据——面对全押=有跟注按钮且无加注行(2按钮)。
+    //   旧判据hasAllin(在自己按钮找"全下")永false + FACING_BET先短路=FACING_ALLIN死分支。
+    //   全押面必须最先判(它是bet面的物理特例: 数学上不可raise)。
+    var physFacingAllin=hasCall&&!hasRaise;
     if(scene==='raise'){_s.subState=SubState.FACING_RAISE;}
+    else if(physFacingAllin||scene==='allin'){_s.subState=SubState.FACING_ALLIN;}
     else if(scene==='check'||(hasCheck&&!hasCall)){
       // V2.9.154fix: check场景=对手没下注=我们有主动权(可probe/CBet)
       // PFR/3Bettor=CBet计划; Defender=probe机会
       _s.subState=SubState.INITIATIVE;
     }else if(scene==='bet'||(hasCall&&!hasCheck)){_s.subState=SubState.FACING_BET;}
-    else if(hasAllin&&hasCall){_s.subState=SubState.FACING_ALLIN;}
     else if(scene==='open'){_s.subState=(_s.heroRole===HeroRole.PFR)?SubState.INITIATIVE:SubState.CHECK_BEHIND;}
   }
 
@@ -2750,7 +2755,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.572';
+var APP_VERSION='2.9.573';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8882,6 +8887,60 @@ function _decideInner(){
         }catch(_ce){}
       }
     }catch(_syncErr){console.log('[V2.9.571一致性] 同步异常: '+_syncErr.message);}
+
+    // V2.9.573 闸1(物理动作可行性闸)·决策出口物理收敛 ★★★
+    //   屏幕按钮集合=动作白名单。识别可能错、策略可能飘，但屏幕上没有的按钮数学上永远点不了。
+    //   信号源: G.buttons(本帧按钮文字,vision) + G.scene(scene推断已用同一物理判据重写)。
+    //   规则(与Kotlin executeAutoTap入口物理闸双保险，任一端拦截都能止血):
+    //     ① 面对全押(scene='allin'): raise/allin类按pot odds改call/fold(全押数学分支)
+    //     ② raise类无加注行: 有跟注→call，无跟注→fold；sizing>码深钳到码深
+    //     ③ call/check互改: 无跟注有让牌→check；面对下注(有跟注无让牌)check→fold(安全方向)
+    try{
+      var _pb=(G.buttons||[]);
+      var _pCanRaise=_pb.some(function(b){return /加注|下注|全押|全下|raise|bet/i.test(b);});
+      var _pCanCall=_pb.some(function(b){var m=(b||'').replace(/[^0-9]/g,'');return /跟注|call/i.test(b)&&parseInt(m)>0;});
+      var _pCanCheck=_pb.some(function(b){return /让牌|过牌|check/i.test(b);});
+      var _pa=result.a, _changed=null;
+      var _nq=0;
+      if(G.scene==='allin'||(_pCanCall&&!_pCanRaise)){
+        // 面对全押: 有效跟注额=min(bet,stk)，赔率门槛=eb/(pot+eb)
+        var _eb=(G.bet>0)?Math.min(G.bet,G.stk||G.bet):0;
+        _nq=_eb>0?Math.round(_eb/((G.pot||0)+_eb)*100):0;
+        if(_pa==='raise'||_pa==='raise_big'||_pa==='allin'){
+          result.a=((result.eq||0)>=_nq)?'call':'fold';
+          result.v=0;
+          _changed=_pa+'→'+result.a+'(全押面赔率需'+_nq+'%,eq='+(result.eq||0)+'%)';
+        }
+      }
+      if(!_changed&&(result.a==='raise'||result.a==='raise_big'||result.a==='allin')){
+        if(!_pCanRaise){
+          result.a=_pCanCall?'call':'fold';
+          result.v=0;
+          _changed='raise类但屏幕无加注行→'+result.a;
+        }else{
+          // sizing钳码深: 15BB码深绝不能发30BB加注(16日志铁证: 鱼偏移补30BB>stk15BB)
+          if(result.v&&G.stk>0&&result.v>G.stk){
+            console.log('[V2.9.573物理闸] sizing='+result.v+'BB>码深'+G.stk+'BB→钳到码深');
+            result.v=G.stk;
+          }
+        }
+      }
+      if(!_changed&&result.a==='call'&&!_pCanCall&&_pCanCheck){
+        result.a='check';result.v=0;_changed='call→check(free-check局面无跟注按钮)';
+      }
+      if(!_changed&&result.a==='check'&&_pCanCall&&!_pCanCheck){
+        // 面对下注不存在check按钮→保守fold(配合v571 free-check保护: 真bet面绝不误点check白输钱)
+        result.a='fold';result.v=0;_changed='check→fold(面对下注无让牌按钮)';
+      }
+      if(_changed){
+        result.r='[物理闸] '+_changed+' | '+(result.r||'');
+        console.log('[V2.9.573物理闸] 动作收敛: '+_changed+' buttons='+JSON.stringify(_pb)+' scene='+G.scene);
+        try{
+          var _pcKey=actionToColor(result.a);
+          if(result._colorInfo){result._colorInfo.colorKey=_pcKey;result._colorInfo.color=ColorStrategy.COLORS[_pcKey];}
+        }catch(_pce){}
+      }
+    }catch(_pErr){console.log('[V2.9.573物理闸] 收敛异常: '+_pErr.message);}
   }
   return result;
 }
@@ -11081,11 +11140,15 @@ var ButtonValidator=(function(){
   // 按钮分类(与detectSceneFromButtons对齐)
   function _classify(btns,street){
     if(!btns||btns.length===0)return'empty';
+    var _hc=_has(btns,'跟注');
+    var _hr=btns.some(function(b){return b.indexOf('加注')>=0||b.indexOf('下注')>=0;});
     var hasAllin=_has(btns,'全押');
+    // V2.9.573 闸1: 全押面物理分类——有跟注无加注行=面对全押(自己屏幕无"全下"按钮)
+    if(_hc&&!_hr)return'allin';
     if(hasAllin)return'allin';
     var hasReraise=btns.some(function(b){return b.indexOf('再加注')>=0||b.indexOf('3bet')>=0;});
     if(hasReraise)return'reraise';
-    var hasCall=_has(btns,'跟注');
+    var hasCall=_hc;
     var hasCheck=_has(btns,'过牌');
     var hasCheckFold=btns.some(function(b){return(_has([b],'过牌'))&&_has([b],'弃牌');});
     if(hasCheckFold)hasCheck=true;
@@ -11209,13 +11272,20 @@ function detectSceneFromButtons(buttons, street, activePlayers) {
   }
   // 全下检测：支持"全押"/"全下"/"all-in"/"ALL IN"等多变体
   var hasAllin = buttons.some(function(b){return b.indexOf('全下')>=0||b.indexOf('全押')>=0||b.indexOf('all-in')>=0||b.indexOf('ALL IN')>=0||b.indexOf('All-In')>=0;});
-  if (hasAllin) return 'allin';
   var hasReraise = buttons.some(function(b){return b.indexOf('再加注')>=0||b.indexOf('3-bet')>=0||b.indexOf('3bet')>=0;});
-  if (hasReraise) return 'reraise';
   // 让牌/过牌检测：支持"让牌"/"过牌"/"让牌／弃牌"/"弃牌让牌"组合按钮
   var hasCall = buttons.some(function(b){return b.indexOf('跟注')>=0||b.indexOf('Call')>=0||b.indexOf('call')>=0;});
   var hasCheck = buttons.some(function(b){return b.indexOf('过牌')>=0||b.indexOf('让牌')>=0||b.indexOf('Check')>=0||b.indexOf('check')>=0;});
   var hasRaise = buttons.some(function(b){return b.indexOf('加注')>=0||b.indexOf('Raise')>=0||b.indexOf('下注')>=0||b.indexOf('Bet')>=0;});
+  // V2.9.573 闸1: 全押唯一定义——面对对方全押时我们屏幕只有【弃牌+跟注】两按钮、
+  //   无"全下"文字按钮(旧代码在自己按钮找"全押/全下"→永false，全押面被误判bet/allin分支不可达)。
+  //   物理判据: 有跟注 且 无加注/下注行(且无自己的全下按钮)=面对全押。翻前也可能面对全押(4bet jam)。
+  if (hasCall && !hasRaise && !hasAllin) {
+    console.log('[场景检测] 有跟注无加注行(2按钮)→面对全押 allin | ['+buttons.join(', ')+']');
+    return 'allin';
+  }
+  if (hasAllin) return 'allin';
+  if (hasReraise) return 'reraise';
   // V2.9.141: "弃牌让牌"/"弃牌过牌"组合按钮=有让牌选项→check场景，不是bet
   var hasCheckFold = buttons.some(function(b){return (b.indexOf('让牌')>=0||b.indexOf('过牌')>=0)&&b.indexOf('弃牌')>=0;});
   if (hasCheckFold) hasCheck = true; // 组合按钮包含让牌选项
@@ -11790,11 +11860,19 @@ function onVisionResult(data){
     // V2.9.141: "任意加注""最小加注""半池加注"等变体
     var hasRaiseVariant=btns.some(function(b){return b.indexOf('加注')>=0||b.indexOf('加')>=0&&b.indexOf('弃')<0;});
     if(hasRaiseVariant) hasRaise=true;
+    // V2.9.573 闸1: 全押唯一定义——面对对方全押时，我们自己屏幕只有【弃牌+跟注】两按钮，
+    //   永远不会出现"全下"按钮(旧代码hasAllin在自己按钮里找"全押/全下"→永false，
+    //   导致全押面scene误判为bet、FallbackStrategy的allin专属分支(只call/fold)永远不可达)。
+    //   物理判据: 有跟注按钮 且 无加注/下注/全押按钮 = 面对全押(2按钮)。
     var inferredScene='';
-    if(hasAllin){
+    if(hasCall && !hasRaise && !hasAllin){
+      // 有跟注但无加注行=对手全押(2按钮弃牌+跟注)
+      inferredScene='allin';
+    }else if(hasAllin && hasCall){
+      // 自己短码时屏幕可能显示"全下"按钮+跟注(3按钮短码局面)
       inferredScene='allin';
     }else if(hasCall && !hasCheck){
-      // 有跟注按钮但没有让牌=有人下注了
+      // 有跟注按钮但没有让牌=有人下注了(可加注的正常bet面)
       inferredScene='bet';
     }else if(hasCheck && !hasCall){
       // 有让牌但没有跟注=没人下注
@@ -12997,6 +13075,15 @@ function onChipReset(){
 function autoExecuteDecision(r, isAutoMode) {
   if (!isAutoMode) return false; // V2.9.553-rev9: 移除_autoExecEnabled依赖(Kotlin侧isAutoCaptureOn已是权威源)
 
+  // V2.9.573 闸1: 金额单位统一——JS决策侧G.pot/G.stk/G.bet/r.v均为BB归一化值，
+  //   Kotlin执行侧按chips消费(sizing/pot→bet_33等预设比值不受单位影响，但blindBB需chips单位
+  //   才能做isStandardPreflopRaise的BB倍数判断；cachedToCall>0判断为0/非0也需正单位)。
+  //   bbRef=chips单位BB(v572硬锁保证有效；0=盲注未知→字段传0，Kotlin侧isStandardPreflopRaise
+  //   对bigBlind<=0 return false走保守路径)。
+  var _bbRef = window._lastVisionBB || G._lockedBB || 0;
+  function _toChips(v){ var n = parseInt(v)||0; return (_bbRef>0 && n>0) ? Math.round(n*_bbRef) : n; }
+  var _potChips = _toChips(G.pot), _stkChips = _toChips(G.stk), _betChips = _toChips(G.bet), _vChips = _toChips(r.v);
+
   // V2.9.566 FIX: 本帧未识别到任何行动按钮（新街过渡/按钮未渲染，本地CV+VLM双失败）→不盲点击，等下帧
   //   v565铁证：空按钮帧点击(195,2250)fold位，但按钮未渲染点空；若渲染则是free→左按钮实为check。
   //   盲fold可能误弃强牌，盲check在真bet面反而是fold→安全方向不成立。不点击=等4s重抓，按钮渲染后再决策。
@@ -13021,9 +13108,10 @@ function autoExecuteDecision(r, isAutoMode) {
         reason: 'Low confidence, force fold',
         eq: r.eq || 0,
         hClass: r.hClass ? r.hClass.name : '?',
-        pot: G.pot || 0,
-        myChips: G.stk || 0,
-        toCall: G.bet || 0
+        pot: _potChips,
+        myChips: _stkChips,
+        toCall: _betChips,
+        blindBB: _bbRef
       }));
     }
     return true;
@@ -13039,10 +13127,11 @@ function autoExecuteDecision(r, isAutoMode) {
         reason: exec.reason,
         eq: r.eq || 0,
         hClass: r.hClass ? r.hClass.name : '?',
-        sizing: r.v || 0,
-        pot: G.pot || 0,
-        myChips: G.stk || 0,
-        toCall: G.bet || 0,
+        sizing: _vChips,
+        pot: _potChips,
+        myChips: _stkChips,
+        toCall: _betChips,
+        blindBB: _bbRef,
         phase: G.phase || 'post',
         nash: r._nash ? true : false
       }));

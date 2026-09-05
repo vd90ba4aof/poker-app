@@ -835,8 +835,73 @@ class FloatingService : Service() {
                 return
             }
             
+            // V2.9.573 闸1(物理动作可行性闸): 屏幕按钮集合=动作白名单。
+            //   物理真相: 全押面对方时我们屏幕只有【弃牌+跟注】两按钮(右侧加注行不存在)，
+            //   永远不可能raise/allin——与识别准确率无关、100%可证(16日志铁证: btn3Y=0全押帧
+            //   鱼偏移call→raise+翻后bet sizing路径点右侧空气=豪哥看到的"没点击")。
+            //   判据全部来自本帧latestButtonPositions(vision精准坐标，无按钮文字时btns为空)：
+            //     hasRaiseRow=屏幕存在"加注/下注/全押/全下"按钮(3按钮或主动全下局面)
+            //     hasCallRow =屏幕存在"跟注X"按钮(X>0，面对真下注)
+            //     hasCheckRow=屏幕存在"让牌/过牌"按钮(free-check局面)
+            val physRaise = latestButtonPositions.any { bp ->
+                val t = bp.text ?: ""
+                t.contains("加注") || t.contains("下注") || t.contains("raise", true) ||
+                t.contains("bet", true) || t.contains("全押") || t.contains("全下") || t.contains("all", true)
+            }
+            val physCall = latestButtonPositions.any { bp ->
+                val t = bp.text ?: ""
+                val amt = t.replace(Regex("[^0-9]"), "").toIntOrNull() ?: 0
+                (t.contains("跟注") || t.contains("call", true)) && amt > 0
+            }
+            val physCheck = latestButtonPositions.any { bp ->
+                val t = bp.text ?: ""
+                t.contains("让牌") || t.contains("过牌") || t.contains("check", true)
+            }
+            run physGate@{
+                if (action == "allin") {
+                    // 主动全下/纳什push: 屏幕必须有加注/全下按钮行；面对全押(只有跟注)→只能call
+                    if (!physRaise) {
+                        if (physCall) {
+                            Log.w(TAG, "★物理闸: allin但屏幕无加注/全下按钮(面对全押)→降级call | btns=${latestButtonPositions.joinToString(","){it.text}}")
+                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "物理闸拦截: allin无加注按钮→降级call(面对全押)", "btns=${latestButtonPositions.joinToString(","){it.text}}") } catch (_: Exception) {}
+                            action = "call"
+                        } else {
+                            Log.w(TAG, "★物理闸: allin但屏幕无任何加注/跟注按钮(过渡帧?)→取消点击 | btns=${latestButtonPositions.size}")
+                            physicalGateAbort("allin", "屏幕无加注/全下按钮且无跟注按钮", latestButtonPositions)
+                            return@executeAutoTap
+                        }
+                    }
+                }
+                if (action == "raise" || action == "raise_big") {
+                    if (!physRaise) {
+                        // 屏幕无加注行: 全押面→call(有跟注)；free-check/过渡无跟注→不点击(raise无意义)
+                        if (physCall) {
+                            Log.w(TAG, "★物理闸: $action 但屏幕无加注按钮(面对全押)→降级call | btns=${latestButtonPositions.joinToString(","){it.text}}")
+                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "物理闸拦截: $action无加注按钮→降级call(面对全押)", "btns=${latestButtonPositions.joinToString(","){it.text}}") } catch (_: Exception) {}
+                            action = "call"
+                        } else {
+                            Log.w(TAG, "★物理闸: $action 但屏幕无加注按钮且无跟注(free-check误判/过渡帧)→取消点击 | btns=${latestButtonPositions.size}")
+                            physicalGateAbort(action, "屏幕无加注按钮且无跟注按钮", latestButtonPositions)
+                            return@executeAutoTap
+                        }
+                    }
+                }
+                // 面对真下注(有跟注按钮)时check不存在——check类指令保守改fold(v571 free-check保护在
+                //   autoDecision层已防fold误点check；这里反向: 真bet面check=错误动作→fold安全方向)
+                if (action == "check" && physCall && !physCheck) {
+                    Log.w(TAG, "★物理闸: check但屏幕是跟注按钮(面对下注无让牌)→保守fold | btns=${latestButtonPositions.joinToString(","){it.text}}")
+                    try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "物理闸拦截: check面对下注→保守fold", "btns=${latestButtonPositions.joinToString(","){it.text}}") } catch (_: Exception) {}
+                    action = "fold"
+                }
+                // call指令但屏幕无跟注、有让牌→check(v566回归红线: free-check帧call必须能落到让牌按钮，
+                //   when分支本有call→check fallback，这里仅显式标注，不改动作)
+                if (action == "call" && !physCall && physCheck) {
+                    Log.d(TAG, "★物理闸: call但屏幕为让牌(free-check)→check按钮匹配 | btns=${latestButtonPositions.joinToString(","){it.text}}")
+                }
+            }
+
             // V2.9.206: GG扑克下注金额自动输入——先点预设%按钮，再点加注确认
-            if (action == "raise" || action == "raise_big") {
+            if (action == "raise" || action == "raise_big" || action == "allin") {
                 val sizing = decisionData.optInt("sizing", 0)
                 val pot = decisionData.optInt("pot", 0)
                 val phase = decisionData.optString("phase", "post")
@@ -897,7 +962,15 @@ class FloatingService : Service() {
             
             val btns = latestButtonPositions
             Log.d(TAG, "executeAutoTap: action=$action, availableButtons=${btns.size}")
+            // V2.9.573 闸1: raise/allin无按钮坐标时禁止fallback点固定坐标
+            //   (raise兜底0.819,0.960在全押两按钮局面=空气点，16日志铁证"没点击"根因之一)。
+            //   fold/check/call的固定坐标保留(安全方向且GG坐标经实测)。
             if (btns.isEmpty()) {
+                if (action == "raise" || action == "raise_big" || action == "allin") {
+                    Log.w(TAG, "★物理闸: $action 无按钮坐标→禁止固定坐标兜底，取消点击")
+                    physicalGateAbort(action, "无按钮坐标(vision本帧未识别到按钮)，加注类禁止盲点点空气", btns)
+                    return
+                }
                 Log.w(TAG, "autoTap: 无按钮坐标，回退固定位置")
                 executeAutoTapFallback(action)
                 return
@@ -913,8 +986,13 @@ class FloatingService : Service() {
                     ?: btns.find { it.text.contains("让牌") || it.text.contains("过牌") || it.text.contains("check", true) } // call→check fallback
                 "raise", "raise_big" -> btns.find { it.text.contains("加注") || it.text.contains("下注") || it.text.contains("raise", true) || it.text.contains("bet", true) }
                     ?: btns.find { it.text.contains("全押") || it.text.contains("全下") || it.text.contains("all", true) } // raise→allin fallback (短码时)
-                "allin" -> btns.find { it.text.contains("全押") || it.text.contains("全下") || it.text.contains("all", true) }
-                    ?: btns.find { it.text.contains("加注") || it.text.contains("下注") || it.text.contains("raise", true) || it.text.contains("bet", true) } // allin→raise fallback
+                "allin" -> {
+                    // V2.9.573 闸1: allin优先找"全押/全下"文字；没有则fallback"加注"按钮(短码时加注钮
+                    //   即为all-in，且翻后bet sizing路径已先点100%预设——静默降级min-raise已由
+                    //   sizing路径+入口物理闸消除：到达这里时physRaise=true，点加注钮不再是错误方向)
+                    btns.find { it.text.contains("全押") || it.text.contains("全下") || it.text.contains("all", true) }
+                        ?: btns.find { it.text.contains("加注") || it.text.contains("下注") || it.text.contains("raise", true) || it.text.contains("bet", true) }
+                }
                 else -> btns.find { it.text.contains(action, true) }
             }
             
@@ -955,6 +1033,13 @@ class FloatingService : Service() {
                     }
                 }, "AutoTapThread").start()
             } else {
+                // V2.9.573 闸1: 未匹配到目标按钮。raise/allin点固定坐标=点空气(全押面右侧无按钮)，
+                //   绝不盲发；fold/check/call安全方向保留固定坐标兜底。
+                if (action == "raise" || action == "raise_big" || action == "allin") {
+                    Log.w(TAG, "★物理闸: $action 未匹配到对应按钮→禁止fallback点固定坐标，取消点击 | btns=${btns.joinToString(","){it.text}}")
+                    physicalGateAbort(action, "未匹配到加注/全下按钮(屏幕按钮: ${btns.joinToString(","){it.text}})", btns)
+                    return
+                }
                 Log.w(TAG, "executeAutoTap: 未匹配按钮 $action, 回退固定位置")
                 executeAutoTapFallback(action)
             }
@@ -963,6 +1048,31 @@ class FloatingService : Service() {
             executeAutoTapFallback(action)
             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)  // V3.50: Bug#4 BLE执行失败→ERROR_RECOVERY
         }
+    }
+
+    /**
+     * V2.9.573 闸1: 物理动作不可行时的安全中止——不点击(绝不点空气/错误按钮)、
+     * 悬浮窗红底强提醒豪哥人工接管、FSM RESET回IDLE并续截图(不卡链路)。
+     * 用于: 屏幕无加注/全下按钮却收到raise/allin指令等"数学上不可能"的动作。
+     */
+    private fun physicalGateAbort(action: String, detail: String, btns: List<VisionApiClient.ButtonPosition>) {
+        try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH,
+            "★物理闸中止: action=$action $detail", "btns=${btns.size}:${btns.joinToString(","){it.text}}") } catch (_: Exception) {}
+        try { DiagnosticLogger.logEsp32Tap("physGate_${action}_ABORT", 0, 0, action, "PHYSICAL_GATE_BLOCK") } catch (_: Exception) {}
+        try {
+            updateAdviceNotification("⛔ 物理闸拦截: $action", "屏幕无对应按钮，请人工操作（$detail）")
+            updateBallAdvice("COLOR:FOLD|SIGNAL:PHYS_GATE|EQ:0|REASON:物理闸拦截$action-请人工")
+            tvRecResult?.text = "⛔ $action 不可执行"
+            tvRecResult?.setBackgroundColor(0xFF8B0000.toInt())
+            tvRecDetail?.text = "$detail\n按钮=${btns.joinToString(","){it.text}}"
+            tvRecDetail?.visibility = View.VISIBLE
+        } catch (_: Exception) {}
+        // FSM回IDLE + 续截图(等下一帧物理现实与决策一致时再执行)
+        cancelBleAckTimeout()
+        pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+        handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }
+        lastDecisionTime = System.currentTimeMillis()
+        if (autoCaptureEnabled) scheduleNextAutoCapture()
     }
     // V3.14: 精确金额输入 — 点击输入框+逐个点数字键盘 (GG数字键盘坐标需实测)
     private fun executeExactBet(amount: Int): Boolean {

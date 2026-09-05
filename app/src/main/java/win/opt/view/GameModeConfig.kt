@@ -391,7 +391,11 @@ object GameModeConfig {
      * 策略要求的BB倍数 <= 4BB 时用标准加注按钮，否则需要全押
      */
     fun isStandardPreflopRaise(sizing: Int, bigBlind: Int): Boolean {
-        if (bigBlind <= 0) return true
+        // V2.9.573 闸1: bigBlind<=0=盲注未知(JS未传/锁存失败)——旧逻辑return true导致
+        //   6BB等大加注意图被静默点成默认min-raise按钮(16日志铁证: raise_big 6BB blindBB=0→失真)。
+        //   未知盲注时绝不假设标准按钮，return false→走全押(过激方向有JS侧物理闸+中置信人工兜底)；
+        //   正常路径blindBB由JS以chips单位传参(bbRef=_lastVisionBB||_lockedBB，v572硬锁保证有效)。
+        if (bigBlind <= 0) return false
         val bb = sizing.toDouble() / bigBlind
         // 策略要求的BB倍数 <= 4BB 时用标准加注按钮
         return bb <= 4.0

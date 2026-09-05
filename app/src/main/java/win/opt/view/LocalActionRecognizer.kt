@@ -60,6 +60,10 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         private const val POT_YELLOW_THRESHOLD = 100
         // 按钮区域黄色像素阈值
         private const val BTN_YELLOW_THRESHOLD = 100
+        // V2.9.573 闸1: 动作可行性物理阈值——按钮行"真实存在"的判据(>=2个黄色行动按钮计数用100，
+        //   canRaise/canCall动作白名单用300)。真按钮帧实测btn2/btn3最小587/1104，全押面btn3=0、
+        //   非行动窗口双0；300阈值2倍余量，与VisionApiClient非行动窗口门控(v572)同源。
+        const val BTN_PHYSICAL_THRESHOLD = 300
         // V2.9.553-rev9-fix-v3: 右侧下注预设面板黄色金额像素阈值（判定"轮到我"）
         // free check局面主按钮灰色、只有下注预设面板亮黄色金额（豪哥规则：有黄色数字按钮=轮到我）
         private const val PRESET_YELLOW_THRESHOLD = 400
@@ -899,26 +903,39 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             }
             diagSb.append("call=$callDiag;")
 
-            val (minRaise, mrConf) = recognizeNumber(
+            // V2.9.573 闸1(物理动作可行性闸): mr/presets 数字OCR必须绑定加注行(btn3)黄像素门控。
+            //   全押面对方时屏幕只有【弃牌+跟注】两按钮，btn3行物理不存在(btn3Yellow=0)，
+            //   但mr数字区域可能从UI残影/其他金额读出高置信数字(16日志铁证: btn3Y=0帧仍mr=1519 c=0.94)
+            //   →组出假"加注"按钮喂给决策层。物理判据：btn3行黄像素>=300才认可加注行存在
+            //   (真按钮帧实测btn3最小1104；free-check帧btn3Y=1104~1650天然放行；全押帧btn3Y=0被拦)。
+            //   阈值与VisionApiClient非行动窗口门控/v572物理门控同源(300, 2倍余量)。
+            val canRaise = btn3Yellow >= BTN_PHYSICAL_THRESHOLD
+            val (mrRaw, mrConf) = recognizeNumber(
                 pixels, opW, opH,
                 btn3X1 - opX1, btnY1 - opY1,
                 btn3X2 - opX1, btnY2 - opY1
             )
-            diagSb.append("mr=${if(minRaise!=null) "${minRaise}(c=%.2f)".format(mrConf) else "null(c=%.2f)".format(mrConf)};")
+            val minRaise = if (canRaise) mrRaw else null
+            diagSb.append("mr=${if(minRaise!=null) "${minRaise}(c=%.2f)".format(mrConf) else if(canRaise) "null(c=%.2f)".format(mrConf) else "gate(btn3Y=$btn3Yellow,c=%.2f)".format(mrConf)};")
             if (minRaise != null && mrConf < minConf) minConf = mrConf
 
+            // V2.9.573 闸1: 预设金额行(findAmountRows)同属加注体系——无加注行(全押面/非行动帧)时
+            //   预设面板物理不渲染，读出的金额一律作废(16日志铁证: btn3Y=0帧presets=0已正确;
+            //   但btn2Y=0/btn3Y高的残影帧曾读出presets=1519×3假阳性，canRaise门控一并拦截)
             val presets = ArrayList<Int>()
-            val rows = findAmountRows(
-                pixels, opW, opH,
-                preY1 - opY1, preY2 - opY1,
-                preX1 - opX1, preX2 - opX1
-            )
-            for (row in rows) {
-                val (amt, _) = recognizeNumber(
+            if (canRaise) {
+                val rows = findAmountRows(
                     pixels, opW, opH,
-                    row.x1, row.y1, row.x2, row.y2 + 1
+                    preY1 - opY1, preY2 - opY1,
+                    preX1 - opX1, preX2 - opX1
                 )
-                if (amt != null) presets.add(amt)
+                for (row in rows) {
+                    val (amt, _) = recognizeNumber(
+                        pixels, opW, opH,
+                        row.x1, row.y1, row.x2, row.y2 + 1
+                    )
+                    if (amt != null) presets.add(amt)
+                }
             }
             diagSb.append("presets=${presets.size}:${presets.joinToString(",")};")
             diagSb.append("conf=%.2f".format(if (minConf >= 1.0f) 1.0f else minConf))
