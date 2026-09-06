@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.577 · 本地CV代码精简——删除冗余诊断日志/死代码/状态字段"
+        android:text="V2.9.578 · 牌张识别多模板库——40%合成单模板升级为133个真实字形多模板1-NN, 稳定帧硬认率100%"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

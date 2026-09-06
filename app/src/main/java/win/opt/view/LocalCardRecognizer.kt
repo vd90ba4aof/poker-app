@@ -43,10 +43,14 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         override fun hashCode(): Int = data.contentHashCode() * 31 + w * 17 + h
     }
 
-    private val commRankTemplates = HashMap<String, Template>()
-    private val commSuitTemplates = HashMap<String, Template>()
-    private val handRankTemplates = HashMap<String, Template>()
-    private val handSuitTemplates = HashMap<String, Template>()
+    // V2.9.578: 多模板库——每个label挂多个真实字形模板(1-NN: 类内取最高分)。
+    // 离线LOOCV+全链路回测(75张真实截图)实证替代v577的40%软投票合成单模板:
+    //   稳定帧 comm_rank 99.1%→100%(消除5→6硬伤), hand_rank硬认102→110(真7/8/Q误拒全修复),
+    //   硬伤0, 误拒干净牌8→0; 仅emoji遮挡脏字(fi34)被0.55双门槛正确拒认。
+    private val commRankTemplates = HashMap<String, MutableList<Template>>()
+    private val commSuitTemplates = HashMap<String, MutableList<Template>>()
+    private val handRankTemplates = HashMap<String, MutableList<Template>>()
+    private val handSuitTemplates = HashMap<String, MutableList<Template>>()
 
     private val RANKS = arrayOf("A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2")
     private val SUITS = arrayOf("s", "h", "d", "c")
@@ -76,29 +80,35 @@ class LocalCardRecognizer private constructor(private val context: Context) {
     fun loadTemplates() {
         if (loaded) return
         try {
+            // V2.9.578: 多模板命名 {kind}_{label}_{idx}.png，idx 00..09，缺失即止
             for (rank in RANKS) {
-                loadAssetTemplate("card_templates/comm/rank_$rank.png")?.let {
-                    commRankTemplates[rank] = it
-                }
-                loadAssetTemplate("card_templates/hand/rank_$rank.png")?.let {
-                    handRankTemplates[rank] = it
-                }
+                loadTemplateSeries("card_templates/comm/rank_$rank", commRankTemplates, rank)
+                loadTemplateSeries("card_templates/hand/rank_$rank", handRankTemplates, rank)
             }
             for (suit in SUITS) {
-                loadAssetTemplate("card_templates/comm/suit_$suit.png")?.let {
-                    commSuitTemplates[suit] = it
-                }
-                loadAssetTemplate("card_templates/hand/suit_$suit.png")?.let {
-                    handSuitTemplates[suit] = it
-                }
+                loadTemplateSeries("card_templates/comm/suit_$suit", commSuitTemplates, suit)
+                loadTemplateSeries("card_templates/hand/suit_$suit", handSuitTemplates, suit)
             }
             loaded = true
-            Log.i(TAG, "Templates loaded: comm ${commRankTemplates.size}r/${commSuitTemplates.size}s, " +
-                    "hand ${handRankTemplates.size}r/${handSuitTemplates.size}s")
+            Log.i(TAG, "Templates loaded: comm ${countTemplates(commRankTemplates)}r/${countTemplates(commSuitTemplates)}s, " +
+                    "hand ${countTemplates(handRankTemplates)}r/${countTemplates(handSuitTemplates)}s " +
+                    "(${commRankTemplates.size}+${handRankTemplates.size} rank labels)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load templates", e)
         }
     }
+
+    /** 加载某 label 的多模板系列：pathPrefix 如 "card_templates/comm/rank_8"，文件 pathPrefix_00.png.._09.png */
+    private fun loadTemplateSeries(pathPrefix: String, into: HashMap<String, MutableList<Template>>, label: String) {
+        for (idx in 0..9) {
+            val path = "%s_%02d.png".format(pathPrefix, idx)
+            val t = loadAssetTemplate(path) ?: break  // idx 连续，缺失即止
+            into.getOrPut(label) { mutableListOf() }.add(t)
+        }
+    }
+
+    private fun countTemplates(m: Map<String, MutableList<Template>>): Int =
+        m.values.sumOf { it.size }
 
     private fun loadAssetTemplate(path: String): Template? {
         return try {
@@ -363,7 +373,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
      *   ②双门槛——绝对分<0.55 或 与第二名分差<0.05 → uncertain=true（下游按不采信处理）。
      * @param useTopology true=rank模板启用拓扑否决；suit模板传false
      */
-    private fun match(query: Triple<BooleanArray, Int, Int>?, templates: Map<String, Template>, useTopology: Boolean = true): MatchOutcome {
+    private fun match(query: Triple<BooleanArray, Int, Int>?, templates: Map<String, out List<Template>>, useTopology: Boolean = true): MatchOutcome {
         if (query == null) return MatchOutcome(null, 0f, true)
         val (qData, qW, qH) = query
         if (qH == 0 || qW == 0) return MatchOutcome(null, 0f, true)
@@ -373,66 +383,78 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         var bestLabel: String? = null
         var bestScore = 0f
         var secondScore = 0f
-        for ((label, tmpl) in templates) {
-            // V2.9.574: 拓扑一票否决——签名矛盾的候选不参与IoU argmax
-            if (useTopology && qSig != null && topoVeto(qSig, tmpl.topo)) continue
-            val scale = tmpl.h.toFloat() / qH
-            val newW = (qW * scale).toInt().coerceAtLeast(1)
-            val qResized = resizeBinary(qData, qW, qH, newW, tmpl.h)
-
-            // V2.9.528: 水平居中对齐（原左对齐，偏移2-3px即崩）
-            val xOff = (newW - tmpl.w) / 2
-            val overlapW = minOf(newW, tmpl.w)
-
-            var fgUnion = 0
-            var agree = 0
-            var extraFg = 0
-            for (y in 0 until tmpl.h) {
-                // 1) 重叠区域：水平居中对齐
-                for (i in 0 until overlapW) {
-                    val qx = i + if (xOff > 0) xOff else 0
-                    val tx = i + if (xOff < 0) -xOff else 0
-                    if (qx in 0 until newW && tx in 0 until tmpl.w) {
-                        val q = qResized[y * newW + qx]
-                        val t = tmpl.data[y * tmpl.w + tx]
-                        if (!q || !t) {
-                            fgUnion++
-                            if (q == t) agree++
-                        }
-                    }
-                }
-                // 2) 宽度不匹配惩罚：超出部分的前景像素计入union但不计入agree
-                if (newW > tmpl.w) {
-                    for (qx in 0 until xOff) {
-                        if (!qResized[y * newW + qx]) extraFg++
-                    }
-                    for (qx in (xOff + tmpl.w) until newW) {
-                        if (!qResized[y * newW + qx]) extraFg++
-                    }
-                } else if (tmpl.w > newW) {
-                    for (tx in 0 until -xOff) {
-                        if (!tmpl.data[y * tmpl.w + tx]) extraFg++
-                    }
-                    for (tx in (-xOff + newW) until tmpl.w) {
-                        if (!tmpl.data[y * tmpl.w + tx]) extraFg++
-                    }
-                }
+        // V2.9.578: 多模板1-NN——每个label挂多个真实字形，类内取最高分，再跨类比argmax+双门槛。
+        // 单模板比对(resize到模板高+水平居中+IoU)逻辑与v577完全一致，仅外层多一层模板循环。
+        for ((label, tmpls) in templates) {
+            var labelBest = 0f
+            for (tmpl in tmpls) {
+                // V2.9.574: 拓扑一票否决——签名矛盾的候选模板不参与IoU argmax
+                if (useTopology && qSig != null && topoVeto(qSig, tmpl.topo)) continue
+                val score = iouWithTemplate(qData, qW, qH, tmpl)
+                if (score > labelBest) labelBest = score
             }
-            val totalUnion = fgUnion + extraFg
-            if (totalUnion > 0) {
-                val score = agree.toFloat() / totalUnion
-                if (score > bestScore) {
-                    secondScore = bestScore
-                    bestScore = score
-                    bestLabel = label
-                } else if (score > secondScore) {
-                    secondScore = score
-                }
+            if (labelBest > bestScore) {
+                secondScore = bestScore
+                bestScore = labelBest
+                bestLabel = label
+            } else if (labelBest > secondScore) {
+                secondScore = labelBest
             }
         }
         // 双门槛：绝对分0.55 + 与第二名分差0.05（实机误认0.55-0.80区间分差普遍<0.05，真牌0.85+）
         val uncertain = bestLabel == null || bestScore < 0.55f || (bestScore - secondScore) < 0.05f
         return MatchOutcome(bestLabel, bestScore, uncertain)
+    }
+
+    /**
+     * query(trim后) 与单个模板(trim后)的IoU：query缩放到模板高，水平居中对齐，
+     * 前景并集上的像素重合度；宽度不匹配部分计入union惩罚。V2.9.578从match()抽出(逻辑不变)。
+     */
+    private fun iouWithTemplate(qData: BooleanArray, qW: Int, qH: Int, tmpl: Template): Float {
+        val scale = tmpl.h.toFloat() / qH
+        val newW = (qW * scale).toInt().coerceAtLeast(1)
+        val qResized = resizeBinary(qData, qW, qH, newW, tmpl.h)
+
+        // V2.9.528: 水平居中对齐（原左对齐，偏移2-3px即崩）
+        val xOff = (newW - tmpl.w) / 2
+        val overlapW = minOf(newW, tmpl.w)
+
+        var fgUnion = 0
+        var agree = 0
+        var extraFg = 0
+        for (y in 0 until tmpl.h) {
+            // 1) 重叠区域：水平居中对齐
+            for (i in 0 until overlapW) {
+                val qx = i + if (xOff > 0) xOff else 0
+                val tx = i + if (xOff < 0) -xOff else 0
+                if (qx in 0 until newW && tx in 0 until tmpl.w) {
+                    val q = qResized[y * newW + qx]
+                    val t = tmpl.data[y * tmpl.w + tx]
+                    if (!q || !t) {
+                        fgUnion++
+                        if (q == t) agree++
+                    }
+                }
+            }
+            // 2) 宽度不匹配惩罚：超出部分的前景像素计入union但不计入agree
+            if (newW > tmpl.w) {
+                for (qx in 0 until xOff) {
+                    if (!qResized[y * newW + qx]) extraFg++
+                }
+                for (qx in (xOff + tmpl.w) until newW) {
+                    if (!qResized[y * newW + qx]) extraFg++
+                }
+            } else if (tmpl.w > newW) {
+                for (tx in 0 until -xOff) {
+                    if (!tmpl.data[y * tmpl.w + tx]) extraFg++
+                }
+                for (tx in (-xOff + newW) until tmpl.w) {
+                    if (!tmpl.data[y * tmpl.w + tx]) extraFg++
+                }
+            }
+        }
+        val totalUnion = fgUnion + extraFg
+        return if (totalUnion > 0) agree.toFloat() / totalUnion else 0f
     }
 
     // ========== 公共牌识别 ==========
