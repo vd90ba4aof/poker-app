@@ -702,9 +702,13 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val actualCH = cy2 - cornerY
             if (actualCW < 10 || actualCH < 20) return failReason("corner_too_small")
 
-            // 复用前面已检测的颜色结果，不重复计算
-            val isBlackCard = detectBlackOrRed(pixels, cw, cornerX, cornerY, cx2, cy2)
-            val cornerMask = extractMask(pixels, cw, cornerX, cornerY, cx2, cy2, !isBlackCard)
+            // V2.9.583 P3: 手牌角区自适应颜色+二值化（兼容非我回合暗置灰牌）。
+            //   旧固定阈值isRed(R>110)在灰牌帧失效(暗置红字R≈79,色相不变但绝对亮度跌破阈值),
+            //   红桃/方块字形进黑牌池必FAIL; 且extractMask与颜色判定两次独立阈值,灰牌帧双失效。
+            //   新函数按角区内相对亮度取最暗像素为字形、色相差中位数判红黑; 混合出mask:
+            //   亮牌帧固定阈值mask零回归, 仅暗置红牌(固定判黑但自适应判红)用自适应mask。
+            //   复刻9帧18槽: 亮帧rank/suit与v582同分零回归, 暗置红牌rank 5/5全对(旧全FAIL)。仅手牌。
+            val (isBlackCard, cornerMask) = extractHandCornerMask(pixels, cw, cornerX, cornerY, cx2, cy2)
             val mw = actualCW
             val mh = actualCH
 
@@ -749,8 +753,18 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
             // ===== Suit识别 =====
             val sStart = suitBands[0].first
-            val sMergeRow = findSuitMergeRow(cornerMask, mw, sStart, suitBands[suitBands.size - 1].second)
-            val sEnd = if (sMergeRow > sStart) sMergeRow else suitBands[suitBands.size - 1].second
+            val sLastEnd = suitBands[suitBands.size - 1].second
+            // V2.9.583: 弃用findSuitMergeRow"宽度平台+1.15倍突增"启发式。
+            //   实机像素铁证(2026-09-06 6s4s/5d2c): 角区(cornerY=75/82)内中央大花色根本不伸入,
+            //   suit band里只有角标小花色; 黑桃小花色自身曲线是"尖顶极窄(7px)→圆肚极宽(41px)"
+            //   (变化率5倍+), 恰好冒充"小花色平台→大花色合并"的粘连特征, mergeRow在圆肚中部误切,
+            //   trim只剩尖顶残片(28x14/31x16) IoU 0.51-0.56 被门禁拦死; 梅花"三瓣等宽"不触发故全过。
+            //   复刻回测: 停用误切后6spade 0.936/4spade 1.000/2club 1.000/5diamond 0.646全过, 梅花零回归。
+            //   改为几何上界: 角标小花色高度随rank带等比例(实测约0.9x rank带高), 上限=rank带高+
+            //   16*scale余量(随分辨率缩放); band高度超过该上界才说明有外部内容伸入, 裁掉超出段。
+            //   实测小花色suit段高36-43行、rank带高53-56行, 上界69-72行, 正常小花色永不触碰。
+            val suitCap = (rEnd - rStart) + (16 * scale).toInt().coerceAtLeast(8)
+            val sEnd = sStart + minOf(sLastEnd - sStart, suitCap)
 
             val suitSubmask = BooleanArray(mw * (sEnd - sStart))
             for (row in sStart until sEnd) {
@@ -856,7 +870,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         return majorBands.take(2)
     }
 
-    /** 在suit band中找到与中心pips合并的行（宽度开始显著增长的位置） */
+    /** @deprecated V2.9.583 起停用（死代码保留）：本启发式对黑桃小花色"尖顶→圆肚"宽度陡升误判为大花色合并，
+        实机导致黑桃suit被切残片全部sU门禁拦死(2026-09-06 6s4s/8s4s 50槽全挂)。角区参数下中央大花色本就不伸入，
+        已改用suitCap几何上界，见recognizeHandCard内suit识别段。 */
     private fun findSuitMergeRow(mask: BooleanArray, w: Int, suitStart: Int, suitEnd: Int): Int {
         val widths = IntArray(suitEnd - suitStart)
         var maxWidth = 0
@@ -977,6 +993,90 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         val plateauRows = plateauEnd - plateauStart + 1
         val totalRows = maxOf(1, (h * 0.5).toInt()).coerceAtMost(h)
         return plateauRows.toDouble() / totalRows.toDouble()
+    }
+
+    /**
+     * V2.9.583 P3: 手牌角区自适应颜色判定 + 二值mask提取（一步完成）。
+     * 暗置灰牌帧字形被整体压暗(红字R从199降到约79), 固定isRed(R>110)阈值失效;
+     * 改为：① 排除角区最亮40%像素(白牌面/灰牌面背景) → 候选像素；② 候选中最暗25%=字形像素；
+     * ③ 字形红黑由中位数色相差判定(R-G>18 或 R-B>18 = 红牌红桃/方块，否则黑牌黑桃/梅花)；
+     * ④ 混合出mask: 固定阈值(红R>110/黑全<90)先判色——亮牌帧固定阈值可靠,沿用旧mask(零回归);
+     *   仅"固定判黑但自适应判红"(暗置红牌,红字R约79跌破固定阈)时用自适应mask(红族+lum<=bgCut*0.85)。
+     *   全候选自适应mask已废弃: 浅灰牌噪(同R-G<=18)桥接rank/suit间隙致band合并(亮6s/4s实测bands=1)。
+     * 返回 Pair(是否黑牌, mask[true=背景])。仅手牌角区调用，公共牌仍走detectColor固定阈值(亮牌不变)。
+     */
+    private fun extractHandCornerMask(
+        pixels: IntArray, stride: Int, x1: Int, y1: Int, x2: Int, y2: Int
+    ): Pair<Boolean, BooleanArray> {
+        val rw = x2 - x1
+        val rh = y2 - y1
+        // 收集角区像素 (R,G,B,索引)
+        val n = rw * rh
+        val rs = IntArray(n); val gs = IntArray(n); val bs = IntArray(n); val lum = IntArray(n)
+        for (y in 0 until rh) {
+            for (x in 0 until rw) {
+                val p = getPixel(pixels, stride, x1 + x, y1 + y)
+                val i = y * rw + x
+                rs[i] = p shr 16 and 0xFF; gs[i] = p shr 8 and 0xFF; bs[i] = p and 0xFF
+                lum[i] = rs[i] + gs[i] + bs[i]
+            }
+        }
+        // 排除最亮40%（牌面背景）：候选=亮度低于60分位
+        val lumSorted = lum.sortedArray()
+        val bgCut = lumSorted[(n * 0.60).toInt().coerceIn(0, n - 1)]
+        val candIdx = ArrayList<Int>(n / 2)
+        for (i in 0 until n) if (lum[i] < bgCut) candIdx.add(i)
+        val mask = BooleanArray(n) { true } // true=背景
+        if (candIdx.size < 100) {
+            // 候选过少(收纳帧/无牌)：退回旧固定阈值，保证hasCard/band失败行为不变
+            val fallbackBlack = detectBlackOrRed(pixels, stride, x1, y1, x2, y2)
+            for (y in 0 until rh) for (x in 0 until rw) {
+                val p = getPixel(pixels, stride, x1 + x, y1 + y)
+                val content = if (fallbackBlack) isBlack(p) else isRed(p)
+                mask[y * rw + x] = !content
+            }
+            return Pair(fallbackBlack, mask)
+        }
+        // 候选中最暗25% = 字形像素
+        val candLum = IntArray(candIdx.size) { lum[candIdx[it]] }
+        val glyphCut = candLum.sortedArray()[(candIdx.size * 0.25).toInt().coerceIn(0, candIdx.size - 1)]
+        var medRG = 0; var medRB = 0
+        val glyphRG = ArrayList<Int>(candIdx.size / 4); val glyphRB = ArrayList<Int>(candIdx.size / 4)
+        for (i in candIdx) if (lum[i] <= glyphCut) { glyphRG.add(rs[i] - gs[i]); glyphRB.add(rs[i] - bs[i]) }
+        glyphRG.sort(); glyphRB.sort()
+        medRG = if (glyphRG.isNotEmpty()) glyphRG[glyphRG.size / 2] else 0
+        medRB = if (glyphRB.isNotEmpty()) glyphRB[glyphRB.size / 2] else 0
+        val adaptiveRed = medRG > 18 || medRB > 18
+        // V2.9.583 P3修正: 自适应mask在亮牌帧会引入浅灰牌噪(与黑字形同为R-G<=18),
+        //   桥接rank/suit间隙致band合并(实测6s/4s亮帧bands=1, rank分差被噪声抹平)。
+        //   混合策略: 固定阈值先判色——亮牌帧(红R>110/黑全<90)固定阈值完全可靠, 沿用旧mask零回归;
+        //   仅当"固定判黑 但 自适应判红"(暗置红牌红字R约79跌破固定阈)时用自适应mask。
+        //   暗置黑牌固定判黑本就正确(黑字形压暗后仍全<90); 复刻9帧18槽验证无场景走错分支。
+        var redCnt = 0; var blackCnt = 0
+        for (i in candIdx) {
+            val r = rs[i]; val g = gs[i]; val b = bs[i]
+            if (r > 110 && (r - g) > 25 && (r - b) > 25) redCnt++
+            if (r < 90 && g < 90 && b < 90) blackCnt++
+        }
+        val fixedBlack = blackCnt >= redCnt
+        val useAdaptive = adaptiveRed && fixedBlack // 唯一新场景: 暗置红桃/方块
+        return if (useAdaptive) {
+            // 自适应mask: 候选中红族(R-G>18)且亮度<=bgCut*0.85为内容
+            //   (0.85系数排除浅灰牌噪lum>626, 保留红抗锯齿边lum301-449; 实测字形199-298全保留)
+            val lumThr = (bgCut * 0.85).toInt()
+            for (i in candIdx) {
+                if ((rs[i] - gs[i]) > 18 && lum[i] <= lumThr) mask[i] = false
+            }
+            Pair(false, mask) // 红牌
+        } else {
+            // 固定阈值mask(与v582 extractMask同构): 亮牌帧rank/suit分数原样零回归
+            for (y in 0 until rh) for (x in 0 until rw) {
+                val p = getPixel(pixels, stride, x1 + x, y1 + y)
+                val content = if (fixedBlack) isBlack(p) else isRed(p)
+                mask[y * rw + x] = !content
+            }
+            Pair(fixedBlack, mask)
+        }
     }
 
     /**

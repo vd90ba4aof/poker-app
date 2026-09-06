@@ -1287,6 +1287,22 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         (localComms.size in 3..5 && slots.size == localComms.size && slots == (0 until localComms.size).toList())
                     val commBad = localComms.filter { !rankOk(it) || !suitOk(it) }
                     val handConfOk = localHands.size == 2 && handBad.isEmpty()
+                    // V2.9.583 P2: 跨手锁失效——本地双rank都过硬门禁(rankOk: 非uncertain且rankScore>=0.55)
+                    //   且两张rank都与锁存牌不一致 → 已发新一手, 立即清全部牌面锁。
+                    //   实机铁证(2026-09-06 21:55:06): 本地CV已读到新手牌Qh/5h(c=0.86/0.87, 但suit误切
+                    //   致handConfOk=false走VLM), VLM误回旧手5d2c/手牌锁残留5d2c → 用过期牌做fold决策。
+                    //   rank环节实机零误认(98槽全对), 双rank互证误清概率≈0; 同手内rank恒定不会触发。
+                    val rankConfHands = localHands.filter { rankOk(it) }
+                    if (rankConfHands.size == 2 && holeCardsLocked != null && holeCardsLocked!!.size == 2) {
+                        val lockedRanks = holeCardsLocked!!.map { it.rank }
+                        val newRanks = rankConfHands.map { it.rank }
+                        if (newRanks.zip(lockedRanks).count { it.first == it.second } == 0) {
+                            Log.w(TAG, "🔒 本地双rank(${newRanks.joinToString(",")})与锁存(${lockedRanks.joinToString(",")})全部不一致→判定新一手, 清手牌/街/牌面锁")
+                            holeCardsLocked = null; holeCardsLockedAt = 0L
+                            holeCardsRankLocked = null; streetLocked = null
+                            RegionCropper.clearBoardCache()
+                        }
+                    }
                     val commConfOk = localComms.isEmpty() || (commBad.isEmpty() && commStructOk)
                     localCommConfOk = commConfOk
                     localMinConfidence = if (localHands.isNotEmpty()) localHands.minOf { it.confidence } else 1.0f
