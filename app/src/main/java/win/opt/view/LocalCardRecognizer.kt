@@ -771,11 +771,21 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
             var bestSuit: String? = null
             var suitConf = 0.0
-            // V2.9.574: suit不确定标志；黑色plateau分类天然0.50+地板，标记uncertain供下游独立判
+            // V2.9.580: 红黑suit统一走IoU多模板1-NN（v578已建hand s/c真实字形模板）。
+            //   v574~v579黑色suit走plateau几何分类且恒置suitUnc=true，被融合层门禁(!suitUncertain)
+            //   整体拦死→黑桃/梅花手牌本地永不可信，v579关云VLM后黑牌手牌无任何识别来源(致命)。
+            //   回测：黑手牌suit改IoU后稳定帧48/48、新截图6/6=100%。
             var suitUnc = false
 
-            if (isBlack && suitTrimmed != null) {
-                // plateau_ratio分类：club>0.30, spade<0.20
+            // 红黑统一：IoU模板匹配（红♥♦ / 黑♠♣ 各用同色模板池），双门槛验分差
+            val sm = match(suitTrimmed, suitTemplates, useTopology = false)
+            bestSuit = sm.label
+            suitConf = sm.score.toDouble()
+            suitUnc = sm.uncertain
+
+            // 兜底：仅黑牌且IoU完全给不出label(空trim/无前景)时，退回plateau几何分类给个标签，
+            //   仍保守标记uncertain（plateau无IoU分差可验）——避免match_fail丢整张卡，下游门禁不采信
+            if (bestSuit == null && isBlack && suitTrimmed != null) {
                 val ratio = computePlateauRatio(suitTrimmed.first, suitTrimmed.second, suitTrimmed.third)
                 bestSuit = if (ratio > 0.30) "c" else "s"
                 suitConf = if (ratio > 0.30)
@@ -783,13 +793,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 else
                     0.5 + (0.30 - ratio) * 1.5
                 suitConf = suitConf.coerceIn(0.5, 0.9)
-                suitUnc = true // plateau分类无IoU分差可验，置信地板0.50，保守标记
-            } else {
-                // 红色suit用IoU匹配（♥ vs ♦），双门槛验分差
-                val sm = match(suitTrimmed, suitTemplates, useTopology = false)
-                bestSuit = sm.label
-                suitConf = sm.score.toDouble()
-                suitUnc = sm.uncertain
+                suitUnc = true // plateau兜底：无IoU分差，保守标记，下游不采信
             }
 
             if (bestRank == null || bestSuit == null) {

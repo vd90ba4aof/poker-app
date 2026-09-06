@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.579 · 云VLM兜底全面关闭——异常帧不决策直接重截, 纯本地毫秒级零网络依赖"
+        android:text="V2.9.580 · 黑桃梅花手牌花色修复——红黑手牌+公共牌纯本地IoU全硬认, 零网络依赖"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
