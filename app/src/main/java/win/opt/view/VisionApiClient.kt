@@ -112,6 +112,10 @@ object VisionApiClient {
     @Volatile var streetLocked: String? = null  // V2.9.165: 本地CV根据公共牌数量锁定的street
     @Volatile var suitUncertain: Boolean = false
     @Volatile var lockReason: String = ""
+    // V2.9.582: 手牌锁定时间戳——锁定回退TTL(实机日志2026-09-06: 29分钟前测试手AcKh被回退并全下)。
+    // 同手正常对局成功帧持续刷新本时间戳; 只有双路持续失败超TTL才失效, 不影响正常手。
+    @Volatile var holeCardsLockedAt: Long = 0L
+    val HOLE_LOCK_TTL_MS = 180_000L  // 3分钟: 一手牌内截图过渡/动画帧通常<30s; 超TTL=已换手或离桌
     // V2.9.197: 混合方案 — 仅锁定rank（本地CV高置信度），suit仍由API识别
     @Volatile var holeCardsRankLocked: List<String>? = null
 
@@ -259,7 +263,7 @@ object VisionApiClient {
                 ?: holeCardsRankLocked?.joinToString(",") ?: ""
             if (lastRankKey.isNotEmpty() && currentRankKey != lastRankKey) {
                 Log.d(TAG, "手牌锁定: 新一手牌(rank: $lastRankKey→$currentRankKey)，重置")
-                holeCardsLocked = null; holeCardsRankLocked = null; dButtonLocked = ""; streetLocked = null
+                holeCardsLocked = null; holeCardsLockedAt = 0L; holeCardsRankLocked = null; dButtonLocked = ""; streetLocked = null
             }
             // V2.9.197: 混合方案 — 本地CV锁定rank + API补充suit
             // 当本地CV高置信度识别手牌rank时，rank锁定，suit由API提供
@@ -294,9 +298,9 @@ object VisionApiClient {
             // V2.9.114: 只锁定非空手牌，防止空列表锁死
             // V2.9.134: 保留suit（vision已识别花色），不再抹掉
             if (result.holeCards.isNotEmpty()) {
-                holeCardsLocked = result.holeCards; lockReason = "首次识别锁定"; suitUncertain = false
+                holeCardsLocked = result.holeCards; holeCardsLockedAt = System.currentTimeMillis(); lockReason = "首次识别锁定"; suitUncertain = false
             } else {
-                holeCardsLocked = null; lockReason = "手牌为空不锁定"; suitUncertain = false
+                holeCardsLocked = null; holeCardsLockedAt = 0L; lockReason = "手牌为空不锁定"; suitUncertain = false
             }
             var correctedResult = result.copy(holeCards = result.holeCards, communityCards = result.communityCards)
             val dPosInsured = applyDButtonInsurance(correctedResult.dButtonPosition, correctedResult.holeCards)
@@ -1076,6 +1080,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
     // V3.10: 弃牌/新一手重置所有锁定状态（供FloatingService调用）
     fun resetLocks() {
         holeCardsLocked = null
+        holeCardsLockedAt = 0L
         holeCardsRankLocked = null
         streetLocked = null
         dButtonLocked = ""
@@ -1644,10 +1649,20 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     // V2.9.569/570: 本地CV+VLM双失败时，回退之前帧已锁定的手牌（截图过渡帧兜底）
                     // 必须在"board != null -> board.handCards"之前：VLM解析失败也会返回空手牌的非空对象，
                     // 放后面会被短路导致回退永不生效（22:15:57实机帧 holeCardsLocked=true 但final手牌为空）
-                    holeCardsLocked != null && holeCardsLocked!!.size == 2 -> {
+                    // V2.9.582: TTL防护——锁龄超3分钟(已换手/离桌/测试手残留)禁止回退旧手牌,
+                    //   宁可空手牌(无手牌不决策,转人工/等下帧),不可用旧手打牌(2026-09-06日志: 29分钟前AcKh→误全下)。
+                    //   同手正常对局成功帧持续刷新holeCardsLockedAt, 长手不误伤。
+                    holeCardsLocked != null && holeCardsLocked!!.size == 2
+                        && (System.currentTimeMillis() - holeCardsLockedAt) < HOLE_LOCK_TTL_MS -> {
                         handFromLockedFallback = true
-                        Log.w(TAG, "🔍 本地CV+VLM双失败，回退锁定手牌: ${holeCardsLocked!!.map{"${it.rank}${it.suit}"}}")
+                        Log.w(TAG, "🔍 本地CV+VLM双失败，回退锁定手牌(锁龄${System.currentTimeMillis()-holeCardsLockedAt}ms): ${holeCardsLocked!!.map{"${it.rank}${it.suit}"}}")
                         holeCardsLocked!!
+                    }
+                    holeCardsLocked != null && holeCardsLocked!!.size == 2 -> {
+                        // V2.9.582: 锁已过期——清锁, 走空手牌分支(下游无手牌不决策)
+                        Log.w(TAG, "🔍 锁定手牌已过期(锁龄${System.currentTimeMillis()-holeCardsLockedAt}ms>TTL${HOLE_LOCK_TTL_MS}ms)，清锁不回退")
+                        holeCardsLocked = null; holeCardsLockedAt = 0L
+                        emptyList<CardInfo>()
                     }
                     board != null -> board.handCards                        // VLM有部分结果（空/1张）
                     else -> emptyList()
@@ -1770,6 +1785,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // 同步锁定状态
                 if (finalHoleCards.size == 2) {
                     holeCardsLocked = finalHoleCards
+                    holeCardsLockedAt = System.currentTimeMillis() // V2.9.582: 刷新TTL
                     streetLocked = result.street
                 }
                 if (result.dButtonPosition.isNotEmpty() && result.dButtonPosition != "not_found") {

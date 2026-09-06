@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.581 · 闸⑨牌面非法拒帧修复——52张重复/结构非法硬拒帧转人工, 防错误决策点击"
+        android:text="V2.9.582 · allin赔率地板修复+大注冷跟收紧+锁定手牌TTL——翻后/翻前小jam按赔率跟注, 3bet级表外弱牌禁冷跟, 旧锁3分钟失效防误全下"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

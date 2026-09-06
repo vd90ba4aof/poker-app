@@ -1332,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.581',
+  CURRENT_VERSION:'2.9.582',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2763,7 +2763,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.581';
+var APP_VERSION='2.9.582';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3322,9 +3322,13 @@ function decidePreflop(k){
   }
 
   // 4: 面对allin
+  // V2.9.582 FIX(P1): 与翻后同款——硬45%地板仅用于大jam(注池比>=0.5);
+  //   小jam(短码巨池)回归赔率门槛+3%噪声裕度(翻前eq为查表值,裕度取3%)。
   if(scene==='allin'){
     var allinBet=bet||pot,allinEq=eq+(posMod[p]!==undefined?posMod[p]:0);
-    var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet*2)*100):50;callThresh=Math.max(callThresh,45);
+    var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet*2)*100):50;
+    var _preAiRatio=pot>0?allinBet/(pot+allinBet):0;
+    callThresh=_preAiRatio>=0.5?Math.max(callThresh,45):Math.min(callThresh+3,25);
     if(allinEq>=callThresh){var exploitA=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});return{a:'call',r:'GTO vs allin eq'+Math.round(allinEq)+'%>='+callThresh+'%',eq:exploitA.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitA.exploit,_se:true};}
     return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%',spr);
   }
@@ -3372,10 +3376,15 @@ function decidePostflop(k){
   var weights=DRTA.getWeights?DRTA.getWeights(profile):{};
 
   // V3.28: 翻后面对allin — 权益阈值决策（与翻前同逻辑）
+  // V2.9.582 FIX(P1, 实机日志2026-09-06 Jd6d 3BB into 279BB): 硬40%地板无视底池赔率——
+  //   巨池短码jam赔率门槛仅~1%，后门听牌eq4.45%数学EV+9.7BB却被fold。
+  //   修复: 大jam(注池比>=0.5, 门槛本>=25%)保留40%地板防eq噪声滥跟;
+  //         小jam回归赔率门槛+3%噪声裕度(MC误差/范围不确定性缓冲)。
   if(scene==='allin'){
     var _aiBet=bet||pot;
     var _aiThresh=_aiBet>0?Math.round(_aiBet/(pot+_aiBet*2)*100):50;
-    _aiThresh=Math.max(_aiThresh,40); // 翻后稍微放宽（有公共牌信息）
+    var _aiBetRatio=pot>0?_aiBet/(pot+_aiBet):0; // 注池比: 大jam>=0.5
+    _aiThresh=_aiBetRatio>=0.5?Math.max(_aiThresh,40):Math.min(_aiThresh+3,20); // 翻后放宽(有公共牌信息)
     if(eq>=_aiThresh){
       var _aiExploit=applyExploit(eq,'call',oppType,{bet:_aiBet,pot:pot});
       return{a:'call',r:'GTO 翻后vs allin eq'+Math.round(eq)+'%>='+_aiThresh+'%',eq:_aiExploit.eq,c:eq>=65?'h':'m',scene:'面对allin',spr:spr,_se:true};
@@ -8817,6 +8826,10 @@ function _decideInner(){
             }else{
             console.log('[V2.9.126 池驱反fold] fold→'+_psmResult.action+' 池型='+_poolType+' 厚度='+_thickness+' '+_psmResult.reason);
             result.a=_psmResult.action;
+            // V2.9.582 FIX(日志2026-09-06 9c8d河牌check帧上报sizing=3): action变check/call时
+            //   _psmResult可能携带raise用sizing(如'33%pot'),若_szMap未命中则sizing字段残留→
+            //   Kotlin侧L906读到非零sizing有走下注路径风险。check/call无下注动作,sizing必须清零。
+            if(result.a==='check'||result.a==='call'){result.v=0;result.sizing=0;}
             // sizing 字符串→数字BB
             var _szMap={allin:function(){return G.stk||100;},big:function(){return G.stk||100;},pot:function(){return G.pot||0;},'80%pot':function(){return Math.round((G.pot||0)*0.8);},'75%pot':function(){return Math.round((G.pot||0)*0.75);},'66%pot':function(){return Math.round((G.pot||0)*0.66);},'50%pot':function(){return Math.round((G.pot||0)*0.5);},'33%pot':function(){return Math.round((G.pot||0)*0.33);}};
             if(_psmResult.sizing&&_szMap[_psmResult.sizing]){result.v=_szMap[_psmResult.sizing]();}
@@ -9242,13 +9255,19 @@ function preF(k){
       return{a:'raise',v:rSz2,r:k+' 3bet反击',eq:exploitResult4.eq,c:'h',sizing:rSz2,scene:sceneLabel,spr:spr,evs:compareEVs(eq,pot,actualBet,rSz2),exploit:exploitResult4.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
     }
     // V2.9.35: 面对raise跟注需eq>=48或范围支持, eq<45太松(KJo等不该跟)
-    if(cS.indexOf(k)!==-1||eq>=48){
+    // V2.9.582 FIX(P2, 实机日志2026-09-06 J6s 7BB+35BB两次冷跟、flop fold全损42BB):
+    //   3bet级大注(toCall>=5BB)时范围表外的弱牌不得靠eq兜底跟注——preF的eq是
+    //   「vs随机牌桌」查表口径(J6s≈52%)，vs紧3bet范围真实eq≈27%，口径错配致误跟。
+    //   小注open(<=4BB,便宜赔率)维持原宽松逻辑；大注表外牌要eq>=58(AA/KK级)才放行。
+    var _big3betCall=(actualBet||0)>=5; // 3bet级跟注额(BB): open 2-3BB / 3bet 7BB+
+    if(!_big3betCall||cS.indexOf(k)!==-1||eq>=58){
       var exploitResult5=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});
       return{a:'call',r:k+' 跟注',eq:exploitResult5.eq,c:eq>=55?'h':'m',scene:sceneLabel,spr:spr,evs:compareEVs(eq,pot,actualBet,0),exploit:exploitResult5.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
     }
     var po=actualBet>0?actualBet/(pot+actualBet*2):0;
     var raiseContractList=(PREFLOP_OPP_ADJ[oppType]||PREFLOP_OPP_ADJ.unknown).facing_raise_contract;
-    if(eq>=40&&eq>=po*100&&raiseContractList.indexOf(k)===-1){
+    // V2.9.582: 赔率兜底闸同样仅小注生效——大注下eq为vs随机口径, eq>=po的"赔率够"是虚高假象
+    if(!_big3betCall&&eq>=40&&eq>=po*100&&raiseContractList.indexOf(k)===-1){
       var exploitResult6=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});
       return{a:'call',r:'赔率够跟',eq:exploitResult6.eq,c:'m',po:po*100,scene:sceneLabel,spr:spr,evs:compareEVs(eq,pot,actualBet,0),exploit:exploitResult6.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
     }
