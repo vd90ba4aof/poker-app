@@ -2732,7 +2732,7 @@ class FloatingService : Service() {
         }
         // V2.9.109: 诊断——截图成功，始终更新通知
         Log.d(TAG, "截图成功: ${screenshot.size / 1024}KB, apiKey=${if(VisionApiClient.apiKey.isNotEmpty()) "已配置" else "空"}")
-        updateAdviceNotification("2/4 截图OK", "${screenshot.size / 1024}KB, API识别中...")
+        updateAdviceNotification("2/4 截图OK", "${screenshot.size / 1024}KB, 本地CV识别中...")
 
         if (VisionApiClient.apiKey.isEmpty()) {
             executeJs("if(typeof onActionCapture==='function'){onActionCapture()};document.body.classList.add('speed-mode');document.body.classList.remove('api-processing')")
@@ -2753,7 +2753,7 @@ class FloatingService : Service() {
 
         // V2.9.541: 本地CV为主+VLM兜底
         // 有API Key → 调用视觉模型识别牌面（本地CV已锁牌时只补充场景信息）
-        tvStatus?.text = "🎯 API识别中..."
+        tvStatus?.text = "🎯 本地CV识别中..."
         tvAction?.alpha = 0.5f
         updateAdviceNotification("识别中...", "正在分析牌面")
         val tAnalyzeStart = System.currentTimeMillis()
@@ -3075,7 +3075,7 @@ class FloatingService : Service() {
                         // V2.9.70: 正常识别→停止闪烁
                         isBlinkingError = false
                         // V2.9.569: 截屏间隔固定3.5秒，不再按street/人数动态调整
-                        updateAdviceNotification("3/4 API识别OK", "策略计算中... WV:$webViewReady")
+                        updateAdviceNotification("3/4 识别OK", "本地CV完成,策略计算中... WV:$webViewReady")
                         val hole = result.holeCards.map { (if(it.rank=="T") "10" else it.rank) + it.suit }.joinToString(" ")
                         tvStatus?.text = "✅ $hole | ${result.street} | ${result.totalPlayers}人"
                         val suitSym = mapOf("s" to "♠", "h" to "♥", "d" to "♦", "c" to "♣")
@@ -3121,16 +3121,16 @@ class FloatingService : Service() {
                         checkAutoErrors()
                         scheduleNextAutoCapture()
                         tvAction?.alpha = 1.0f
-                        tvStatus?.text = "❌ API: ${VisionApiClient.lastError.take(30)}"
+                        tvStatus?.text = "❌ 识别: ${VisionApiClient.lastError.take(30)}"
                         executeJs("document.body.classList.remove('api-processing')")
                         updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER")
                         isBlinkingError = true
                         floatingBall?.text="⚠️";floatingBall?.textSize=14f
                         // V2.9.193: 错误日志包含API原始响应前200字符——直接定位根因
                         val rawResp = VisionApiClient.lastRawResponse.take(200)
-                        addErrorLog("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())} API失败: ${VisionApiClient.lastError.take(100)} | raw: $rawResp")
-                        Log.e(TAG, "★ API失败, error=${VisionApiClient.lastError}, raw=${VisionApiClient.lastRawResponse.take(300)}")
-                        updateAdviceNotification("❌ 3/4 API失败", VisionApiClient.lastError.take(40))
+                        addErrorLog("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())} 识别失败: ${VisionApiClient.lastError.take(100)} | raw: $rawResp")
+                        Log.e(TAG, "★ 识别失败, error=${VisionApiClient.lastError}, raw=${VisionApiClient.lastRawResponse.take(300)}")
+                        updateAdviceNotification("❌ 3/4 识别失败", VisionApiClient.lastError.take(40))
                     }
                 }
             } catch (e: Exception) {
@@ -3138,13 +3138,13 @@ class FloatingService : Service() {
                     // V3.50: 异常→进入错误恢复
                     pipelineFSM.transition(PipelineStateMachine.PipelineEvent.API_RECOG_FAIL)  // 任意识别状态→ERROR_RECOVERY
                     tvAction?.alpha = 1.0f
-                    tvStatus?.text = "❌ API错误"
+                    tvStatus?.text = "❌ 识别异常"
                     executeJs("document.body.classList.remove('api-processing')")
                     updateBallAdvice("COLOR:FOLD|SIGNAL:COUNTER")
                     isBlinkingError = true
                     floatingBall?.text="⚠️";floatingBall?.textSize=14f
                     addErrorLog("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())} API异常: ${e.message?.take(100) ?: "未知"}")
-                    updateAdviceNotification("API错误", e.message?.take(50) ?: "")
+                    updateAdviceNotification("识别异常", e.message?.take(50) ?: "")
                     // V2.9.553-rev9-fix-v3: 异常分支也必须RESET+续调度，否则FSM留ERROR_RECOVERY/识别态→截图循环停止
                     autoConsecutiveErrors++; checkAutoErrors()
                     pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)

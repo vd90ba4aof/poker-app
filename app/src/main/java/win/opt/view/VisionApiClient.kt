@@ -1210,7 +1210,11 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
         screenWidth: Int = 1080,
         screenHeight: Int = 2344
     ): VisionResult? {
-        if (apiKey.isEmpty()) { lastError = "未设置API Key"; return null }
+        // V2.9.579: 云VLM兜底全面关闭——v578多模板1-NN稳定帧硬认率100%/硬伤0，
+        //   本地CV认不出的帧=瞬时异常帧(动画/遮挡/弹窗)，VLM看同一张残缺图必错或3~23秒空返回，
+        //   正确行为是该帧不决策、3.5秒后重截(26秒Shot Clock硬超时fold兜底)，不再消耗云VLM。
+        //   本路径因此纯本地毫秒级、零网络依赖、无需API Key。
+        val CLOUD_VLM_ENABLED = false
         if (!analyzeLock.tryLock(25, java.util.concurrent.TimeUnit.SECONDS)) {
             Log.w(TAG, "analyzeLock获取超时(25s)，放弃本次分析")
             lastError = "分析锁超时"
@@ -1583,10 +1587,12 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
 
                 runBlocking {
                     coroutineScope {
-                        val boardJob = if (!skipCloudVlm && boardBase64 != null && needBoardApi) {
+                        // V2.9.579: CLOUD_VLM_ENABLED=false → 云VLM牌面/操作区调用永不发起，
+                        //   boardResult/actionResult恒null，牌面走本地CV→锁定→缓存回退，操作区走本地CV。
+                        val boardJob = if (CLOUD_VLM_ENABLED && !skipCloudVlm && boardBase64 != null && needBoardApi) {
                             async(Dispatchers.IO) { recognizeBoardArea(boardBase64, needHandApiFinal, newCommIndices.size, needPotApi) }
                         } else null
-                        val actionJob = if (!skipCloudVlm && actionBase64 != null && localAction == null) {
+                        val actionJob = if (CLOUD_VLM_ENABLED && !skipCloudVlm && actionBase64 != null && localAction == null) {
                             async(Dispatchers.IO) { recognizeActionArea(actionBase64) }
                         } else null
 
