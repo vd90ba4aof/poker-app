@@ -72,11 +72,6 @@ class LocalCardRecognizer private constructor(private val context: Context) {
     // V2.9.521: 诊断信息——最近一次识别各步失败原因
     @Volatile var lastDiag: String = ""
         private set
-    // V2.9.522: 每只手牌的失败原因（供diag输出）
-    @Volatile var hand0FailReason: String = ""
-        private set
-    @Volatile var hand1FailReason: String = ""
-        private set
 
     fun loadTemplates() {
         if (loaded) return
@@ -626,7 +621,6 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
     fun recognizeHandCard(screenshot: Bitmap, handIndex: Int): CardResult? {
         val failReason = fun(r: String): CardResult? {
-            if (handIndex == 0) hand0FailReason = r else hand1FailReason = r
             Log.w(TAG, "H${handIndex} FAIL: $r")
             return null
         }
@@ -657,14 +651,10 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 return failReason("no_card")
             }
 
-            // 计算缩放因子（相对250px基准高度，V2.9.537从200改为250）
+            // 计算缩放因子（相对250px基准高度，从200改为250）
             val scale = ch / 250.0
 
-            // V2.9.537: 诊断日志——分辨率/缩放/裁切
-            val whiteCount = pixels.count { isWhite(it) }
-            Log.d(TAG, "H${handIndex} diag: sw=$sw sh=$sh sx=${String.format("%.3f", sx)} sy=${String.format("%.3f", sy)} cw=$cw ch=$ch scale=${String.format("%.3f", scale)} white%=${String.format("%.1f", whiteCount*100.0/pixels.size)}")
-
-            // V2.9.538: tight per-card corner参数（8/22真实截图像素级校准）
+            // tight per-card corner参数（8/22真实截图像素级校准）
             // per-card corner：H0/H1因扇出偏移分别校准，确保bands≥2
             // H0(5♥): rank偏左x≈39, corner suit y≈143-175; H1(3♦): rank偏右x≈58, corner suit y≈156-195
             val cornerX: Int
@@ -690,32 +680,15 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             val actualCH = cy2 - cornerY
             if (actualCW < 10 || actualCH < 20) return failReason("corner_too_small")
 
-            // V2.9.535: 先检测角区颜色，再用正确的isRed提取mask（原硬编码false导致红色rank牌bands=0）
+            // 复用前面已检测的颜色结果，不重复计算
             val isBlackCard = detectBlackOrRed(pixels, cw, cornerX, cornerY, cx2, cy2)
             val cornerMask = extractMask(pixels, cw, cornerX, cornerY, cx2, cy2, !isBlackCard)
             val mw = actualCW
             val mh = actualCH
 
-            // V2.9.537: 诊断日志——角区颜色+mask内容统计
-            var contentPx = 0
-            for (i in cornerMask.indices) if (!cornerMask[i]) contentPx++
-            Log.d(TAG, "H${handIndex} corner: ($cornerX,$cornerY)-(${cx2},${cy2}) ${actualCW}x${actualCH} isBlack=$isBlackCard maskContent=$contentPx/${cornerMask.size}(${String.format("%.1f", contentPx*100.0/cornerMask.size)}%)")
-
             // 自动band检测：行投影找到rank和suit两个content band
             val bands = findHandContentBands(cornerMask, mw, mh, scale)
-            if (bands.size < 2) {
-                // V2.9.537: bands<2时输出投影详情
-                val proj = IntArray(mh)
-                for (row in 0 until mh) {
-                    var cnt = 0
-                    for (col in 0 until mw) if (!cornerMask[row * mw + col]) cnt++
-                    proj[row] = cnt
-                }
-                val maxProj = proj.maxOrNull() ?: 0
-                val threshold = maxOf(1, mw / 20)
-                Log.w(TAG, "H${handIndex} bands=${bands.size} maxProj=$maxProj threshold=$threshold mw=$mw mh=$mh")
-                return failReason("bands=${bands.size}")
-            }
+            if (bands.size < 2) return failReason("bands=${bands.size}")
 
             val rankBands = bands.subList(0, 1)
             val suitBands = bands.subList(1, bands.size)
@@ -765,7 +738,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             }
             val suitTrimmed = trim(suitSubmask, mw, sEnd - sStart)
 
-            // V2.9.535: 复用前面已检测的颜色结果，不重复计算
+            // 复用前面已检测的颜色结果，不重复计算
             val isBlack = isBlackCard
 
             val suitTemplates = if (isBlack) {
@@ -801,10 +774,8 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 return failReason("match_fail rank=$bestRank suit=$bestSuit")
             }
 
-            // V2.9.574: confidence取两门min（保守值，禁止rank/suit互相背书）；旧加权0.55/0.45废弃
+            // confidence取两门min（保守值，禁止rank/suit互相背书）；旧加权0.55/0.45废弃
             val conf = minOf(rankConf, suitConf).coerceIn(0.0, 1.0)
-            if (handIndex == 0) hand0FailReason = "" else hand1FailReason = ""
-            Log.d(TAG, "H${handIndex}: ${bestRank}${bestSuit} conf=${String.format("%.2f", conf)} r=${String.format("%.2f", rankConf)}${if (rankUnc) "(U)" else ""} s=${String.format("%.2f", suitConf)}${if (suitUnc) "(U)" else ""}")
             CardResult(bestRank, bestSuit, conf.toFloat(), rankConf.toFloat(), suitConf.toFloat(),
                 slot = handIndex, rankUncertain = rankUnc, suitUncertain = suitUnc)
         } catch (e: Exception) {
@@ -866,7 +837,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         for (i in 0 until widths.size) {
             var cnt = 0
             val row = suitStart + i
-            for (col in 0 until w) if (!mask[row * w + col]) cnt++  // V2.9.534-fix: mask极性修正
+            for (col in 0 until w) if (!mask[row * w + col]) cnt++  // mask极性修正
             widths[i] = cnt
             if (cnt > maxWidth) maxWidth = cnt
         }
@@ -900,7 +871,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         val comps = mutableListOf<IntArray>()  // [xMin, xMax, size]
 
         for (startIdx in 0 until w * h) {
-            if (!mask[startIdx] && !visited[startIdx]) {  // V2.9.534-fix: !mask=内容
+            if (!mask[startIdx] && !visited[startIdx]) {  // !mask=内容
                 var xMin = startIdx % w; var xMax = xMin
                 var size = 0
                 val stack = mutableListOf(startIdx)
@@ -917,7 +888,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                             val nx = cx + dx; val ny = cy + dy
                             if (nx in 0 until w && ny in 0 until h) {
                                 val ni = ny * w + nx
-                                if (!mask[ni] && !visited[ni]) {  // V2.9.534-fix: !mask=内容
+                                if (!mask[ni] && !visited[ni]) {  // !mask=内容
                                     visited[ni] = true
                                     stack.add(ni)
                                 }
@@ -956,7 +927,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         for (i in 0 until h) {
             var left = -1; var right = -1
             for (x in 0 until w) {
-                if (!mask[i * w + x]) { if (left < 0) left = x; right = x }  // V2.9.534-fix: !mask=内容
+                if (!mask[i * w + x]) { if (left < 0) left = x; right = x }  // !mask=内容
             }
             heights[i] = if (left >= 0) right - left + 1 else 0
             if (heights[i] > maxW) maxW = heights[i]
@@ -983,9 +954,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
     }
 
     /**
-     * V2.9.542: 手牌角区颜色检测，直接复用公共牌的detectColor逻辑。
+     * 手牌角区颜色检测，直接复用公共牌的detectColor逻辑。
      * detectColor返回true=红色（红桃/方块），手牌需要true=黑色（黑桃/梅花），
-     * 所以取反。旧版独立实现因采样范围错误+白色背景计入light导致黑桃/梅花全部误判。
+     * 所以取反。旧版因采样范围错误导致黑桃/梅花误判。
      */
     private fun detectBlackOrRed(pixels: IntArray, stride: Int, x1: Int, y1: Int, x2: Int, y2: Int): Boolean {
         return !detectColor(pixels, stride, x1, y1, x2, y2)
@@ -998,9 +969,8 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         val diag = StringBuilder()
 
         diag.append("bitmap=${screenshot.width}x${screenshot.height};")
-        Log.d(TAG, "本地CV开始: bitmap=${screenshot.width}x${screenshot.height}")
 
-        // 手牌（角区识别 V2.9.530）
+        // 手牌（角区识别）
         for (i in 0..1) {
             val result = recognizeHandCard(screenshot, i)
             if (result != null) {
@@ -1009,8 +979,7 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 val u = (if (result.rankUncertain) "rU" else "") + (if (result.suitUncertain) "sU" else "")
                 diag.append("H$i=OK(${result.rank}${result.suit},c=%.2f%s);".format(result.confidence, if (u.isNotEmpty()) ",$u" else ""))
             } else {
-                val reason = if (i == 0) hand0FailReason else hand1FailReason
-                diag.append("H$i=FAIL($reason);")
+                diag.append("H$i=FAIL;")
             }
         }
 
@@ -1026,32 +995,6 @@ class LocalCardRecognizer private constructor(private val context: Context) {
 
         diag.append("hand=${holeCards.size}/2,comm=${communityCards.size}/5")
         lastDiag = diag.toString()
-        Log.d(TAG, "本地CV完成: hand=${holeCards.size}/2 comm=${communityCards.size}/5")
         return Pair(holeCards, communityCards)
-    }
-
-    /** 检查手牌是否在缓存中变化（用于判断是否需要走API） */
-    fun quickCardHash(screenshot: Bitmap): Long {
-        return try {
-            val sw = screenshot.width
-            val sh = screenshot.height
-            val scaleX = sw / 1080f
-            val scaleY = sh / 2344f
-            var hash = 0L
-            val samples = intArrayOf(
-                (60*scaleX).toInt(), (1800*scaleY).toInt(),
-                (200*scaleX).toInt(), (1800*scaleY).toInt(),
-                (100*scaleX).toInt(), (1850*scaleY).toInt(),
-                (250*scaleX).toInt(), (1850*scaleY).toInt()
-            )
-            var i = 0
-            while (i < samples.size) {
-                val x = samples[i].coerceIn(0, sw - 1)
-                val y = samples[i+1].coerceIn(0, sh - 1)
-                hash = hash * 31 + screenshot.getPixel(x, y)
-                i += 2
-            }
-            hash
-        } catch (_: Exception) { 0L }
     }
 }

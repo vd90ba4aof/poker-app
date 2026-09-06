@@ -1252,29 +1252,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     // 公共牌：本地CV能稳定识别0-5张，空列表=翻前无公共牌也是有效结果
                     localCommCards = localComms.map { CardInfo(it.rank, it.suit) }
 
-                    // V2.9.521: 本地CV失败时，保存截图和裁剪区域到存储供诊断
-                    if (localHands.size < 2) {
-                        try {
-                            val diagDir = java.io.File(context.getExternalFilesDir(null), "diag")
-                            diagDir.mkdirs()
-                            val ts = System.currentTimeMillis()
-                            // 保存全截图
-                            java.io.File(diagDir, "screenshot_$ts.jpg").outputStream().use {
-                                screenshotBmp.compress(Bitmap.CompressFormat.JPEG, 90, it)
-                            }
-                            // 保存手牌裁剪区域
-                            val (handStitchDiag, _) = RegionCropper.cropHandCards(screenshotBmp)
-                            handStitchDiag?.let {
-                                java.io.File(diagDir, "handcrop_$ts.png").outputStream().use { out ->
-                                    it.compress(Bitmap.CompressFormat.PNG, 100, out)
-                                }
-                            }
-                            Log.w(TAG, "🔍 诊断截图已保存: ${diagDir.absolutePath}/screenshot_$ts.jpg")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "诊断截图保存失败: ${e.message}")
-                        }
-                    }
-                    // V2.9.574: 置信度双独立——rank/suit各自过阈，禁止互相背书；
+                    // 置信度双独立——rank/suit各自过阈，禁止互相背书；
                     //   uncertain标志（match双门槛0.55绝对分/0.05分差 或 拓扑否决残差）的牌一律不采信。
                     //   rank真牌实机0.85+，误认0.55-0.80区间；suit红牌IoU 0.80+，黑色plateau天然0.50+地板保留旧行为。
                     val RANK_MIN = 0.55f
