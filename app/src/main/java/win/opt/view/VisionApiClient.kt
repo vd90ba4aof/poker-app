@@ -1214,6 +1214,15 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
         //   本地CV认不出的帧=瞬时异常帧(动画/遮挡/弹窗)，VLM看同一张残缺图必错或3~23秒空返回，
         //   正确行为是该帧不决策、3.5秒后重截(26秒Shot Clock硬超时fold兜底)，不再消耗云VLM。
         //   本路径因此纯本地毫秒级、零网络依赖、无需API Key。
+        // V2.9.581 死代码标注: CLOUD_VLM_ENABLED=false 后以下路径为死代码（编译器常量折叠不生成字节码，运行时零开销）：
+        //   - boardJob/actionJob 定义及 await()（L1592-1598）→ 恒null
+        //   - boardResult/actionResult → 恒null → board恒null
+        //   - if(board!=null)缓存更新块（L1608-1625）→ 永不执行
+        //   - finalHoleCards/finalCommCards中board相关when分支（L1631/L1643）→ 永不命中
+        //   - recognizeBoardArea/recognizeActionArea函数（L1798/L1839）→ 永不调用
+        //   - bitmapToBase64无条件计算（actionBase64 L1416, boardBase64 L1568）→ 每帧执行但结果从不使用
+        //   保留原因：重新开启云VLM时只需改此常量为true即可恢复全部功能；删除后恢复困难。
+        //   性能影响：编译器常量折叠，仅bitmapToBase64有微量CPU开销（<1ms/帧，可忽略）。
         val CLOUD_VLM_ENABLED = false
         if (!analyzeLock.tryLock(25, java.util.concurrent.TimeUnit.SECONDS)) {
             Log.w(TAG, "analyzeLock获取超时(25s)，放弃本次分析")

@@ -114,7 +114,7 @@ class FloatingService : Service() {
     private val AUTO_MAX_ERRORS = 3
     // V2.9.206: Shot Clock保护——记录上次决策时间，超时强制行动
     private var lastDecisionTime: Long = 0
-    private val SHOT_CLOCK_TIMEOUT = 28000L // V2.9.503: 28秒超时（VLM平均23.5s，留2s余量给GG 30s限制）
+    private val SHOT_CLOCK_TIMEOUT = 28000L // V2.9.503: 28秒超时；V2.9.579关云VLM后本地CV毫秒级，28s远小于GG 30s Shot Clock限制，保留作异常帧兜底fold
     // V2.9.207: 记录当前手牌开始分析时间——修复Shot Clock新牌局永远不触发的bug
     private var handStartTime: Long = 0
     private var manualErrorCount = 0  // V2.9.184: 手动截屏连续失败计数

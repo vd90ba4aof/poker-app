@@ -1332,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.580',
+  CURRENT_VERSION:'2.9.581',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2763,7 +2763,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.580';
+var APP_VERSION='2.9.581';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -11317,6 +11317,9 @@ function onVisionResult(data){
   // V2.9.555 FIX(P0-A): 数据入库期间抑制UI辅助函数(sTT/setOppType)内部的提前go()，
   // 直到末尾BB换算完成、数据全就绪后才放行权威go()。早退分支(NO_TABLE/verify)不影响。
   window._visionUpdating=true;
+  // V2.9.581 FIX(P0): 闸⑨帧初清空移至函数入口——在PV.runAll(dedupCards)和Kotlin终验设置之前清空上一帧残留，
+  //   修复v575引入的BUG：原清空(L11366)在设置(L11344)之后执行，导致G._cardsIllegal被无条件清空，闸⑨永远失效。
+  G._cardsIllegal = '';
   // [REV4_DIAG] onVisionResult入口原始数据快照
   if(data){console.log("[onVisionResult_DIAG_ENTRY] _frameTag="+(data._frameTag||'none')+" pot_size="+data.pot_size+" my_chips="+data.my_chips+" to_call="+data.to_call+" blind_bb="+data.blind_bb+" blind_sb="+data.blind_sb+" is_poker_table="+data.is_poker_table+" hole_cards="+JSON.stringify(data.hole_cards||null));}
   // V2.9.153: Layer1+3
@@ -11362,8 +11365,7 @@ function onVisionResult(data){
   // V2.9.566: 每帧重置按钮计数/自动执行标记（帧新鲜信号，禁止跨帧残留）
   G._frameBtnCount = (data && data.buttons) ? data.buttons.length : 0;
   G._frameAutoLabel = '';
-  // V2.9.575 闸⑨: 牌面非法标志帧初清空（dedupCards或Kotlin终验会在本帧后置位）
-  G._cardsIllegal = '';
+  // V2.9.581: 帧初清空已移至函数入口（window._visionUpdating=true之后），此处原清空导致闸⑨失效已删除
   var _noTableSignals = (_noHole?1:0)+(_noD?1:0)+(_noBtn?1:0);
   var _isNoTable = _modelNoTable || _noTableSignals>=2;
   if(_isNoTable){
