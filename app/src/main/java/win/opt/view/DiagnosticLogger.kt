@@ -428,15 +428,30 @@ object DiagnosticLogger {
     private var bleManagerConnected = false
     
     // V2.9.503: Pipeline耗时追踪字段
+    // V2.9.588 FIX(B3): 新增screenshotTime(本帧截图起点)/pipelineLocalCVTimeMs(最近本地CV耗时)，
+    //   与FloatingService._pipeline*成员变量同源——顶层getPipelineTiming()原读Service成员，
+    //   Service重建后全0；统一读此单例(object,进程级)后顶层与kotlinDiag两份pipelineTiming一致。
+    @Volatile private var pipelineScreenshotTime = 0L
+    @Volatile private var pipelineLocalCVTimeMs = 0L
     private var pipelineJsDecisionTimeMs = 0L
     private var pipelineEsp32TapTimeMs = 0L
     private var pipelineTotalTimeMs = 0L
     private var pipelineLastAction = ""
-    
+
     fun setBleConnected(connected: Boolean) {
         bleManagerConnected = connected
     }
-    
+
+    // V2.9.588 FIX(B3): 记录本帧截图起点时间戳（processScreenshotAndAnalyze入口调用）
+    fun markScreenshotStart() {
+        pipelineScreenshotTime = System.currentTimeMillis()
+    }
+
+    // V2.9.588 FIX(B3): 更新最近一次本地CV耗时（logRecognition时回填，供导出填充localCVTimeMs）
+    fun updateLocalCVTime(localCVMs: Long) {
+        if (localCVMs > 0) pipelineLocalCVTimeMs = localCVMs
+    }
+
     // V2.9.503: Pipeline耗时更新
     fun updatePipelineTiming(jsMs: Long, esp32Ms: Long, totalMs: Long, action: String) {
         pipelineJsDecisionTimeMs = jsMs
@@ -636,7 +651,10 @@ object DiagnosticLogger {
         json.put("stats", generateStats())
         
         // V2.9.503: Pipeline耗时
+        // V2.9.588 FIX(B3): 补齐screenshotTime/localCVTimeMs两字段，与顶层getPipelineTiming同源
         json.put("pipelineTiming", JSONObject().apply {
+            put("screenshotTime", pipelineScreenshotTime)
+            put("localCVTimeMs", pipelineLocalCVTimeMs)
             put("jsDecisionTimeMs", pipelineJsDecisionTimeMs)
             put("esp32TapTimeMs", pipelineEsp32TapTimeMs)
             put("totalTimeMs", pipelineTotalTimeMs)

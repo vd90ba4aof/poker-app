@@ -974,6 +974,15 @@ var HandHistory={
     }catch(e){this.records=[];}
   },
   add:function(result,rawVision){
+    // V2.9.588 FIX(B1): 记录闸——与执行闸(autoExecuteDecision L13139 _frameBtnCount)同信号。
+    //   0按钮帧(等牌/过牌/手牌切换过渡)decide()照常算并显示悬浮球，但不写入HandHistory及下游
+    //   SessionStats/SelfTiltGuard/HandClassifier/TableQualityMeter——这些帧hero无行动权，
+    //   记录会产生"影子决策"污染复盘与盈利统计。仅拦rawVision=true的正常决策路径；
+    //   rawVision=false的出错/无手牌诊断记录保留(崩溃追溯需要)。
+    if(rawVision===true && (!G._frameBtnCount || G._frameBtnCount===0)){
+      try{console.log('[B1] 0按钮影子帧→跳过HandHistory记录(btnCount=0 action='+(result&&result.a)+')');}catch(_b1e){}
+      return;
+    }
     // V2.9.129: 决策时间（go 入口记 _goStartTime，这里算 elapsed）
     var _decisionMs=0;
     if(window._goStartTime){
@@ -1332,7 +1341,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.587',
+  CURRENT_VERSION:'2.9.588',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2471,7 +2480,10 @@ var FrameDiffEngine={
   _nh:function(f){if(!this._hid)return true;return this._hid!==f.hid&&f.hid!=='';},
   _df:function(p,cu){
     var acts=[];
-    if(cu.os&&p.os){for(var i=0;i<cu.os.length;i++){var o=cu.os[i],po=null;for(var j=0;j<p.os.length;j++){if(p.os[j].s===o.s){po=p.os[j];break;}}if(!po)continue;var d=po.c-o.c;if(d>0){acts.push({s:o.s,a:!o.a?'fold':(d<=cu.t+cu.p*0.1?'call':'raise'),am:d,cf:'m'});}else if(d===0&&po.a&&!o.a){acts.push({s:o.s,a:'fold',am:0,cf:'h'});}}}
+    // V2.9.588 FIX(B2-3): 给fold/call/raise动作注入当前街st(cu.street经VPP.fixStreet规范)，
+    //   供_ap喂DRTA时用对街名计数(替代写死的postflop)。
+    var _fdSt=cu.st||'';
+    if(cu.os&&p.os){for(var i=0;i<cu.os.length;i++){var o=cu.os[i],po=null;for(var j=0;j<p.os.length;j++){if(p.os[j].s===o.s){po=p.os[j];break;}}if(!po)continue;var d=po.c-o.c;if(d>0){acts.push({s:o.s,a:!o.a?'fold':(d<=cu.t+cu.p*0.1?'call':'raise'),am:d,cf:'m',st:_fdSt});}else if(d===0&&po.a&&!o.a){acts.push({s:o.s,a:'fold',am:0,cf:'h',st:_fdSt});}}}
     if(!p.hb&&cu.hb)acts.push({a:'our_turn',cf:'h'});
     if(cu.st!==p.st&&cu.st!=='')acts.push({a:'new_street',st:cu.st,cf:'h'});
     return acts;
@@ -2480,6 +2492,19 @@ var FrameDiffEngine={
     if(act.a==='our_turn'||act.a==='new_street')return;var s=act.s||0,pos=seatToPosStr(s);
     if(typeof OppProfiler!=='undefined'&&s>0){var nk=null;for(var k in OppProfiler._profiles){if(OppProfiler._profiles[k].pos===pos){nk=k;break;}}if(nk){if(act.a==='fold')OppProfiler._profiles[nk]._foldedThisHand=true;else if(act.a==='call')OppProfiler._profiles[nk]._lastBet=act.am||0;else if(act.a==='raise'){OppProfiler._profiles[nk]._raiseCount=(OppProfiler._profiles[nk]._raiseCount||0)+1;OppProfiler._profiles[nk]._lastBet=act.am||0;}}}
     if(typeof ActionLine!=='undefined'){var ls=ActionLine.getLines();if(ls.length>0){var ll=ls[ls.length-1];if(!ll.oppAction||ll.oppAction==='unknown')ll.oppAction=act.a;}}
+    // V2.9.588 FIX(B2-3): 对手fold信号喂DRTA——原inferOpponentAction(scene)无fold分支，
+    //   对手弃牌只能靠筹码差检测(_df)，而_ap只喂了OppProfiler没喂DRTA→fold_count/_fold_to_bet永远0。
+    //   对手fold必然面对下注或已投入盲注→isFacingBet=true(语义:对手弃牌率)；每手牌最多计1次防多对手重复。
+    if(act.a==='fold'&&typeof DRTA!=='undefined'&&DRTA.tracker){
+      try{
+        var _fdHid=(FrameDiffEngine._hid||'');
+        if(DRTA.tracker._foldHid!==_fdHid&&_fdHid!==''){
+          DRTA.tracker._foldHid=_fdHid;
+          var _fdStreet=act.st||(G.phase==='pre'?'preflop':(typeof getCurrentStreet==='function'?getCurrentStreet():'flop'));
+          DRTA.record('fold',_fdStreet,true);
+        }
+      }catch(_drtaFoldE){console.log('[DRTA-FOLD] 记录失败: '+_drtaFoldE.message);}
+    }
     console.log('[FD]'+s+' '+act.a+(act.am?' '+act.am:''));
   },
   onAutoFrameDone:function(){},
@@ -2763,7 +2788,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.587';
+var APP_VERSION='2.9.588';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -4914,7 +4939,13 @@ var DRTA={
     // V2.9.58: 记录PFR状态(下一手flop判断cbet)
     if(street==='preflop')t._was_pfr=(action==='raise'||action==='reraise');
     // V2.9.58: saw_flop + wtsd追踪
-    if(street==='flop')t._saw_flop++;
+    // V2.9.588 FIX(B2-5): _saw_flop为wtsd分母，语义是"每手牌看到flop一次"。
+    //   B2-1修好街名后，一手牌flop街若经历多个scene(对手check→bet演进)会多次走此分支→
+    //   _saw_flop虚高→wtsd偏低。用手牌key去重，保证每手最多+1。
+    if(street==='flop'){
+      var _sfKey=(G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'';
+      if(t._sawFlopKey!==_sfKey){t._saw_flop++;t._sawFlopKey=_sfKey;}
+    }
     t.recent_agg.push(agg);
     if(t.recent_agg.length>5)t.recent_agg.shift();
     if(street==='preflop'&&(action==='call'||action==='bet'||action==='raise'||action==='reraise'))t.vpip++;
@@ -6510,7 +6541,9 @@ function inferOpponentAction(scene,street){
 }
 function autoRecordOpponent(scene,street){
   if(!G.hole[0]||!G.hole[1])return;
-  var key=G.phase+'_'+scene+'_'+G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit;
+  // V2.9.588 FIX(B2-2): 去重key加入street——否则一手牌flop记一次后，turn/river的对手动作
+  //   因key相同被去重吞掉（B2-1修好街名后此bug显性化，必须联动）。
+  var key=G.phase+'_'+street+'_'+scene+'_'+G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit;
   if(key===_lastRecordedKey)return;
   var inferred=inferOpponentAction(scene,street);
   if(inferred){
@@ -10290,7 +10323,9 @@ function show(r){
   h+='<div class="speed-exit" onclick="exitSpeedMode()">✏️ 手动编辑</div>';
   document.getElementById('res').innerHTML=h;
   // V2.9.79: 记录行动线
-  if(r && G.hole[0] && G.hole[1]){
+  // V2.9.588 FIX(B1): 与HandHistory.add同闸——0按钮影子帧不写行动线(FrameDiffEngine对手动作
+  //   会落到一条hero实际无行动的假线上，污染didPreflopRaise/didFlopCBet等复盘推断)。
+  if(r && G.hole[0] && G.hole[1] && G._frameBtnCount && G._frameBtnCount>0){
     var _curStreet=G.phase==='pre'?'preflop':getCurrentStreet();
     var _fdA=FrameDiffEngine.getOppPostflopAction(_curStreet);var _oppAct=_fdA||ActionLine.getPrevOppAction(_curStreet);
     ActionLine.record(_curStreet,G.scene,r.a,_oppAct,r.eq||0,r.v||0);
@@ -10324,7 +10359,9 @@ function go(){
   var resEl=document.getElementById('res');if(resEl)resEl.innerHTML='<div style="color:#4fc3f7;font-size:14px;text-align:center;padding:8px">⏳</div>';setTimeout(function(){
   // V2.9.30: 自动采集对手动作(在decide之前)
   // V2.9.568: 删除phase修正（原V2.9.73）——street完全由公共牌数量决定（street保险），不再二次纠正
-  if(G.hole[0]&&G.hole[1])autoRecordOpponent(G.scene,G.phase==='pre'?'preflop':'postflop');
+  // V2.9.588 FIX(B2-1): 翻后街名原写死'postflop'，而record()按'flop'/'turn'/'river'计数→
+  //   _saw_flop/_cbet/_wtsd分母全0。改用getCurrentStreet()(公牌数决定,与ActionLine L10294同源)。
+  if(G.hole[0]&&G.hole[1])autoRecordOpponent(G.scene,G.phase==='pre'?'preflop':getCurrentStreet());
   // V2.9.46: 翻后用Worker异步MC, 翻前同步
   if(G.phase==='post'&&G.hole[0]&&G.hole[1]){
     var k=getHandKey();
@@ -12186,6 +12223,23 @@ function onVisionResult(data){
         _sdLog.push(_sdNick+':'+_sdBetCat+(_sdWon?'赢':'输'));
       }
     }
+    // V2.9.588 FIX(B2-4): DRTA.recordShowdown原为死代码(全仓库无调用)→_wtsd/_wsd永远0。
+    //   在showdown_cards闭环处补上：任一摊牌动作即wtsd++，有亮牌者赢即wsd++。
+    try{
+      var _drtaSdSeen=false,_drtaSdWon=false;
+      for(var _dsi2=0;_dsi2<data.showdown_cards.length;_dsi2++){
+        var _sd2=data.showdown_cards[_dsi2];
+        _drtaSdSeen=true;
+        if(_sd2&&_sd2.won){_drtaSdWon=true;}
+      }
+      if(_drtaSdSeen&&typeof DRTA!=='undefined'&&DRTA.tracker){
+        var _drtaSdKey=(G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'';
+        if(DRTA.tracker._sdHandKey!==_drtaSdKey){
+          DRTA.recordShowdown(_drtaSdWon);
+          DRTA.tracker._sdHandKey=_drtaSdKey;
+        }
+      }
+    }catch(_drtaSdE){console.log('[DRTA-SD] recordShowdown失败: '+_drtaSdE.message);}
     // 筹码差值算盈亏——摊牌时比较筹码变化
     var _curChips=parseInt(data.my_chips)||0;
     var _prevChips=G._prevRawChips||0;

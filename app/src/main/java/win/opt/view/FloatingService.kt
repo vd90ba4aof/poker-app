@@ -2132,15 +2132,19 @@ class FloatingService : Service() {
                 return DiagnosticLogger.exportAsJson()
             }
             // V2.9.503: pipeline耗时追踪查询
+            // V2.9.588 FIX(B3): 数据源统一为DiagnosticLogger单例(object,进程级)。
+            //   原读本Service的_pipeline*成员变量，Service销毁重建后归零→顶层pipelineTiming全0
+            //   (而kotlinDiag那份读单例正常)。同时localCVTimeMs原硬编码0L，现由updateLocalCVTime回填。
             @JavascriptInterface
             fun getPipelineTiming(): String {
+                val pt = DiagnosticLogger.exportAsJson().optJSONObject("pipelineTiming")
                 return org.json.JSONObject().apply {
-                    put("screenshotTime", _pipelineScreenshotTime)
-                    put("localCVTimeMs", 0L)
-                    put("jsDecisionTimeMs", _pipelineJsDecisionTimeMs)
-                    put("esp32TapTimeMs", _pipelineEsp32TapTimeMs)
-                    put("totalTimeMs", _pipelineTotalTimeMs)
-                    put("lastAction", _pipelineLastAction)
+                    put("screenshotTime", pt?.optLong("screenshotTime") ?: 0L)
+                    put("localCVTimeMs", pt?.optLong("localCVTimeMs") ?: 0L)
+                    put("jsDecisionTimeMs", pt?.optLong("jsDecisionTimeMs") ?: 0L)
+                    put("esp32TapTimeMs", pt?.optLong("esp32TapTimeMs") ?: 0L)
+                    put("totalTimeMs", pt?.optLong("totalTimeMs") ?: 0L)
+                    put("lastAction", pt?.optString("lastAction") ?: "")
                 }.toString()
             }
             // V2.9.560: JS导出路径获取poker_log.txt中的JS console日志
@@ -2708,6 +2712,8 @@ class FloatingService : Service() {
     private fun processScreenshotAndAnalyze(isAutoCapture:Boolean=false,isMultiFrame1:Boolean=false,isMultiFrame2:Boolean=false) {
         _diagStartTime = System.currentTimeMillis()
         _pipelineScreenshotTime = _diagStartTime
+        // V2.9.588 FIX(B3): 同步标记DiagnosticLogger单例截图起点，顶层getPipelineTiming同源读此单例
+        try { DiagnosticLogger.markScreenshotStart() } catch (_: Exception) {}
         val screenshot = ScreenCaptureService.latestScreenshot
         val ssInfo = if (screenshot != null) "${screenshot.size/1024}KB" else "null"
         Log.d(TAG, "★ processScreenshotAndAnalyze: screenshot=$ssInfo, apiKey=${VisionApiClient.apiKey.takeLast(4)}, webViewReady=$webViewReady")
@@ -2825,7 +2831,9 @@ class FloatingService : Service() {
                     rawResponse = if (result == null) VisionApiClient.lastRawResponse else if (result.holeCards.isEmpty()) "VLM返回空手牌" else null,  // V2.9.193
                     localDiag = VisionApiClient.lastLocalDiag
                 )
-                
+                // V2.9.588 FIX(B3): 回填最近一次本地CV耗时到单例，供getPipelineTiming导出(原localCVTimeMs硬编码0)
+                try { DiagnosticLogger.updateLocalCVTime(VisionApiClient.lastLocalCVTimeMs) } catch (_: Exception) {}
+
                 if (result != null) {
                     // V2.9.526: 没轮到我——预处理按钮状态，不发送策略、不点击、不启动Shot Clock
                     if (!result.isMyTurn) {
