@@ -401,8 +401,9 @@ class LocalCardRecognizer private constructor(private val context: Context) {
                 secondScore = labelBest
             }
         }
-        // 双门槛：绝对分0.55 + 与第二名分差0.05（实机误认0.55-0.80区间分差普遍<0.05，真牌0.85+）
-        val uncertain = bestLabel == null || bestScore < 0.55f || (bestScore - secondScore) < 0.05f
+        // V2.9.584双门槛: 绝对分0.55 + 分差0.05; V2.9.587修正: 高分区(>=0.70)分差不再触发uncertain
+        // V2.9.587 FIX: 高分区(>=0.70)模板碰撞不等于误认——只拦截低分区小分差
+        val uncertain = bestLabel == null || bestScore < 0.55f || ((bestScore - secondScore) < 0.05f && bestScore < 0.70f)
         return MatchOutcome(bestLabel, bestScore, uncertain)
     }
 

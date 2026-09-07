@@ -123,6 +123,8 @@ object VisionApiClient {
     private val _compactSuccessCount = java.util.concurrent.atomic.AtomicInteger(0)
     var compactSuccessCount: Int get() = _compactSuccessCount.get(); private set(value) { _compactSuccessCount.set(value) }
     private val _compactFailCount = java.util.concurrent.atomic.AtomicInteger(0)
+    // V2.9.587 FIX: 连续手牌null计数器——连续3帧手牌不可信→清缓存强制重截图
+    private var _consecutiveHandNullCount = 0
     var compactFailCount: Int get() = _compactFailCount.get(); private set(value) { _compactFailCount.set(value) }
     private val _fallbackSuccessCount = java.util.concurrent.atomic.AtomicInteger(0)
     var fallbackSuccessCount: Int get() = _fallbackSuccessCount.get(); private set(value) { _fallbackSuccessCount.set(value) }
@@ -1307,10 +1309,12 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     localCommConfOk = commConfOk
                     localMinConfidence = if (localHands.isNotEmpty()) localHands.minOf { it.confidence } else 1.0f
                     if (handConfOk && commConfOk) {
+                        _consecutiveHandNullCount = 0  // V2.9.587: 成功帧重置计数
                         Log.d(TAG, "🔍 本地CV HIGH: ${localCVElapsed}ms | " +
                                 "hand=${localHands.map { "${it.rank}${it.suit}(${it.confidence})" }} | " +
                                 "comm=${localComms.map { "${it.rank}${it.suit}(${it.confidence})" }}")
                     } else if (handConfOk && !commConfOk) {
+                        _consecutiveHandNullCount = 0  // V2.9.587: 手牌可信也重置
                         // 手牌可信，公共牌不可信（置信/uncertain/槽位结构）——丢弃公共牌，保留手牌
                         Log.w(TAG, "🔍 公共牌不可信(bad=${commBad.map { "${it.rank}${it.suit}@C${it.slot}(r=%.2f%s,s=%.2f%s)".format(it.rankScore, if (it.rankUncertain) "U" else "", it.suitScore, if (it.suitUncertain) "U" else "") }} struct=$commStructOk)，丢弃公共牌，手牌保留")
                         localCommCards = emptyList()
@@ -1319,6 +1323,14 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         Log.w(TAG, "🔍 手牌不可信(bad=${handBad.map { "${it.rank}${it.suit}@H${it.slot}(r=%.2f%s,s=%.2f%s)".format(it.rankScore, if (it.rankUncertain) "U" else "", it.suitScore, if (it.suitUncertain) "U" else "") }})，丢弃，VLM兜底")
                         localHoleCards = null
                         localCommCards = emptyList()
+                        // V2.9.587 FIX: 连续手牌null计数——≥3帧清缓存强制重截图
+                        _consecutiveHandNullCount++
+                        if (_consecutiveHandNullCount >= 3) {
+                            Log.w(TAG, "🔄 连续${_consecutiveHandNullCount}帧手牌null → 清缓存强制重截图")
+                            RegionCropper.clearBoardCache()
+                            holeCardsLocked = null; holeCardsLockedAt = 0L
+                            _consecutiveHandNullCount = 0
+                        }
                     }
                 } catch (e: Exception) {
                     lastLocalCVTimeMs = 0
