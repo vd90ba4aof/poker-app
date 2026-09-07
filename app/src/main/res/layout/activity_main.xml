@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.588 · 影子决策过滤+DRTA统计修复+Pipeline耗时同源"
+        android:text="V2.9.589 · 多人池河牌抓诈硬禁门"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

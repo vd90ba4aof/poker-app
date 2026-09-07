@@ -1341,7 +1341,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.588',
+  CURRENT_VERSION:'2.9.589',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2788,7 +2788,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.588';
+var APP_VERSION='2.9.589';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -10095,6 +10095,16 @@ function postF(k){
       var _bcDec=BluffCatcher.decide(eq,bet,pot,hClass,_facingOppType,ip,street,scene,bTexture,oppRange,k);
       if(_bcDec){
         if(_bcDec.action==='call'){
+          // V2.9.589: 多人池河牌抓诈硬禁——内联HeroCallGate.canCall的MP门(act>=4禁hero call)。
+          // 背景: BluffCatcher.catchThreshold(L8061)仅按赔率/阻断牌/极化度/对手类型定阈值, 无人数参数;
+          //       多人池河牌bluff频率显著低(V2.9.128原设计: 5+人池≈0%bluff, 4人池≈10%), HU抓诈阈值在MP边际为负。
+          // 口径: 河牌G.act=Kotlin active_players「仅有牌(明/暗)的玩家, 弃牌/空座不计」(VisionApiClient.kt L538),
+          //       翻后即真实在池人数; G.act缺失时默认2(放行, 不引入新误弃)。
+          // 边界: 仅作用于BluffCatcher边缘抓诈(MEDIUM/WEAK); NUTS/STRONG加注与河牌中对价值跟(L9859)在本块之前, 不受影响。
+          var _mpGateAct=(typeof G!=='undefined'&&G.act)?G.act:2;
+          if(_mpGateAct>=4){
+            return{a:'fold',r:'多人池('+_mpGateAct+'人)河牌不抓诈',eq:eq,c:'l',po:Math.round(bet>0?bet/(pot+bet)*100:50),scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,bTexture:bTexture,hClass:hClass,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
+          }
           var exploitBC=applyExploit(eq,'call',_facingOppType,{bet:bet,pot:pot});
           return{a:'call',r:_bcDec.reason,eq:exploitBC.eq,c:'m',po:Math.round(bet>0?bet/(pot+bet)*100:50),scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,bTexture:bTexture,hClass:hClass,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
         }
