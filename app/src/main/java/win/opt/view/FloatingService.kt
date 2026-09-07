@@ -2137,7 +2137,8 @@ class FloatingService : Service() {
             //   (而kotlinDiag那份读单例正常)。同时localCVTimeMs原硬编码0L，现由updateLocalCVTime回填。
             @JavascriptInterface
             fun getPipelineTiming(): String {
-                val pt = DiagnosticLogger.exportAsJson().optJSONObject("pipelineTiming")
+                // V2.9.588 FIX(B3): exportAsJson()返回String，先解析再取pipelineTiming节点
+                val pt = try { org.json.JSONObject(DiagnosticLogger.exportAsJson()).optJSONObject("pipelineTiming") } catch (e: Exception) { null }
                 return org.json.JSONObject().apply {
                     put("screenshotTime", pt?.optLong("screenshotTime") ?: 0L)
                     put("localCVTimeMs", pt?.optLong("localCVTimeMs") ?: 0L)
