@@ -913,7 +913,7 @@ var FallbackStrategy={
   // 河牌Fallback: 胜率区间决策(参考调研: 河牌弱化底池精度依赖)
   // >65%: value bet, 50-65%: 薄value/check, 35-50%: bluff-catch/fold, <35%: fold
   _riverFallback:function(eq,hClass,scene,pot,bet,stk,spr,ip,opp,tier,profile,weights){
-    var nq=bet>0?Math.round(bet/(pot+bet*2)*100):0;
+    var nq=bet>0?Math.round(bet/(pot+bet)*100):0;  // V2.9.586 FIX: pot已含对手bet
     nq=Math.max(nq,20);
     // V2.9.72: 有效下注=实际需要call的量(短码时stk<bet)
     var effectiveBet=bet>0?Math.min(bet,stk):0;
@@ -1332,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.585',
+  CURRENT_VERSION:'2.9.586',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2763,7 +2763,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.585';
+var APP_VERSION='2.9.586';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8065,7 +8065,7 @@ var BluffCatcher={
     if(!this.isBCSpot(street,scene,hClass))return null;
     
     var betPotRatio=bet>0?bet/(pot+bet):0;
-    var potOdds=bet>0?bet/(pot+bet*2)*100:50;
+    var potOdds=bet>0?bet/(pot+bet)*100:50;  // V2.9.586 FIX: pot已含对手bet
     var polarization=this.betPolarization(betPotRatio,oppType);
     var blockerEff=this.blockerEffect(k,oppRange,bTexture);
     var catchThresh=this.catchThreshold(potOdds,betPotRatio,oppType,blockerEff,polarization,hClass);
@@ -9699,7 +9699,7 @@ function postF(k){
   eq=Math.max(5,Math.min(95,eq));
   var _effectiveBet=bet>0?Math.min(bet,stk):0;
   var po=0;
-  if(_effectiveBet>0)po=_effectiveBet/(pot+_effectiveBet+_effectiveBet)*100;
+  if(_effectiveBet>0)po=_effectiveBet/(pot+_effectiveBet)*100;  // V2.9.586 FIX: pot已含对手bet
   // V2.9.186: Bomb Pot equity 调整
   // 多人底池中：同花/顺子听牌价值×1.3，顶对价值×0.8，两对+价值×1.1
   try{
@@ -10063,9 +10063,9 @@ function postF(k){
       if(_bcDec){
         if(_bcDec.action==='call'){
           var exploitBC=applyExploit(eq,'call',_facingOppType,{bet:bet,pot:pot});
-          return{a:'call',r:_bcDec.reason,eq:exploitBC.eq,c:'m',po:Math.round(bet>0?bet/(pot+bet*2)*100:50),scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,bTexture:bTexture,hClass:hClass,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
+          return{a:'call',r:_bcDec.reason,eq:exploitBC.eq,c:'m',po:Math.round(bet>0?bet/(pot+bet)*100:50),scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,bTexture:bTexture,hClass:hClass,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
         }
-        return{a:'fold',r:_bcDec.reason,eq:eq,c:'l',po:Math.round(bet>0?bet/(pot+bet*2)*100:50),scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,bTexture:bTexture,hClass:hClass,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
+        return{a:'fold',r:_bcDec.reason,eq:eq,c:'l',po:Math.round(bet>0?bet/(pot+bet)*100:50),scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,bTexture:bTexture,hClass:hClass,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
       }
     }
     // V2.9.121: 面对reraise/check-raise保持理智——MEDIUM/DRAW弱手弃牌
