@@ -3325,7 +3325,7 @@ function decidePreflop(k){
   // V2.9.582 FIX(P1): 与翻后同款——硬45%地板仅用于大jam(注池比>=0.5);
   //   小jam(短码巨池)回归赔率门槛+3%噪声裕度(翻前eq为查表值,裕度取3%)。
   if(scene==='allin'){
-    var allinBet=bet||pot,allinEq=eq+(posMod[p]!==undefined?posMod[p]:0);
+    var allinBet=bet||pot,allinEq=eq;  // V2.9.584 FIX(BUG-04): posMod已在L3200统一加过,allin分支不再重复加(旧引擎L9087同理)
     var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet*2)*100):50;
     var _preAiRatio=pot>0?allinBet/(pot+allinBet):0;
     callThresh=_preAiRatio>=0.5?Math.max(callThresh,45):Math.min(callThresh+3,25);
@@ -9142,8 +9142,7 @@ function preF(k){
   // V2.9.35: 翻前面对allin - 只需判断call或fold
   if(scene==='allin'){
     var allinBet=bet||pot;
-    var allinEq=eq;
-    allinEq+=(posMod[p]!==undefined?posMod[p]:0);
+    var allinEq=eq;  // V2.9.584 FIX(BUG-04): posMod已在L9087统一加过,不再重复加
     if(_preAct>=6)allinEq-=8;else if(_preAct===5)allinEq-=5;else if(_preAct===4)allinEq-=4;else if(_preAct===3)allinEq-=2;
     var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet*2)*100):50;
     callThresh=Math.max(callThresh,45);
