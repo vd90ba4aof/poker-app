@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.583 · 黑桃suit误切修复+跨手双rank清锁+暗置灰牌自适应颜色——suitCap几何上界替代mergeRow启发式, 本地双rank与锁零重合即清锁, 暗置红桃/方块自适应mask"
+        android:text="V2.9.584 · 翻前HandHistory记录修复+SB位3B表call档补全"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
