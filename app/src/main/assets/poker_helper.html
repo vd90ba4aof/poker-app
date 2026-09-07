@@ -1332,7 +1332,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.584',
+  CURRENT_VERSION:'2.9.585',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2763,7 +2763,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.584';
+var APP_VERSION='2.9.585';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -2792,8 +2792,8 @@ var _RFI={
 var _3B={
   vs_UTG1:{
     from_MP:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.3},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.3},A5s:{a:'3b',f:.3},A4s:{a:'3b',f:.2},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}},
-    from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4}},
-    from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},TT:{a:'c',f:.8},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},ATs:{a:'c',f:.4},KQs:{a:'c',f:.5},KJs:{a:'c',f:.4},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4},T9s:{a:'c',f:.3}},
+    from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4}},
+    from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},TT:{a:'c',f:.8},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},ATs:{a:'c',f:.4},KQs:{a:'c',f:.5},KJs:{a:'c',f:.4},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4},T9s:{a:'c',f:.3}},
     from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},"77":{a:'c',f:.4},AJs:{a:'c',f:.5},ATo:{a:'c',f:.5},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},KTs:{a:'c',f:.5},KQo:{a:'c',f:.3},QTs:{a:'c',f:.4},QJs:{a:'c',f:.4},JTs:{a:'c',f:.5},T9s:{a:'c',f:.4},"98s":{a:'c',f:.3},AJo:{a:'c',f:.3},QJo:{a:'c',f:.2}},
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},A5s:{a:'3b',f:.3},JJ:{a:'c',f:.8},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQs:{a:'c',f:.6},AQo:{a:'c',f:.5},AJs:{a:'c',f:.4},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}}
   },
@@ -2963,6 +2963,7 @@ function _oppDev(stat,actual,gto,sd){
 function _quantExploitAdjust(freq, act, oppProfile, boardTexture){
   var adj={freq:freq, sizingMult:1.0, note:''};
   if(!oppProfile||oppProfile.confidence<0.15) return adj;
+  if(freq<=0) return adj;  // V2.9.585 FIX(BUG-09): 表说0频率不剥削,防Math.max(0.1,..)把0拉回0.1
   var bl = _getBaseline();
   var gto=bl.gto, sd=bl.sd;
 
@@ -3326,7 +3327,7 @@ function decidePreflop(k){
   //   小jam(短码巨池)回归赔率门槛+3%噪声裕度(翻前eq为查表值,裕度取3%)。
   if(scene==='allin'){
     var allinBet=bet||pot,allinEq=eq;  // V2.9.584 FIX(BUG-04): posMod已在L3200统一加过,allin分支不再重复加(旧引擎L9087同理)
-    var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet*2)*100):50;
+    var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet)*100):50;  // V2.9.585 FIX(BUG-07): pot已含对手bet,正确赔率=bet/(pot+bet)
     var _preAiRatio=pot>0?allinBet/(pot+allinBet):0;
     callThresh=_preAiRatio>=0.5?Math.max(callThresh,45):Math.min(callThresh+3,25);
     if(allinEq>=callThresh){var exploitA=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});return{a:'call',r:'GTO vs allin eq'+Math.round(allinEq)+'%>='+callThresh+'%',eq:exploitA.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitA.exploit,_se:true};}
@@ -3382,7 +3383,7 @@ function decidePostflop(k){
   //         小jam回归赔率门槛+3%噪声裕度(MC误差/范围不确定性缓冲)。
   if(scene==='allin'){
     var _aiBet=bet||pot;
-    var _aiThresh=_aiBet>0?Math.round(_aiBet/(pot+_aiBet*2)*100):50;
+    var _aiThresh=_aiBet>0?Math.round(_aiBet/(pot+_aiBet)*100):50;  // V2.9.585 FIX(BUG-07): 同上
     var _aiBetRatio=pot>0?_aiBet/(pot+_aiBet):0; // 注池比: 大jam>=0.5
     _aiThresh=_aiBetRatio>=0.5?Math.max(_aiThresh,40):Math.min(_aiThresh+3,20); // 翻后放宽(有公共牌信息)
     if(eq>=_aiThresh){
@@ -3464,7 +3465,9 @@ function decidePostflop(k){
   // ★ V3.34: River纹理表决策 (旧引擎v2.9.164, 有完整IP/OOP纹理表)
   if(street==='river' && typeof _riverDecision==='function'){
     try{
-      var _rivR=_riverDecision(k,hcKey,didPFR,scene,bet,pot,btKey,ip,null,_is3betPot,_isMultiway,eq);
+      // V2.9.585 FIX(BUG-15): btKey映射—_bt2key返回0/1/2/4/5/6,_RIV表只有0/1/2/3,需映射4→2,5→3,6→2
+      var _rivBtKey={'4':'2','5':'3','6':'2'}[btKey]||btKey;
+      var _rivR=_riverDecision(k,hcKey,didPFR,scene,bet,pot,_rivBtKey,ip,null,_is3betPot,_isMultiway,eq);
       if(_rivR&&_rivR.a){return _rivR;}
     }catch(e){}
   }
@@ -3681,6 +3684,7 @@ function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW
       var _nOppMW=(_nOpp&&_nOpp>=3)?_nOpp:3;
       _statFold=Math.pow(Math.max(_statFold,0.05),_nOppMW-1);
       _statCall=Math.max(0.20,1-_statFold);
+      _statRaise=Math.max(0.02,1-_statFold-_statCall);  // V2.9.585 FIX(BUG-10): MW下stat三概率归一
     }
     if(_is3bP){_statFold=Math.max(0.25,_statFold*0.85);}
     var _canBluff=_sprAdj&&_sprAdj.bluff>0.3;
@@ -3880,15 +3884,15 @@ function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,
     // V2.9.161: River SPR/3bet/Multiway调整
         var _rivAdj=1;
         if(e.a==='bluff'){
-          if(_sprAdj.bluff<0.5)_rivAdj=0; // 短码不诈唬
-          else _rivAdj=_sprAdj.bluff;
-          if(_is3betPot)_rivAdj*=0.5; // 3bet底池诈唬减半
-          if(_isMultiway)_rivAdj*=0.3; // 多人池几乎不诈唬
+          if(_sprAdj3.bluff<0.5)_rivAdj=0; // 短码不诈唬  // V2.9.585 FIX(BUG-20): _sprAdj→_sprAdj3(参数),_is3betPot→_is3bP3
+          else _rivAdj=_sprAdj3.bluff;
+          if(_is3bP3)_rivAdj*=0.5; // 3bet底池诈唬减半
+          if(_isMW3)_rivAdj*=0.3; // 多人池几乎不诈唬
         }
         if(e.a==='bet'&&hcKey>=9&&hcKey<=11){
           // 听牌未成: SPR调整
-          _rivAdj*=_sprAdj.cbet;
-          if(_is3betPot)_rivAdj*=0.7;
+          _rivAdj*=_sprAdj3.cbet;
+          if(_is3bP3)_rivAdj*=0.7;
         }
         if(_rivAdj<0.3&&e.a==='bluff'){e={a:'check',s:0};} // 调整后诈唬概率太低→check
     // V2.9.572 P0(根因④): bluff必须有频率门控——旧逻辑只要表说bluff就100%执行,
@@ -9144,7 +9148,7 @@ function preF(k){
     var allinBet=bet||pot;
     var allinEq=eq;  // V2.9.584 FIX(BUG-04): posMod已在L9087统一加过,不再重复加
     if(_preAct>=6)allinEq-=8;else if(_preAct===5)allinEq-=5;else if(_preAct===4)allinEq-=4;else if(_preAct===3)allinEq-=2;
-    var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet*2)*100):50;
+    var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet)*100):50;  // V2.9.585 FIX(BUG-07): pot已含对手bet,正确赔率=bet/(pot+bet)
     callThresh=Math.max(callThresh,45);
     if(allinEq>=callThresh){
       var exploitAllin=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});
