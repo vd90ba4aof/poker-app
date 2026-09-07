@@ -485,9 +485,13 @@ object DiagnosticLogger {
         val chipStatus = determineChipStatus(chipDelta)
         val potDelta = vlmResult?.let { calcPotDelta(it.potSize) } ?: 0
         
+        // V2.9.590: 无手牌帧=fold后旁观/发牌过渡的预期行为(v572按钮闸+NO_TABLE分支已正确不点击),非功能受损
+        val isNoHoleFrame = vlmResult != null && vlmResult.holeCards.isEmpty()
         // V2.9.215: 自动推断错误分类
         val cat = if (hasError) {
             when {
+                // V2.9.590: 无手牌帧优先识别为识别类(双保险,与FloatingService传入的errorCategory一致)
+                isNoHoleFrame -> ErrorCategory.RECOGNITION
                 errorMessage?.contains("timeout", ignoreCase = true) == true ||
                 errorMessage?.contains("超时") == true ||
                 rawResponse?.contains("timeout", ignoreCase = true) == true -> ErrorCategory.TIMEOUT
@@ -550,7 +554,9 @@ object DiagnosticLogger {
         
         // V2.9.215: 如果有错误，同步记录到错误日志
         if (hasError) {
-            logError(cat, Severity.HIGH, errorMessage ?: "unknown", "totalTimeMs=$totalTimeMs")
+            // V2.9.590: 无手牌帧(旁观/过渡)信息性低危,不再报HIGH;真实识别失败(result==null等)维持HIGH
+            val sev = if (isNoHoleFrame) Severity.LOW else Severity.HIGH
+            logError(cat, sev, errorMessage ?: "unknown", "totalTimeMs=$totalTimeMs")
         }
     }
     

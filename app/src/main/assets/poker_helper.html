@@ -1010,6 +1010,9 @@ var HandHistory={
       bbResult:result.bbResult||0,
       decisionMs:_decisionMs  // V2.9.129
     };
+    // V2.9.590: 摊牌门控快照(本手)——fold标记+河牌主动激进度标记，供下一新手牌帧判摊牌用
+    if(rec.execAction==='fold'){G._sdHeroFolded=true;}
+    if(G.comm.filter(function(c){return c!==null;}).length>=5 && (rec.execAction==='raise'||rec.execAction==='bet'||rec.execAction==='allin')){G._sdRiverAggro=true;}
     this.records.unshift(rec);
     if(this.records.length>this.MAX_RECORDS)this.records=this.records.slice(0,this.MAX_RECORDS);
     try{localStorage.setItem(this.STORAGE_KEY,JSON.stringify(this.records));}catch(e){}
@@ -1341,7 +1344,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.589',
+  CURRENT_VERSION:'2.9.590',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2788,7 +2791,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.589';
+var APP_VERSION='2.9.590';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -11514,6 +11517,8 @@ function onVisionResult(data){
     }
     while(G.comm.length<5) G.comm.push(null);
   }
+  // V2.9.590: 本手快照——公牌满5张=进入河牌(摊牌门控信号;公牌为空时count=0不会误置)
+  if(G.comm.filter(function(c){return c!==null;}).length>=5){G._sdReachedRiver=true;}
   
   // 3. V2.9.12: 从按钮文字自动推导场景（不调setScene，避免覆盖pot/bet和重复go）
   // V2.9.78: street保险——以公共牌数为准，纠正Vision返回的错误street
@@ -11574,8 +11579,57 @@ function onVisionResult(data){
               }
             }catch(_slrErr){}
           }
+          // V2.9.590: ★ 摊牌学习闭环——筹码差=上一手净输赢(已含结算),用保守真值表喂DRTA摊牌指标 ★
+          // 门控信号全部来自行动帧快照: _sdReachedRiver(公牌满5张)/_sdHeroFolded(我们fold)/_sdRiverAggro(河牌我们主动打)
+          // 原则: 宁漏记不记错——学习信号错了比没有更毒。纯逻辑判定,零新增识别/网络/IO,全部复用本帧数据。
+          try{
+            var _sdSkipReason='';
+            if(G._sdHeroFolded){_sdSkipReason='hero_fold';}                    // 我们fold=没摊牌
+            else if(!G._sdReachedRiver){_sdSkipReason='not_river';}            // 未到河牌=对手中途fold,无摊牌
+            else if(_delta<0 && _newHandChips<G._prevRawChips*0.65){_sdSkipReason='rebuy_or_table_switch';} // 新筹码<旧码65%=换桌/rebuy/全下后码量断崖,非普通单手结果(实测换桌34658→10123=29%,17168→3407=20%)
+            else{
+              // 间隔保护: 距上一决策帧>90秒=中途离场/长暂停,筹码可能被他事改动,保守跳过
+              var _sdGapMs=0;
+              if(HandHistory.records && HandHistory.records.length>0 && HandHistory.records[0].ts){_sdGapMs=Date.now()-HandHistory.records[0].ts;}
+              if(_sdGapMs>90000){_sdSkipReason='gap_too_long('+Math.round(_sdGapMs/1000)+'s)';}
+            }
+            if(_sdSkipReason){
+              console.log('[摊牌学习] 跳过摊牌判定: '+_sdSkipReason);
+            }else if(typeof DRTA!=='undefined' && DRTA.tracker){
+              // 去重: 每手牌最多喂1次(仿L12245_sdHandKey机制,用旧手牌key)
+              var _sdKey=_prevHandIdForLearn||'';
+              if(DRTA.tracker._chipSdHandKey!==_sdKey && _sdKey!==''){
+                DRTA.tracker._chipSdHandKey=_sdKey;
+                if(_delta<0){
+                  // 到河牌+没fold+输钱=必为摊牌被击败(对手fold我们只会赢);won为对手池视角=true
+                  DRTA.recordShowdown(true);
+                  console.log('[摊牌学习] 河牌摊牌被击败 Δ='+_delta+' ('+_bbR+'BB) → 对手池摊牌赢,已喂DRTA wtsd+wsd');
+                }else if(_delta>0 && !G._sdRiverAggro){
+                  // 河牌没主动打还赢钱=check/call摊牌赢(对手不可能fold给check);对手池视角=false
+                  DRTA.recordShowdown(false);
+                  console.log('[摊牌学习] 河牌check/call摊牌赢 Δ='+_delta+' ('+_bbR+'BB) → 对手池摊牌输,已喂DRTA wtsd');
+                }else{
+                  // 河牌主动打(bet/raise/allin)后赢钱=对手fold与对手call输无法区分→保守不喂,留v591亮牌CV
+                  console.log('[摊牌学习] 河牌主动打赢 Δ='+_delta+' 无法区分对手fold/摊牌,保守不喂');
+                }
+              }
+            }
+            // 回填真实盈亏到handHistory上一手记录(修断点②: 决策时bbResult恒0,SessionStats.setResult记错手)
+            if(_prevHandIdForLearn && HandHistory.records){
+              for(var _hhI=0;_hhI<HandHistory.records.length;_hhI++){
+                var _hr=HandHistory.records[_hhI];
+                if(_hr && _hr.hole && (_hr.hole.join('')===_prevHandIdForLearn)){
+                  _hr.bbResult=_bbR;
+                  break;
+                }
+              }
+            }
+          }catch(_sdErr){console.log('[摊牌学习] 异常: '+_sdErr.message);}
         }
       }
+      // V2.9.590: 快照轮转——新手牌帧结算后清零上一手摊牌门控快照(防跨手残留,同v566残留类BUG)。
+      //   清零放G._prevRawChips盈亏块外: 同手Δ在±0.5BB内盈亏块不进,但快照必须照样清零防跨手残留。
+      if(_isNewHand){G._sdHeroFolded=false;G._sdReachedRiver=false;G._sdRiverAggro=false;}
     } else {
       G.phase='post';
       // V2.9.567 FIX(P0): 翻牌/转牌/河牌街变化时清零G.bet——v566双保险仅在preflop块内（L11288），

@@ -2827,10 +2827,12 @@ class FloatingService : Service() {
                     vlmResult = result,
                     totalTimeMs = System.currentTimeMillis() - _diagStartTime,
                     hasError = result == null || result.holeCards.isEmpty(),
-                    errorMessage = if (result == null) VisionApiClient.lastError else if (result.holeCards.isEmpty()) "VLM返回空手牌" else null,
+                    errorMessage = if (result == null) VisionApiClient.lastError else if (result.holeCards.isEmpty()) "本帧无手牌(旁观/过渡帧)" else null,
                     strategySent = result != null && result.isPokerTable && result.holeCards.isNotEmpty(),
-                    rawResponse = if (result == null) VisionApiClient.lastRawResponse else if (result.holeCards.isEmpty()) "VLM返回空手牌" else null,  // V2.9.193
-                    localDiag = VisionApiClient.lastLocalDiag
+                    rawResponse = if (result == null) VisionApiClient.lastRawResponse else if (result.holeCards.isEmpty()) "本帧无手牌(旁观/过渡帧)" else null,  // V2.9.590 文案更正(原"VLM返回空手牌"为云VLM时代遗留)
+                    localDiag = VisionApiClient.lastLocalDiag,
+                    // V2.9.590: 空手牌=fold后旁观帧/发牌过渡帧的预期行为(非错误),归类识别错误·低危;真空VLM失败仍未知错误·HIGH
+                    errorCategory = if (result != null && result.holeCards.isEmpty()) DiagnosticLogger.ErrorCategory.RECOGNITION else DiagnosticLogger.ErrorCategory.UNKNOWN
                 )
                 // V2.9.588 FIX(B3): 回填最近一次本地CV耗时到单例，供getPipelineTiming导出(原localCVTimeMs硬编码0)
                 try { DiagnosticLogger.updateLocalCVTime(VisionApiClient.lastLocalCVTimeMs) } catch (_: Exception) {}
