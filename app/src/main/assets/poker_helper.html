@@ -1344,7 +1344,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.590',
+  CURRENT_VERSION:'2.9.591',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2791,7 +2791,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.590';
+var APP_VERSION='2.9.591';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -9294,6 +9294,16 @@ function preF(k){
       return{a:'raise',v:rSz2,r:k+' 3bet反击',eq:exploitResult4.eq,c:'h',sizing:rSz2,scene:sceneLabel,spr:spr,evs:compareEVs(eq,pot,actualBet,rSz2),exploit:exploitResult4.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
     }
     // V2.9.35: 面对raise跟注需eq>=48或范围支持, eq<45太松(KJo等不该跟)
+    // V2.9.591 FIX(P0, 实机日志2026-09-08 UTG进K5o/76o、MP进J6o、CO进103o致筹码崩塌):
+    //   前位(UTG/MP/CO)off-suit弱牌(eq<35)不得跟注小注open——前位范围需紧,
+    //   off-suit垃圾牌(如K5o/76o/J6o/103o)翻后难玩,进池即送钱。
+    //   后位(BTN/SB/BB)和suited牌不受影响;在cS范围表中的牌不受影响。
+    var _earlyPos=['utg','utg1','mp','mp1','hj','co'].indexOf(G.pos)>=0;
+    var _isOffsuit=k.indexOf('o')>=0&&k.length===3;
+    var _inCallRange=cS.indexOf(k)!==-1;
+    if(_earlyPos&&_isOffsuit&&!_inCallRange&&eq<35){
+      return{a:'fold',r:k+' 前位offsuit弱牌(eq'+Math.round(eq)+'<35)→弃',eq:eq,c:'l',scene:sceneLabel,spr:spr,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
+    }
     // V2.9.582 FIX(P2, 实机日志2026-09-06 J6s 7BB+35BB两次冷跟、flop fold全损42BB):
     //   3bet级大注(toCall>=5BB)时范围表外的弱牌不得靠eq兜底跟注——preF的eq是
     //   「vs随机牌桌」查表口径(J6s≈52%)，vs紧3bet范围真实eq≈27%，口径错配致误跟。
@@ -10195,7 +10205,7 @@ function show(r){
     if(r.a==='fold') btnText=G.buttons.find(function(b){return b.indexOf('弃牌')>=0||b.indexOf('Fold')>=0||b.indexOf('fold')>=0;})||'';
     else if(r.a==='call'||r.a==='weak_call') btnText=G.buttons.find(function(b){return b.indexOf('跟注')>=0||b.indexOf('Call')>=0||b.indexOf('call')>=0||b.indexOf('过牌')>=0||b.indexOf('Check')>=0;})||'';
     else if(r.a==='raise'||r.a==='raise_big') btnText=G.buttons.find(function(b){return b.indexOf('加注')>=0||b.indexOf('Raise')>=0||b.indexOf('下注')>=0||b.indexOf('Bet')>=0||b.indexOf('全下')>=0||b.indexOf('All-in')>=0||b.indexOf('all-in')>=0;})||'';
-    else if(r.a==='check') btnText=G.buttons.find(function(b){return b.indexOf('过牌')>=0||b.indexOf('Check')>=0||b.indexOf('check')>=0;})||'';
+    else if(r.a==='check') btnText=G.buttons.find(function(b){return b.indexOf('过牌')>=0||b.indexOf('让牌')>=0||b.indexOf('Check')>=0||b.indexOf('check')>=0;})||'';
     else if(r.a==='allin') btnText=G.buttons.find(function(b){return b.indexOf('全下')>=0||b.indexOf('全押')>=0||b.indexOf('All-in')>=0||b.indexOf('all-in')>=0||b.indexOf('ALL IN')>=0;})||'';
   }
   var displayAction=btnText||cn;
