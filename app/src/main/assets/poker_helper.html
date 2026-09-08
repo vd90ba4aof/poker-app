@@ -1344,7 +1344,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.594',
+  CURRENT_VERSION:'2.9.595',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2791,7 +2791,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.594';
+var APP_VERSION='2.9.595';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -10544,13 +10544,21 @@ function bridgeAdvice(r){
         try{ if(HandHistory.records&&HandHistory.records[0]){ HandHistory.records[0].execAction='fold'; try{localStorage.setItem(HandHistory.STORAGE_KEY,JSON.stringify(HandHistory.records));}catch(_){} } }catch(_hhErr){}
       }else if(G._frameAutoLabel==='wait'){
         _dispData='⏳ 未识别到行动按钮·等待渲染|COLOR:CHECK|SIGNAL:NONE';
+      }else if(G._frameAutoLabel==='ghostcheck'){
+        _dispData='✅ 灰让牌·逻辑组按钮自动过牌|COLOR:CHECK|SIGNAL:CHECK';   // V2.9.595 灰让牌B方案
       }else if(G._frameAutoLabel==='retrying'){
         _dispData='🔁 点击未生效·已自动重点|COLOR:CHECK|SIGNAL:RETRY';   // V2.9.594 重试帧文案
       }
       if(AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+_dispData.substring(0,80));AndroidBridge.showAdvice(_dispData);}}catch(_ae){console.log("[autoExec] err:"+_ae.message);_autoExecResult='error';if(AndroidBridge.showAdvice){AndroidBridge.showAdvice(_dispData);}}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
     if(typeof AndroidBridge!=='undefined'&&AndroidBridge.updateNotification){AndroidBridge.updateNotification(fullAdv,reason);}
     // V2.9.503: 记录决策到Kotlin端诊断日志
-    try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.logDecision){
+    // V2.9.595 P3 FIX(实机铁证22:57:39换手脏帧): 0按钮影子帧decide()基于前一手残留手牌
+    //   产出的fold/call/raise是脏决策(v588 B1闸已挡HandHistory/ActionLine,但logDecision/
+    //   SelfLearner仍被污染)。0按钮帧下唯一真实有效的动作是ghost-check(灰让牌逻辑组按钮,
+    //   _frameAutoLabel='ghostcheck')与retry(上动作未生效重发)——仅这些写决策日志/自学习;
+    //   其余0按钮帧决策一律不记录(避免脏fold污染决策统计与SelfLearner训练数据)。
+    var _ghostOrRetry=(G._frameAutoLabel==='ghostcheck'||G._frameAutoLabel==='retrying');
+    try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.logDecision&&(!G._frameBtnCount?_ghostOrRetry:true)){
       var _holeCards=G.hole.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('');
       var _commCards=G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('');
       var _decData={
@@ -11453,6 +11461,15 @@ function onVisionResult(data){
   }
   // V2.9.156: VPP后处理纠错——在数据进G之前修正常见识别错误
   if(data&&data.hole_cards&&data.hole_cards.length>=2&&data.is_poker_table!==false){data=VPP.process(data);}
+  // V2.9.595 P2 FIX(#17 T5o UTG跟注实机铁证根因): 识别层(VLM/本地CV)对10点牌rank返回"10"(两位),
+  //   全JS手牌体系以'T'单字符表示10(R数组/eQ表/范围表/Nash表/HandClassifier/matrix均如此),
+  //   不归一化→getHandKey产出k="105o"(长4而非"T5o"长3): ①offsuit闸k.length===3漏判(前位弱T牌
+  //   不被拦) ②eQ/范围表indexOf全miss走fallback eq=30 ③投机分块slice(0,2)取错高张 ④cb2逻辑误判。
+  //   入库最前端归一化(hole+community),全下游(G.hole/G.comm/_newHandKey/getHandKey/HandHistory)统一。
+  try{
+    if(data.hole_cards){for(var _ri=0;_ri<data.hole_cards.length;_ri++){if(data.hole_cards[_ri]&&data.hole_cards[_ri].rank==='10')data.hole_cards[_ri].rank='T';}}
+    if(data.community_cards){for(var _rc=0;_rc<data.community_cards.length;_rc++){if(data.community_cards[_rc]&&data.community_cards[_rc].rank==='10')data.community_cards[_rc].rank='T';}}
+  }catch(_rankNormErr){console.log('[rank归一化] err:'+_rankNormErr.message);}
   if(data&&data.hole_cards&&data.hole_cards.length>=2&&_ft!=='auto'&&_ft!=='verify'){var _nk=data.hole_cards[0].rank+(data.hole_cards[0].suit||'')+data.hole_cards[1].rank+(data.hole_cards[1].suit||'');var _pk=G._rankLockKey||'';if((_pk&&_nk!==_pk)||_isStreetChange(data)){try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.triggerMultiFrame)AndroidBridge.triggerMultiFrame();}catch(e){}}}
   // V2.9.111: NO_TABLE增强检测——优先is_poker_table，其次3信号联合判断
   var _modelNoTable = data && data.is_poker_table === false;
@@ -12979,18 +12996,49 @@ var NashPushFold={
   decide:function(k,p,scene,spr,effectiveBB,bet,pot){
     try{this._ensurePushKeys();}catch(e){}
     if(!this.shouldUseNash(scene,p,spr,effectiveBB))return null;
+    // V2.9.595 P2 FIX(实机铁证: QTo CO/Q4s MP 面对1BB普通open被误判"Nash fold vs push"):
+    //   Nash push-fold表只适用于「对手全码(shove)」——翻前任何加注都走CALL/PUSH查表会误杀:
+    //   普通3x open(2-3BB)对12-15BB有效码深并非全码,却被按最紧CALL表(12BB档仅约30手牌)
+    //   砍掉KQs/ATs/A5s/QJs等标准跟注牌。硬闸: scene==='raise'(面对加注)时,仅当加注额≥
+    //   池内最浅未弃牌对手有效码深90%(对手实质全下)才查Nash跟注表;否则return null走常规
+    //   3bet/防守范围(decidePreflop调用点fallthrough)。90%阈值留10%余量吸收chips/BB换算误差;
+    //   对手码深取不到(_oppShoveBB<=0,opp_seats缺失)时保守不拦截(维持原Nash行为,宁紧勿松)。
+    //   scene='check'/'call'(无人加注/limp池短码open-shove决策)不受此闸影响,维持原逻辑。
+    if(scene==='raise'){
+      var _oppShoveBB=0;
+      try{
+        var _nbb=window._lastBlindBB||G._lockedBB||200;
+        var _os=G.opp_seats||[];
+        for(var _oi2=0;_oi2<_os.length;_oi2++){
+          var _oc2=parseInt(_os[_oi2]&&_os[_oi2].chips)||0;
+          var _of2=(_os[_oi2]&&_os[_oi2].active!==false&&_os[_oi2].action!=='fold');
+          if(_oc2>0&&_of2){var _ebb2=Math.round(_oc2/_nbb);if(_oppShoveBB<=0||_ebb2<_oppShoveBB)_oppShoveBB=_ebb2;}
+        }
+      }catch(_nashOppErr){_oppShoveBB=0;}
+      var _betBB=parseFloat(bet)||0;
+      if(_oppShoveBB>0&&_betBB<_oppShoveBB*0.9){
+        console.log('[Nash闸] 面对加注'+_betBB+'BB < 对手有效码深'+_oppShoveBB+'BB×90%→非全码,不走Nash表(走常规范围) k='+k+' '+p);
+        return null;
+      }
+    }
+    // V2.9.595 P3 FIX(eq双口径): Nash fold的eq=0是"不查表即弃"占位值,但eQ(k)真实equity
+    //   (如Q4s≈30)已在调用点decidePreflop算过——fold文案eq=0导致决策日志/悬浮球与fallback
+    //   口径冲突且复盘误导。fold分支透传真实eQ(k)(只影响展示/日志,fold动作本身不变);
+    //   push/call的eq=55/50是"主动动作成立"的决策性占位,保持不变(AutoConfidence高置信放行)。
+    var _nashRealEq=0;
+    try{_nashRealEq=Math.round(eQ(k));}catch(_eQErr){_nashRealEq=0;}
     var bbKey=this._getBBKey(effectiveBB);
     if(scene==='check'||scene==='call'){
       if(this.isNashPush(k,p,effectiveBB)){
         return{a:'raise',v:G.stk>0?G.stk:(effectiveBB*100000)||100000,r:'Nash push('+p+'/'+bbKey+'BB) '+k,eq:55,c:'h',scene:'纳什push',spr:spr,_se:true,_seFreq:1,_nash:true};
       }
-      return{a:'fold',r:'Nash fold('+p+'/'+bbKey+'BB) '+k,eq:0,c:'l',scene:'纳什fold',spr:spr,_se:true,_nash:true};
+      return{a:'fold',r:'Nash fold('+p+'/'+bbKey+'BB) '+k,eq:_nashRealEq,c:'l',scene:'纳什fold',spr:spr,_se:true,_nash:true};
     }
     if(scene==='raise'){
       if(this.isNashCall(k,p,effectiveBB)){
         return{a:'call',r:'Nash call('+p+'/'+bbKey+'BB) '+k,eq:50,c:'m',scene:'纳什call',spr:spr,_se:true,_seFreq:1,_nash:true};
       }
-      return{a:'fold',r:'Nash fold vs push('+p+'/'+bbKey+'BB) '+k,eq:0,c:'l',scene:'纳什fold',spr:spr,_se:true,_nash:true};
+      return{a:'fold',r:'Nash fold vs push('+p+'/'+bbKey+'BB) '+k,eq:_nashRealEq,c:'l',scene:'纳什fold',spr:spr,_se:true,_nash:true};
     }
     return null;
   }
@@ -13361,6 +13409,30 @@ function autoExecuteDecision(r, isAutoMode) {
         }
       }
     }catch(_tvErr){console.log('[TapVerify] retry err:'+_tvErr.message);}
+    // V2.9.595 P1 FIX(灰让牌按钮·方案B逻辑组按钮,豪哥选定):
+    //   实机铁证(Kd6s手22:54:42-54 BB翻牌连续4条check决策exec=manual,12秒点不出去):
+    //   轮到我方且可免费过牌时,GG让牌按钮为灰色/低亮,本地CV黄像素闸(btn2Y/btn3Y/presets)
+    //   与VLM均检测不到→0按钮帧;旧逻辑一律wait人工。对照铁证(3s3d手23:02:08成熟帧
+    //   VLM=['弃牌','让牌','加注264']):GG可check局面中钮就是让牌,固定坐标0.5w/0.96h=check位。
+    //   方案B=纯逻辑组按钮:条件全满足才点中钮check,不新增任何像素检测:
+    //     ①本帧决策为check且无需跟注(r.a=check + _betChips=0,免费过牌硬条件双保险)
+    //     ②有手牌(G.hole两张,排除旁观/换桌/NO_TABLE帧——那些decide()不产出r)
+    //   安全性论证:非我方行动轮(对手思考中)点中钮=点灰显禁用按钮无任何效果;面对下注时
+    //     G.bet>0不满足②(a)绝不触发;fold/call/raise在0按钮帧不组按钮(fold误点弃牌/raise物理
+    //     上不可能);check是按钮行所有状态下方向最安全的动作。点完noteTap记账,下帧若画面
+    //     未变→TapVerify重试闭环(v594)立即重发,check在重试组(check/call/weak_call同组)。
+    try{
+      if(r && r.a==='check' && G.hole && G.hole[0] && G.hole[1] && (_betChips===0||!_betChips) && typeof AndroidBridge!=='undefined' && AndroidBridge.autoDecision){
+        G._frameAutoLabel='ghostcheck';
+        AndroidBridge.autoDecision(JSON.stringify({action:'check',auto:true,confidence:r.confidence||'medium',
+          reason:'灰让牌逻辑组按钮(0按钮帧免费过牌): '+(r.r||'').substring(0,40),eq:r.eq||0,
+          hClass:r.hClass?r.hClass.name:'?',sizing:0,pot:_potChips,myChips:_stkChips,
+          toCall:0,blindBB:_bbRef,phase:G.phase||'post',ghostCheck:true}));
+        try{TapVerify.noteTap('check');}catch(_gcTv){}
+        console.log('[ghostCheck] ★0按钮帧免费过牌→逻辑组让牌按钮点中钮(0.5w,0.96h) eq='+(r.eq||0));
+        return true;
+      }
+    }catch(_gcErr){console.log('[ghostCheck] err:'+_gcErr.message);}
     console.log('[AutoExec] 本帧0按钮(过渡帧/无pending)→跳过自动点击，等下帧按钮渲染');
     G._frameAutoLabel = 'wait';
     return false;
