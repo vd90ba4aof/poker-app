@@ -3358,6 +3358,9 @@ function decidePreflop(k){
     var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet)*100):50;  // V2.9.585 FIX(BUG-07): pot已含对手bet,正确赔率=bet/(pot+bet)
     var _preAiRatio=pot>0?allinBet/(pot+allinBet):0;
     callThresh=_preAiRatio>=0.5?Math.max(callThresh,45):Math.min(callThresh+3,25);
+    // V2.9.592 FIX(P1, 实机日志2026-09-08 A7o stk61BB面61BB全押eq41%用25%地板跟):
+    //   25%小jam地板为短码推弃设计;深码(>40BB)跟全押套牢大额,收紧到40%门槛(复用L3191 _oppEffBB)。
+    if(_oppEffBB>40){callThresh=Math.max(callThresh,40);}
     if(allinEq>=callThresh){var exploitA=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});return{a:'call',r:'GTO vs allin eq'+Math.round(allinEq)+'%>='+callThresh+'%',eq:exploitA.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitA.exploit,_se:true};}
     return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%',spr);
   }
@@ -3414,6 +3417,21 @@ function decidePostflop(k){
     var _aiThresh=_aiBet>0?Math.round(_aiBet/(pot+_aiBet)*100):50;  // V2.9.585 FIX(BUG-07): 同上
     var _aiBetRatio=pot>0?_aiBet/(pot+_aiBet):0; // 注池比: 大jam>=0.5
     _aiThresh=_aiBetRatio>=0.5?Math.max(_aiThresh,40):Math.min(_aiThresh+3,20); // 翻后放宽(有公共牌信息)
+    // V2.9.592 FIX(P1, 实机日志2026-09-08 J4c stk142BB面118BB全押eq31%/stk166BB面24BB eq22%两跟全输):
+    //   小jam赔率门槛+3%裕度是为【短码推弃】设计(跟注浅、风险有限);深码(>40BB)跟全押是套牢大额
+    //   筹码,20-25%地板对小jam放太松→深码用弱牌跟大额全押。修复:有效码深>40BB时翻后跟全押
+    //   统一门槛40%(与翻前L3360深码allin口径一致),深码不做投机性低eq跟注。
+    try{
+      var _aiBlind=window._lastBlindBB||G._lockedBB||0;
+      var _aiEff=(stk>0?stk:0);
+      var _aiOs=G.opp_seats||[];
+      for(var _aiI=0;_aiI<_aiOs.length;_aiI++){
+        var _aiOc=parseInt(_aiOs[_aiI]&&_aiOs[_aiI].chips)||0;
+        var _aiOf=(_aiOs[_aiI]&&_aiOs[_aiI].active!==false&&_aiOs[_aiI].action!=='fold');
+        if(_aiOc>0&&_aiOf&&_aiBlind>0){var _aiE=Math.round(_aiOc/_aiBlind);if(_aiE>0&&(_aiEff<=0||_aiE<_aiEff))_aiEff=_aiE;}
+      }
+      if(_aiEff>40){_aiThresh=Math.max(_aiThresh,40);}
+    }catch(_aiE){}
     if(eq>=_aiThresh){
       var _aiExploit=applyExploit(eq,'call',oppType,{bet:_aiBet,pot:pot});
       return{a:'call',r:'GTO 翻后vs allin eq'+Math.round(eq)+'%>='+_aiThresh+'%',eq:_aiExploit.eq,c:eq>=65?'h':'m',scene:'面对allin',spr:spr,_se:true};
