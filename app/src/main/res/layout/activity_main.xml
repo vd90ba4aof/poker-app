@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.593 · 翻前3B表22处漏填全量补全"
+        android:text="V2.9.594 · 点击生效验证闭环：同画面帧自动重点"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

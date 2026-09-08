@@ -1344,7 +1344,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.593',
+  CURRENT_VERSION:'2.9.594',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2791,7 +2791,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.593';
+var APP_VERSION='2.9.594';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -10544,6 +10544,8 @@ function bridgeAdvice(r){
         try{ if(HandHistory.records&&HandHistory.records[0]){ HandHistory.records[0].execAction='fold'; try{localStorage.setItem(HandHistory.STORAGE_KEY,JSON.stringify(HandHistory.records));}catch(_){} } }catch(_hhErr){}
       }else if(G._frameAutoLabel==='wait'){
         _dispData='⏳ 未识别到行动按钮·等待渲染|COLOR:CHECK|SIGNAL:NONE';
+      }else if(G._frameAutoLabel==='retrying'){
+        _dispData='🔁 点击未生效·已自动重点|COLOR:CHECK|SIGNAL:RETRY';   // V2.9.594 重试帧文案
       }
       if(AndroidBridge.showAdvice){console.log('[bridge诊断] ✅调用showAdvice: '+_dispData.substring(0,80));AndroidBridge.showAdvice(_dispData);}}catch(_ae){console.log("[autoExec] err:"+_ae.message);_autoExecResult='error';if(AndroidBridge.showAdvice){AndroidBridge.showAdvice(_dispData);}}}else{console.log('[bridge诊断] ❌AndroidBridge不可用');}
     if(typeof AndroidBridge!=='undefined'&&AndroidBridge.updateNotification){AndroidBridge.updateNotification(fullAdv,reason);}
@@ -11471,6 +11473,7 @@ function onVisionResult(data){
   var _isNoTable = _modelNoTable || _noTableSignals>=2;
   if(_isNoTable){
     console.log('[NO_TABLE] isPokerTable='+(data?data.is_poker_table:'nodata')+' signals='+_noTableSignals+' noHole='+_noHole+' noD='+_noD+' noBtn='+_noBtn);
+    try{if(typeof TapVerify!=='undefined')TapVerify.clear('no-table');}catch(_ntv){}   // V2.9.594 无牌桌=画面大变,清重试账
     // V2.9.587 FIX: NO_TABLE但检测到按钮→仍可执行fold（有问题也应点弃牌）
     if(G._frameBtnCount > 0){
       try{
@@ -13253,7 +13256,52 @@ var BoardTexture = {
 // ===== 自动执行桥接 =====
 var _autoExecEnabled = false;
 function enableAutoExec(){_autoExecEnabled=true;console.log("[AutoExec] enabled");}
-function disableAutoExec(){_autoExecEnabled=false;console.log("[AutoExec] disabled");}
+function disableAutoExec(){_autoExecEnabled=false;try{TapVerify.clear('auto-off');}catch(e){}console.log("[AutoExec] disabled");}
+// V2.9.594: 点击生效验证闭环(豪哥逻辑:点完后下一帧画面没变=没点上→立即重点,禁止跳过)
+//   记账点:每一次自动点击autoDecision发出后noteTap(action)
+//   消费点:新帧0按钮(autoExecuteDecision闸前)→getRetryAction判同手牌/同街/动作同组/窗口内/次数<2→立即重发
+//   安全性:fold→左灰钮固定位;check/call/weak_call同组→中钮固定位;raise/allin永不参与(Kotlin物理闸拦盲点)
+//   失效:换街/换手牌/动作变化/>15s/重试2次/停自动/NO_TABLE——全部clear
+var TapVerify={
+  MAX_RETRY:2,          // 同一动作最多重试2次(即最多点3次)
+  WINDOW_MS:15000,      // 点击后15秒内同画面帧才算"未生效"
+  pending:null,         // {action,count,holeKey,street,t,reason}
+  _holeKey:function(){
+    try{return (G.hole||[]).map(function(c){return c?c.rank+c.suit:'_';}).join('');}catch(e){return '';}
+  },
+  _street:function(){
+    try{return G.phase==='pre'?'pre':(typeof getCurrentStreet==='function'?getCurrentStreet():(G.comm||[]).filter(function(c){return c;}).length);}catch(e){return '?';}
+  },
+  _sameGroup:function(a,b){
+    if(!a||!b)return false;
+    if(a===b)return true;
+    var mid={check:1,call:1,weak_call:1};
+    return !!mid[a]&&!!mid[b];   // check/call/weak_call同组(与Kotlin when块互fallback一致)
+  },
+  noteTap:function(action,isRetry){
+    if(!action)return;
+    if(isRetry===true&&this.pending){this.pending.count++;this.pending.t=Date.now();}
+    else{this.pending={action:action,count:0,holeKey:this._holeKey(),street:this._street(),t:Date.now(),reason:''};}
+    try{console.log('[TapVerify] '+(isRetry?'retry#'+this.pending.count+' ':'note ')+action+' hole='+this.pending.holeKey+' st='+this.pending.street);}catch(e){}
+  },
+  getRetryAction:function(decisionAction){
+    var p=this.pending;
+    if(!p)return null;
+    var now=Date.now();
+    if(now-p.t>this.WINDOW_MS){this.clear('window-expire');return null;}
+    if(p.count>=this.MAX_RETRY){this.clear('max-retry');return null;}
+    var hk=this._holeKey(),st=this._street();
+    if(!hk||!p.holeKey||hk!==p.holeKey){this.clear('hole-changed');return null;}
+    if(st!==p.street){this.clear('street-changed');return null;}
+    // 动作同组:决策动作与上次点击一致(check/call/weak_call互组)→点击未生效;动作变了=局面已变
+    if(!this._sameGroup(p.action,decisionAction)){this.clear('action-changed:'+p.action+'->'+decisionAction);return null;}
+    return {action:p.action,count:p.count+1};
+  },
+  clear:function(reason){
+    if(this.pending){try{console.log('[TapVerify] clear: '+reason+' ('+this.pending.action+' x'+(this.pending.count+1)+')');}catch(e){}}
+    this.pending=null;
+  }
+};
 // 筹码重置——Kotlin端ChipTracker.reset()后回调，清空JS侧追踪状态
 function onChipReset(){
   try{
@@ -13283,7 +13331,37 @@ function autoExecuteDecision(r, isAutoMode) {
   //   v565铁证：空按钮帧点击(195,2250)fold位，但按钮未渲染点空；若渲染则是free→左按钮实为check。
   //   盲fold可能误弃强牌，盲check在真bet面反而是fold→安全方向不成立。不点击=等4s重抓，按钮渲染后再决策。
   if (!G._frameBtnCount) {
-    console.log('[AutoExec] 本帧0按钮(过渡帧)→跳过自动点击，等下帧按钮渲染');
+    // V2.9.594 点击生效验证(豪哥逻辑):上周期点了,本帧手牌/街/动作都没变=点击没到位→立即重点,禁止跳过
+    try{
+      var _retry=(typeof TapVerify!=='undefined')?TapVerify.getRetryAction(r.a||''):null;
+      if(_retry && typeof AndroidBridge!=='undefined' && AndroidBridge.autoDecision){
+        var _ra=_retry.action;
+        // 安全铁律:raise/allin在0按钮帧绝不重发(Kotlin物理闸也拦,双保险);fold/check/call走固定坐标兜底
+        if(_ra==='raise'||_ra==='raise_big'||_ra==='allin'){
+          TapVerify.clear('retry-blocked-'+_ra);
+        }else{
+          // 低置信fold:重试帧同样按Kotlin low-confidence→fold路径,避免free-check灰钮面fold误点(check动作重试才会到这)
+          var _rc=_ra==='fold'?'low':(r.confidence||'medium');
+          if(_ra==='fold'||_rc==='low'){
+            G._frameAutoLabel='retrying';
+            AndroidBridge.autoDecision(JSON.stringify({action:'fold',auto:true,confidence:'low',
+              reason:'Retry#'+_retry.count+' tap未生效,重点弃牌',eq:r.eq||0,
+              hClass:r.hClass?r.hClass.name:'?',pot:_potChips,myChips:_stkChips,toCall:_betChips,blindBB:_bbRef}));
+            TapVerify.noteTap('fold',true);
+          }else{
+            G._frameAutoLabel='retrying';
+            AndroidBridge.autoDecision(JSON.stringify({action:_ra,auto:true,confidence:r.confidence||'medium',
+              reason:'Retry#'+_retry.count+' 点击未生效,重点: '+_ra,eq:r.eq||0,
+              hClass:r.hClass?r.hClass.name:'?',sizing:_vChips,pot:_potChips,myChips:_stkChips,
+              toCall:_betChips,blindBB:_bbRef,phase:G.phase||'post',nash:r._nash?true:false}));
+            TapVerify.noteTap(_ra,true);
+          }
+          console.log('[TapVerify] ★0按钮帧但上点击未生效→立即重试#'+_retry.count+' action='+_ra);
+          return true;
+        }
+      }
+    }catch(_tvErr){console.log('[TapVerify] retry err:'+_tvErr.message);}
+    console.log('[AutoExec] 本帧0按钮(过渡帧/无pending)→跳过自动点击，等下帧按钮渲染');
     G._frameAutoLabel = 'wait';
     return false;
   }
@@ -13322,6 +13400,7 @@ function autoExecuteDecision(r, isAutoMode) {
         toCall: _betChips,
         blindBB: _bbRef
       }));
+      try{TapVerify.noteTap('fold');}catch(_e){}   // V2.9.594 点击记账
     }
     return true;
   }
@@ -13344,6 +13423,7 @@ function autoExecuteDecision(r, isAutoMode) {
         phase: G.phase || 'post',
         nash: r._nash ? true : false
       }));
+      try{TapVerify.noteTap(exec.action);}catch(_e2){}   // V2.9.594 点击记账
     }
     return true;
   }
