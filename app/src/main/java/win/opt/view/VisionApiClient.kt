@@ -184,7 +184,10 @@ object VisionApiClient {
         val isMyTurn: Boolean = true,
         // V2.9.574: 牌面物理非法标志（52张重复/公共牌结构非法）→JS侧拒帧转人工，禁止自动点击
         val cardsIllegal: Boolean = false,
-        val cardsIllegalReason: String = ""
+        val cardsIllegalReason: String = "",
+        // V2.9.603: 最终手牌来源标记——'fresh'=本帧本地CV实读 / 'fallback_lock'=本帧双失败回退历史锁
+        //   （旧牌跨手风险帧）。供JS侧回退帧动作降级（禁花钱动作）与日志可观测
+        val holeCardsSource: String = "fresh"
     )
 
     data class CardInfo(val rank: String, val suit: String)
@@ -1048,7 +1051,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             } }))
             put("is_poker_table", result.isPokerTable); put("d_button_position", result.dButtonPosition); put("suit_uncertain", result.suitUncertain); put("hole_cards_locked", holeCardsLocked != null); put("rank_locked", holeCardsRankLocked != null); put("rank_lock_values", holeCardsRankLocked?.joinToString(",") ?: ""); put("lock_reason", lockReason)
             // V2.9.574: 牌面物理非法（52张重复/结构非法）→JS拒帧转人工
-            put("cards_illegal", result.cardsIllegal); put("cards_illegal_reason", result.cardsIllegalReason)
+            put("cards_illegal", result.cardsIllegal); put("cards_illegal_reason", result.cardsIllegalReason); put("hole_cards_source", result.holeCardsSource)
             put("prompt_mode", lastPromptMode)
             // V2.9.143: 摊牌信息
             if (result.showdownCards.isNotEmpty()) {
@@ -1258,7 +1261,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // V2.9.544: 分离操作区/牌面置信度阈值——操作区数字0.62+即正确，牌面黑色花色plateau分类天然0.50+
                 val LOCAL_CONFIDENCE_THRESHOLD = 0.60f  // 操作区按钮金额阈值
                 val CARD_CONFIDENCE_THRESHOLD = 0.50f   // 牌面阈值（黑色花色plateau_ratio置信度上限0.90）
-                val LOCAL_LOW_CONFIDENCE = 0.50f
+                // V2.9.603 BUG-5: LOCAL_LOW_CONFIDENCE/localHandLowFallback已删除——
+                //   confidence=min(rankScore,suitScore)，双过硬置信度必>=0.50(=localHandOk阈值)，
+                //   不双过硬的帧localHoleCards已置null，lowFallback条件恒false为死代码
                 val AMOUNT_CONFIDENCE_THRESHOLD = 0.60f
 
                 try {
@@ -1298,8 +1303,14 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     if (rankConfHands.size == 2 && holeCardsLocked != null && holeCardsLocked!!.size == 2) {
                         val lockedRanks = holeCardsLocked!!.map { it.rank }
                         val newRanks = rankConfHands.map { it.rank }
-                        if (newRanks.zip(lockedRanks).count { it.first == it.second } == 0) {
-                            Log.w(TAG, "🔒 本地双rank(${newRanks.joinToString(",")})与锁存(${lockedRanks.joinToString(",")})全部不一致→判定新一手, 清手牌/街/牌面锁")
+                        // V2.9.603 BUG-2修复: 原判据"两张rank全部不一致"漏判共享rank换机
+                        //   （QJ→KJ共享J→count==1不满足==0→旧锁残留→用QJ打KJ的手, 2026-09-09截图铁证）。
+                        //   放宽为"同槽同rank数<2"：两张全变(count0)或仅一张相同(count1, 共享rank换机)均清锁；
+                        //   仅两张同槽同rank都一致(count2=同手)才保留。rank环节实机零误认(98槽全对)，
+                        //   同手内rank恒定count恒2，误清概率≈0
+                        val sameRankCount = newRanks.zip(lockedRanks).count { it.first == it.second }
+                        if (sameRankCount < 2) {
+                            Log.w(TAG, "🔒 本地双rank(${newRanks.joinToString(",")})与锁存(${lockedRanks.joinToString(",")})同槽一致仅${sameRankCount}张→判定新一手, 清手牌/街/牌面锁")
                             holeCardsLocked = null; holeCardsLockedAt = 0L
                             holeCardsRankLocked = null; streetLocked = null
                             RegionCropper.clearBoardCache()
@@ -1350,9 +1361,6 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         localMinConfidence >= CARD_CONFIDENCE_THRESHOLD
                 // V2.9.569: 公共牌独立判断——手牌HIGH且公共牌置信度OK时才信任本地结果
                 val localCommOk = localHandOk && localCommConfOk
-                // LOW置信标志：本地有结果但置信度不够高，VLM返回空时回退本地
-                val localHandLowFallback = localHoleCards != null && localHoleCards!!.size == 2 &&
-                        localMinConfidence >= LOCAL_LOW_CONFIDENCE && !localHandOk
 
                 // V2.9.526: 本地CV底池/筹码金额识别（毫秒级，成功则不调VLM底池API）
                 var localPotValue: Long = 0L
@@ -1570,6 +1578,38 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     Log.d(TAG, "♠ 手牌需API识别 (本地CV=${if (localHandOk) "OK" else "失败"})")
                 }
 
+                // V2.9.603 BUG-1修复: CLOUD_VLM_ENABLED=false后缓存唯一写入点(updateHandCacheWithHash
+                //   在VLM结果块L1664)永不执行→isNewHand()恒false→新手牌清锁A闸永久失效；
+                //   且公牌缓存永不写入→回退帧公牌成套沿用恒空→翻后误判翻前(BUG-4)。
+                //   本地CV高置信帧承担缓存写入责任：
+                if (localHandOk) {
+                    // 内容型新手牌检测——与缓存中旧手牌比rank(不受发牌动画/截图hash抖动影响,
+                    //   比bitmap hash判据更稳；只比rank不比suit, 避开单帧suit误认误清)。
+                    //   与P2闸互补：P2要求双rank过硬(覆盖发牌完成帧)，本闸用localHoleCards(
+                    //   双rank+双suit全过硬, handConfOk)覆盖更早的高置信帧。
+                    val cachedForCheck = RegionCropper.getCachedHandCards()
+                    if (cachedForCheck != null && cachedForCheck.size == 2 && localHoleCards != null &&
+                        localHoleCards!!.size == 2 &&
+                        localHoleCards!!.zip(cachedForCheck).count { it.first.rank == it.second.rank } < 2) {
+                        Log.w(TAG, "🆕 本地CV高置信帧手牌(${localHoleCards!!.joinToString(","){"${it.rank}${it.suit}"}})与缓存(${cachedForCheck.joinToString(","){"${it.rank}${it.suit}"}})rank不一致→新一手, 清锁/公牌/底池缓存")
+                        holeCardsLocked = null; holeCardsLockedAt = 0L
+                        holeCardsRankLocked = null; streetLocked = null
+                        RegionCropper.clearBoardCache()
+                    }
+                    // 写入手牌缓存（bitmap hash + 识别内容）：同手内后续本地CV失败帧可直接命中缓存
+                    RegionCropper.updateHandCache(handStitch, localHoleCards!!)
+                    // 公牌缓存按槽位写入（槽位0起连续, 与findNewCommCards/mergeCommCards槽位体系一致）：
+                    //   回退帧getCachedCommunityCards成套沿用→街/牌面一致, 根治翻后误判翻前
+                    if (localCommOk && localHoleCards != null) {
+                        for (i in localCommCards!!.indices) {
+                            val bmp = commBitmaps.getOrNull(i)
+                            if (bmp != null && localCommCards!![i].rank.isNotEmpty()) {
+                                RegionCropper.updateCommCache(i, bmp, localCommCards!![i])
+                            }
+                        }
+                    }
+                }
+
                 // 5. 新手牌检测
                 if (needHandApiFinal && RegionCropper.isNewHand(handHash)) {
                     RegionCropper.clearBoardCache()
@@ -1681,10 +1721,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     localHandOk -> localHoleCards!!
                     holeCards != null -> holeCards!!                        // 缓存命中
                     board != null && board.handCards.size == 2 -> board.handCards  // VLM返回完整手牌
-                    localHandLowFallback -> {
-                        Log.w(TAG, "🔍 VLM空手牌，回退本地CV LOW结果: ${localHoleCards!!.map{"${it.rank}${it.suit}"}}")
-                        localHoleCards!!
-                    }
+                    // V2.9.603: localHandLowFallback分支已删（死代码, 恒不命中）
                     // V2.9.569/570: 本地CV+VLM双失败时，回退之前帧已锁定的手牌（截图过渡帧兜底）
                     // 必须在"board != null -> board.handCards"之前：VLM解析失败也会返回空手牌的非空对象，
                     // 放后面会被短路导致回退永不生效（22:15:57实机帧 holeCardsLocked=true 但final手牌为空）
@@ -1717,7 +1754,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         cachedComm
                     }
                     newCommIndices.isEmpty() && !needHandApiFinal -> RegionCropper.getCachedCommunityCards()
-                    localHandLowFallback && (board == null || board.commCards.isEmpty()) -> localCommCards ?: emptyList()
+                    // V2.9.603: localHandLowFallback分支已删（死代码）；以下兜底走缓存合并
                     else -> mergeCommCards(newCommIndices, board?.commCards ?: emptyList())
                 }
                 val finalPot = (potValue ?: board?.potAmount ?: 0L).toInt()
@@ -1737,6 +1774,12 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 }
                 if (cardsIllegal) {
                     Log.w(TAG, "🚫 牌面物理非法: $cardsIllegalReason | hand=${finalHoleCards.map { "${it.rank}${it.suit}" }} comm=${finalCommCards.map { "${it.rank}${it.suit}" }} →拒帧转人工")
+                }
+                // V2.9.603 BUG-1/提示-6: 标记最终手牌来源——回退历史锁的帧=旧牌跨手风险帧,
+                //   透传JS做动作降级（禁花钱动作），fresh帧正常决策
+                val holeCardsSource = if (handFromLockedFallback) "fallback_lock" else "fresh"
+                if (handFromLockedFallback) {
+                    Log.w(TAG, "⚠️ 回退锁帧(holeCardsSource=fallback_lock): 手牌=${finalHoleCards.map { "${it.rank}${it.suit}" }} 本帧禁加注/全下/跟注付费动作")
                 }
 
                 // 12. 构建结果（本地CV操作区优先）
@@ -1806,7 +1849,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     localSuitUsed = false,
                     isMyTurn = isMyTurn,
                     cardsIllegal = cardsIllegal,
-                    cardsIllegalReason = cardsIllegalReason
+                    cardsIllegalReason = cardsIllegalReason,
+                    holeCardsSource = holeCardsSource
                 )
 
                 // V2.9.540: 动态玩家追踪——对比前后帧，检测谁加入/谁离场
@@ -1822,9 +1866,14 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 }
 
                 // 同步锁定状态
-                if (finalHoleCards.size == 2) {
+                // V2.9.603 BUG-3修复: 回退旧锁帧(handFromLockedFallback)不刷新holeCardsLockedAt、
+                //   不覆盖streetLocked——旧逻辑每帧回退都把锁龄重置为0→3分钟TTL对"持续回退"
+                //   永不到期(2026-09-06日志: 29分钟前AcKh仍被回退并全下)。
+                //   只有本帧新鲜识别(finalHoleCards来自本地CV/缓存/VLM)才刷新锁，
+                //   回退帧沿用旧锁龄→TTL正常到期→过期清锁空手牌转人工
+                if (finalHoleCards.size == 2 && !handFromLockedFallback) {
                     holeCardsLocked = finalHoleCards
-                    holeCardsLockedAt = System.currentTimeMillis() // V2.9.582: 刷新TTL
+                    holeCardsLockedAt = System.currentTimeMillis()
                     streetLocked = result.street
                 }
                 if (result.dButtonPosition.isNotEmpty() && result.dButtonPosition != "not_found") {

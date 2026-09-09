@@ -377,6 +377,13 @@ object RegionCropper {
     }
 
     /**
+     * V2.9.603: 获取当前缓存的手牌（内容型新手牌检测用；无缓存返回null）
+     */
+    fun getCachedHandCards(): List<VisionApiClient.CardInfo>? {
+        return if (handCacheValid) cachedHandCards else null
+    }
+
+    /**
      * 获取当前缓存的公共牌（仅返回有牌的）
      */
     fun getCachedCommunityCards(): List<VisionApiClient.CardInfo> {
