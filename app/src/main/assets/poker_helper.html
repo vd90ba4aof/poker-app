@@ -1344,7 +1344,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.595',
+  CURRENT_VERSION:'2.9.596',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2791,7 +2791,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.595';
+var APP_VERSION='2.9.596';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -11433,6 +11433,16 @@ function onVisionResult(data){
   G._cardsIllegal = '';
   // [REV4_DIAG] onVisionResult入口原始数据快照
   if(data){console.log("[onVisionResult_DIAG_ENTRY] _frameTag="+(data._frameTag||'none')+" pot_size="+data.pot_size+" my_chips="+data.my_chips+" to_call="+data.to_call+" blind_bb="+data.blind_bb+" blind_sb="+data.blind_sb+" is_poker_table="+data.is_poker_table+" hole_cards="+JSON.stringify(data.hole_cards||null));}
+  // V2.9.595 P2-FIX-v2(污染修复): rank归一化必须在前置模块(PV/FDE/MFC/VPP)之前执行!
+  //   v595初版放在VPP.process之后(L11470),导致:
+  //   ①VPP.lockHeroHand(L2594)用未归一化'105'与已归一化G._rankLockKey='T5'比较→手牌锁永远失效
+  //   ②FrameDiffEngine._ex(L2481)hid='10s5h'(6字符)与归一化后'Ts5h'(4字符)格式不一致
+  //   ③PostValidation.dedupCards去重key含'10'→跨帧口径不统一
+  //   移到函数入口(DIAG之后/所有模块之前),确保PV/FDE/MFC/VPP/triggerMultiFrame全链路一致。
+  try{
+    if(data&&data.hole_cards){for(var _ri=0;_ri<data.hole_cards.length;_ri++){if(data.hole_cards[_ri]&&data.hole_cards[_ri].rank==='10')data.hole_cards[_ri].rank='T';}}
+    if(data&&data.community_cards){for(var _rc=0;_rc<data.community_cards.length;_rc++){if(data.community_cards[_rc]&&data.community_cards[_rc].rank==='10')data.community_cards[_rc].rank='T';}}
+  }catch(_rankNormErr){console.log('[rank归一化] err:'+_rankNormErr.message);}
   // V2.9.153: Layer1+3
   if(data&&data.is_poker_table!==false&&data.hole_cards&&data.hole_cards.length>=2){var _pv=PostValidation.runAll(data);if(_pv.length>0)console.log('[V2.9.153PV]'+_pv.length);}
   var _ft=data?(data._frameTag||'manual'):'manual';
@@ -11461,15 +11471,7 @@ function onVisionResult(data){
   }
   // V2.9.156: VPP后处理纠错——在数据进G之前修正常见识别错误
   if(data&&data.hole_cards&&data.hole_cards.length>=2&&data.is_poker_table!==false){data=VPP.process(data);}
-  // V2.9.595 P2 FIX(#17 T5o UTG跟注实机铁证根因): 识别层(VLM/本地CV)对10点牌rank返回"10"(两位),
-  //   全JS手牌体系以'T'单字符表示10(R数组/eQ表/范围表/Nash表/HandClassifier/matrix均如此),
-  //   不归一化→getHandKey产出k="105o"(长4而非"T5o"长3): ①offsuit闸k.length===3漏判(前位弱T牌
-  //   不被拦) ②eQ/范围表indexOf全miss走fallback eq=30 ③投机分块slice(0,2)取错高张 ④cb2逻辑误判。
-  //   入库最前端归一化(hole+community),全下游(G.hole/G.comm/_newHandKey/getHandKey/HandHistory)统一。
-  try{
-    if(data.hole_cards){for(var _ri=0;_ri<data.hole_cards.length;_ri++){if(data.hole_cards[_ri]&&data.hole_cards[_ri].rank==='10')data.hole_cards[_ri].rank='T';}}
-    if(data.community_cards){for(var _rc=0;_rc<data.community_cards.length;_rc++){if(data.community_cards[_rc]&&data.community_cards[_rc].rank==='10')data.community_cards[_rc].rank='T';}}
-  }catch(_rankNormErr){console.log('[rank归一化] err:'+_rankNormErr.message);}
+  // V2.9.595 P2-FIX-v2: rank归一化已移至onVisionResult入口(DIAG之后/PV之前,见L11436+)
   if(data&&data.hole_cards&&data.hole_cards.length>=2&&_ft!=='auto'&&_ft!=='verify'){var _nk=data.hole_cards[0].rank+(data.hole_cards[0].suit||'')+data.hole_cards[1].rank+(data.hole_cards[1].suit||'');var _pk=G._rankLockKey||'';if((_pk&&_nk!==_pk)||_isStreetChange(data)){try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.triggerMultiFrame)AndroidBridge.triggerMultiFrame();}catch(e){}}}
   // V2.9.111: NO_TABLE增强检测——优先is_poker_table，其次3信号联合判断
   var _modelNoTable = data && data.is_poker_table === false;
