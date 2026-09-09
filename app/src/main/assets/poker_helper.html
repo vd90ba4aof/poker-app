@@ -1344,7 +1344,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.597',
+  CURRENT_VERSION:'2.9.598',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2791,7 +2791,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.597';
+var APP_VERSION='2.9.598';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3315,7 +3315,24 @@ function decidePreflop(k){
     var entry=posTable[k];if(!entry)return _fold(eq,'vs '+rP5+' open不在3B范围',spr);
     var act=entry.a,f=entry.f;f=_adjFreq3bet(act,f,oppType,raiserRole,p,k);
     if(act==='3b'){var adj3=_quantExploitAdjust(f,'raise',profile);f=adj3.freq>f?Math.min(1,adj3.freq):f;}
-    if(Math.random()>f){if(act==='3b'){act='c';f=_get3bAlt(k,posTable,'c')||0.3;}else if(act==='c')return _fold(eq,'vs '+rP5+' call频率'+Math.round(f*100)+'%未命中',spr);else return _fold(eq,'vs '+rP5+' fold',spr);}
+    if(Math.random()>f){
+      if(act==='3b'){act='c';f=_get3bAlt(k,posTable,'c')||0.3;}
+      else if(act==='c'){
+        // V2.9.598 P1-2修复: GTO频率掷骰fold加强牌硬底——翻前面对open,口袋对22+或两张高张(≥J)
+        //   且eq≥60时,频率未命中也不fold(随机数不允许弃掉高牌力手牌;铁证日志决策#18: 口袋44
+        //   翻前eq=71被"call频率35%未命中"掷骰fold)。eq数值虽偏松,但强牌fold的损失不可逆,
+        //   降级为call: 自动模式下中置信call仍会执行,把随机性损失从"弃强牌"降为"多跟一次"。
+        var _isPairPF=(k.length===2&&k[0]===k[1]);
+        var _twoBroadway=(!_isPairPF&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
+        if((_isPairPF||_twoBroadway)&&eq>=60){
+          var exploitHF=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});var weightsHF=DRTA.getWeights?DRTA.getWeights(profile):{};
+          console.log('[SE] 频率未命中但强牌硬底: '+k+' eq='+eq+'≥60 → 不fold,降级call');
+          return{a:'call',r:'GTO强牌硬底 '+k+' eq'+Math.round(eq)+'%('+Math.round(f*100)+'%频率未命中)',eq:exploitHF.eq,c:'m',sizing:0,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet||pot*2.5,0),exploit:exploitHF.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weightsHF},_se:true,_freqHardFloor:true};
+        }
+        return _fold(eq,'vs '+rP5+' call频率'+Math.round(f*100)+'%未命中',spr);
+      }
+      else return _fold(eq,'vs '+rP5+' fold',spr);
+    }
     var actualBet=bet||pot*2.5;
     if(act==='3b'){var sz3=Math.round(actualBet*3);sz3=_sprSizingAdjust(spr,Math.min(sz3,stk),'3bet');var exploitR2=applyExploit(eq,'raise',oppType,{bet:actualBet,pot:pot,facing3bet:true});var weights2=DRTA.getWeights?DRTA.getWeights(profile):{};return{a:'raise',v:sz3,r:'GTO 3bet vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR2.eq,c:'h',sizing:sz3,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:exploitR2.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights2},_se:true,_seFreq:f};}
     if(act==='c'){var exploitR3=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});var weights3=DRTA.getWeights?DRTA.getWeights(profile):{};return{a:'call',r:'GTO call vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR3.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet,0),exploit:exploitR3.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights3},_se:true,_seFreq:f};}
@@ -4919,7 +4936,12 @@ var DRTA={
       _steal:0,_steal_opp:0, // 偷盲次数/CO/BTN/SB位机会
       _wtsd:0,_saw_flop:0, // 摊牌次数/看到flop次数
       _wsd:0, // 摊牌赢次数
-      _street_actions:[] // 最近10手行动序列(用于贝叶斯推断)
+      _street_actions:[], // 最近10手行动序列(用于贝叶斯推断)
+      // V2.9.598 P2-3: 我方动作独立记账字段(只写这些,绝不触碰上面的对手建模字段vpip/pfr/
+      //   bet_count/call_count/fold_count/check_count/_threebet*/_cbet*/_saw_flop等——getProfile
+      //   用t.vpip/t.hands等算对手类型,混入我方动作会污染对手分类→GTO范围收窄错误)
+      _heroFold:0,_heroCall:0,_heroRaise:0,_heroCheck:0,_heroVpip:0,_heroPfr:0,
+      _heroFoldToBet:0,_heroActLog:{}
     };
     this.load();
     this.updateUI();
@@ -4982,7 +5004,40 @@ var DRTA={
     t._wtsd++;
     if(won)t._wsd++;
   },
-  
+
+  // V2.9.598 P2-3修复(复审返工): 我方决策动作独立统计——旧链路autoRecordOpponent只从scene
+  //   推导对手动作,对手fold画面无稳定检测→我方13次fold在对手tracker里无任何体现,日志诊断
+  //   (drtaTracker导出)看不到我方真实行动分布。
+  //   ★复审修正: DRTA.tracker是【对手建模】统计,getProfile用vpip/hands、bet/call(AF)、
+  //   _threebet/_threebet_opp、_cbet/_cbet_opp、_fold_to_bet/_bet_faced做贝叶斯分类;
+  //   首版修复直接把我方动作写进这些字段→对手VPIP/fold率虚高→被误判fish/lag→GTO范围收窄
+  //   错误(逻辑冲突,P0级)。改为只写_hero*前缀独立字段(随drtaTracker导出供日志核对),
+  //   绝不触碰对手统计;仅自动模式调用(手动模式r.a是建议而非真实动作,见bridgeAdvice闸门)。
+  recordHeroAction:function(action,street,isFacingBet){
+    try{
+      var t=this.tracker;
+      if(!t._heroActLog)t._heroActLog={};
+      if(t._heroFold===undefined){t._heroFold=0;t._heroCall=0;t._heroRaise=0;t._heroCheck=0;t._heroVpip=0;t._heroPfr=0;t._heroFoldToBet=0;}
+      var hKey=(G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'?';
+      var deKey=hKey+'_'+street;
+      if(t._heroActLog[deKey])return; // 同一手同一街只记一次
+      t._heroActLog[deKey]=action;
+      if(action==='fold'){
+        t._heroFold++;
+        if(isFacingBet)t._heroFoldToBet++;
+      }else if(action==='check'){
+        t._heroCheck++;
+      }else if(action==='call'||action==='weak_call'){
+        t._heroCall++;
+        if(street==='preflop')t._heroVpip++;
+      }else if(action==='raise'||action==='raise_big'||action==='bet'||action==='allin'||action==='reraise'){
+        t._heroRaise++;
+        if(street==='preflop'){t._heroVpip++;t._heroPfr++;}
+      }
+      console.log('[DRTA] 我方动作入账(hero独立): '+action+' '+street+'(facingBet='+!!isFacingBet+') heroFold='+t._heroFold+' heroCall='+t._heroCall+' heroRaise='+t._heroRaise+' heroCheck='+t._heroCheck);
+    }catch(e){console.log('[DRTA] recordHeroAction异常: '+e.message);}
+  },
+
   getProfile:function(){
     var t=this.tracker;
     var p={type:'unknown',confidence:0,hands:t.hands,vpip:0,pfr:0,af:0,fold_to_bet:50,recent_agg:0,bluff_success_rate:0.5,bluff_attempts:t.bluff_attempts,
@@ -5124,7 +5179,8 @@ var DRTA={
   
   reset:function(){
     this.tracker={hands:0,vpip:0,pfr:0,bet_count:0,call_count:0,fold_count:0,check_count:0,_bet_faced:0,_fold_to_bet:0,recent_agg:[],bluff_attempts:0,bluff_called:0,lastActionTime:0,
-      _threebet:0,_threebet_opp:0,_cbet:0,_cbet_opp:0,_fold_cbet:0,_face_cbet:0,_steal:0,_steal_opp:0,_wtsd:0,_saw_flop:0,_wsd:0,_street_actions:[]};
+      _threebet:0,_threebet_opp:0,_cbet:0,_cbet_opp:0,_fold_cbet:0,_face_cbet:0,_steal:0,_steal_opp:0,_wtsd:0,_saw_flop:0,_wsd:0,_street_actions:[],
+      _heroFold:0,_heroCall:0,_heroRaise:0,_heroCheck:0,_heroVpip:0,_heroPfr:0,_heroFoldToBet:0,_heroActLog:{}};
     this.bluffAttempts=0;this.bluffCalled=0;
     try{localStorage.removeItem(this.STORAGE_KEY);}catch(e){}
     this.updateUI();
@@ -10534,6 +10590,15 @@ function bridgeAdvice(r){
     //   若先showAdvice则autoDecision的R7守卫因FSM=IDLE而拦截所有auto-tap
     var _autoExecResult='skip';
     var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;
+    // V2.9.598 P2-3: 我方动作入账(仅自动模式_am——手动模式下r.a只是建议,豪哥未必照做,
+    //   记成"我方真实动作"会失真);一手一街去重,写_hero*独立字段不污染对手建模
+    try{
+      if(_am&&r&&r.a&&typeof DRTA!=='undefined'&&DRTA.recordHeroAction){
+        var _heroStreet=(G.phase==='pre')?'preflop':(typeof getCurrentStreet==='function'?getCurrentStreet():'flop');
+        var _heroFacingBet=(typeof G!=='undefined'&&(G.bet>0||G.scene==='raise'||G.scene==='reraise'||G.scene==='allin'||G.scene==='bet'));
+        DRTA.recordHeroAction(r.a,_heroStreet,_heroFacingBet);
+      }
+    }catch(_hae){console.log('[DRTA] heroAction入账异常: '+_hae.message);}
     // V2.9.566 FIX: 悬浮窗显示与实际执行一致——低置信强制fold/空按钮等待时覆盖策略原始建议
     //   （v565铁证：实际执行fold但showAdvice显示"💡按【跟注】COLOR:CALL"，误导且状态错乱）
     var _dispData=bridgeData;
@@ -13387,27 +13452,24 @@ function autoExecuteDecision(r, isAutoMode) {
       var _retry=(typeof TapVerify!=='undefined')?TapVerify.getRetryAction(r.a||''):null;
       if(_retry && typeof AndroidBridge!=='undefined' && AndroidBridge.autoDecision){
         var _ra=_retry.action;
-        // 安全铁律:raise/allin在0按钮帧绝不重发(Kotlin物理闸也拦,双保险);fold/check/call走固定坐标兜底
-        if(_ra==='raise'||_ra==='raise_big'||_ra==='allin'){
-          TapVerify.clear('retry-blocked-'+_ra);
+        // V2.9.598 P0-1修复(v594回归根因): 0按钮帧只允许"真实免费过牌check"重试。
+        //   v594旧闸只拦raise/allin,放行了fold/call重试→跑马帧(全下后跟注动画,按钮消失但
+        //   TapVerify里挂着上一帧fold/call)被误重发fold,铁证日志17:46:20/17:46:28两次
+        //   无效fold tap(屏幕只有"弃牌,跟注6072"残影,实际已手动跟注跑马)。
+        //   方向论证: 0按钮=本帧无行动入口。fold/call/raise在无按钮帧无合法目标(真实bet面
+        //   必渲染跟注按钮,不渲染即非我方行动轮),重发=对着跑马/对手思考画面盲点。
+        //   唯一例外: check重试=ghostCheck灰让牌(我方行动轮+免费过牌,点中钮安全,见下方独立逻辑)。
+        if(_ra!=='check' || !G.hole || !G.hole[0] || !G.hole[1] || !(_betChips===0||!_betChips)){
+          TapVerify.clear('retry-blocked-0btn-'+_ra);
+          console.log('[TapVerify] 0按钮帧拦截'+_ra+'重试(跑马/非行动轮禁重发fold/call/raise),清pending等下帧');
         }else{
-          // 低置信fold:重试帧同样按Kotlin low-confidence→fold路径,避免free-check灰钮面fold误点(check动作重试才会到这)
-          var _rc=_ra==='fold'?'low':(r.confidence||'medium');
-          if(_ra==='fold'||_rc==='low'){
-            G._frameAutoLabel='retrying';
-            AndroidBridge.autoDecision(JSON.stringify({action:'fold',auto:true,confidence:'low',
-              reason:'Retry#'+_retry.count+' tap未生效,重点弃牌',eq:r.eq||0,
-              hClass:r.hClass?r.hClass.name:'?',pot:_potChips,myChips:_stkChips,toCall:_betChips,blindBB:_bbRef}));
-            TapVerify.noteTap('fold',true);
-          }else{
-            G._frameAutoLabel='retrying';
-            AndroidBridge.autoDecision(JSON.stringify({action:_ra,auto:true,confidence:r.confidence||'medium',
-              reason:'Retry#'+_retry.count+' 点击未生效,重点: '+_ra,eq:r.eq||0,
-              hClass:r.hClass?r.hClass.name:'?',sizing:_vChips,pot:_potChips,myChips:_stkChips,
-              toCall:_betChips,blindBB:_bbRef,phase:G.phase||'post',nash:r._nash?true:false}));
-            TapVerify.noteTap(_ra,true);
-          }
-          console.log('[TapVerify] ★0按钮帧但上点击未生效→立即重试#'+_retry.count+' action='+_ra);
+          G._frameAutoLabel='retrying';
+          AndroidBridge.autoDecision(JSON.stringify({action:'check',auto:true,confidence:r.confidence||'medium',
+            reason:'Retry#'+_retry.count+' 让牌点击未生效,重点过牌',eq:r.eq||0,
+            hClass:r.hClass?r.hClass.name:'?',sizing:0,pot:_potChips,myChips:_stkChips,
+            toCall:0,blindBB:_bbRef,phase:G.phase||'post',ghostCheck:true}));
+          TapVerify.noteTap('check',true);
+          console.log('[TapVerify] ★0按钮帧免费过牌check重试#'+_retry.count+'(唯一允许的重试动作)');
           return true;
         }
       }
@@ -13481,6 +13543,17 @@ function autoExecuteDecision(r, isAutoMode) {
   }
 
   if (exec.auto) {
+    // V2.9.598 P1-1修复: 脏帧闸——eq=0且牌力分类异常(UNKNOWN/?/空)的帧,除"免费check"(不花钱)外,
+    //   绝不自动执行fold/call/raise。铁证日志决策#15(17:41:54): eq=0/hClass=UNKNOWN/物理闸call→check
+    //   脏帧仍自动执行。check在G.bet=0时免费无损失放行;面对下注或fold/下注类动作脏帧=盲打,转人工等下帧。
+    var _dirtyEqFrame = ((!r.eq || r.eq===0) && (!r.hClass || !r.hClass.name || r.hClass.name==='UNKNOWN' || r.hClass.name==='?'));
+    var _isFreeCheck = (exec.action==='check' && (_betChips===0 || !_betChips));
+    if (_dirtyEqFrame && !_isFreeCheck) {
+      G._frameAutoLabel = 'dirty_wait';
+      console.log('[AutoExec] 🚫脏帧拦截(eq=0/hClass异常,动作='+exec.action+')→不自动执行,等下帧重识别(免费check除外)');
+      try { if (typeof AndroidBridge !== 'undefined' && AndroidBridge.showAdvice) { AndroidBridge.showAdvice('COLOR:CHECK|SIGNAL:WAIT|EQ:0|REASON:识别数据异常,等下帧确认'); } } catch(_dw){}
+      return false;
+    }
     // 自动执行
     if (typeof AndroidBridge !== 'undefined' && AndroidBridge.autoDecision) {
       AndroidBridge.autoDecision(JSON.stringify({

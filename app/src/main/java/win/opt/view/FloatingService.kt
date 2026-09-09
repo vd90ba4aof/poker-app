@@ -1849,6 +1849,16 @@ class FloatingService : Service() {
                                 val amt = t.replace(Regex("[^0-9]"), "").toIntOrNull() ?: 0
                                 hasCallText && amt > 0
                             }
+                            // V2.9.598 P0-1修复(执行端硬闸): JS判0跟注且屏幕无任何行动按钮
+                            //   =跑马帧/非我方行动轮(铁证日志17:46:18/26:全下后跟注动画,JS toCall=0但
+                            //   TapVerify重试fold,屏幕按钮残影"弃牌,跟注6072"已不可点→fold照发白点)。
+                            //   此场景任何点击都无合法目标:不转check(会撞残影跟注)也不点fold,
+                            //   直接取消本次执行等下帧;与JS侧0按钮帧重试闸双保险。
+                            if (latestButtonPositions.isEmpty()) {
+                                Log.w(TAG, "★ 跑马帧硬闸: fold但JS判0跟注且屏幕0按钮(非行动轮/跑马)→取消点击等下帧 | reason=$reason")
+                                try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "跑马帧fold拦截: 0跟注+0按钮,非我方行动轮", "toCallJs=$toCallJs cachedToCall=$cachedToCall btns=0 reason=$reason") } catch (_: Exception) {}
+                                return@post
+                            }
                             if (screenCallBtn || cachedToCall > 0) {
                                 Log.w(TAG, "★ free-check保护拦截: 屏幕有跟注按钮(screenCall=$screenCallBtn)/cachedToCall=$cachedToCall>0→保持fold不转check (toCallJs=$toCallJs)")
                                 try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "free-check保护误触发拦截: 屏幕显示跟注按钮但JS判free(BB污染?)", "toCallJs=$toCallJs cachedToCall=$cachedToCall btns=${latestButtonPositions.joinToString(","){it.text}}") } catch (_: Exception) {}

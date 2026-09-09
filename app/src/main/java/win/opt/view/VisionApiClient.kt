@@ -1438,15 +1438,23 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
 
                 // V2.9.554: 盲注本地CV识别（牌桌中央"德州扑克, 100/200"白灰小字，~5ms）
                 // 独立try-catch，失败不影响主流程；结果作为inferredBB=0时的兜底
+                // V2.9.598 P0-2修复: recognizeBlinds斜杠锚定读法在跑马帧/过渡帧会把中央异常
+                //   数字串误拼成垃圾盲注(铁证日志: SB=7/BB=17100200,跑马帧中央出现非盲注数字)。
+                //   JS侧v572硬闸(严格1:2+范围)能挡住,但Kotlin侧blindBB裸奔会污染:
+                //   ①toJson opp_seats的bet>3BB误标raise ②pot=0时pot=BB*3兜底。
+                //   在此加与JS对齐的合理性校验: BB∈[20,10000]且SB>0且BB≈2×SB,不满足丢弃。
                 try {
                     val blindBmp = RegionCropper.cropBlindText(screenshotBmp)
                     if (blindBmp != null) {
                         val (sbBlind, bbBlind) = LocalActionRecognizer.getInstance(context).recognizeBlinds(blindBmp)
                         blindBmp.recycle()
-                        if (bbBlind > 0) {
+                        val ratioOk = sbBlind > 0 && kotlin.math.abs(bbBlind - 2 * sbBlind) <= maxOf(2, (bbBlind * 0.05).toInt())
+                        if (bbBlind in 20..10000 && ratioOk) {
                             localBlindBB = bbBlind
                             localBlindSB = sbBlind
                             Log.d(TAG, "🎯 本地CV盲注: SB=$localBlindSB BB=$localBlindBB")
+                        } else if (bbBlind > 0) {
+                            Log.w(TAG, "🎯 本地CV盲注丢弃(非标准1:2/超范围): SB=$sbBlind BB=$bbBlind → 不采信,防跑马帧垃圾值")
                         }
                     }
                 } catch (e: Exception) {
@@ -1522,15 +1530,18 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                                 "fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} " +
                                 "presets=${lar.presets} btns=${buttons.size} conf=%.2f".format(lar.confidence))
                     } else if (lar != null) {
-                        actionDiag += ";LOW_CONF(%.2f<%s)".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD)
-                        // V2.9.567 FIX(P0): 移除v566过渡帧判据——本地CV无法区分过渡帧和free-check局面
-                        //   （两者特征完全相同：fb=0无跟注按钮/mr=None无加注额/presets非空底池百分比），
-                        //   v566判据(!fb && mr==null && presets非空)完美匹配free-check→误跳过VLM→让牌按钮永远找不到。
-                        //   v566日志铁证：13:17:34-13:17:54连续5帧free-check跳VLM(buttons=[])，
-                        //   而13:17:26同一手VLM正确返回['弃牌','让牌','加注 400']。
-                        //   过渡帧让VLM兜底（返回空按钮=等下帧），free-check让VLM识别（返回让牌按钮）→两者都正确。
-                        //   性能代价：少数过渡帧多一次VLM调用(2~23s)，但free-check局面更常见且影响更大。
-                        Log.w(TAG, "🔍 本地CV操作区置信度不足(conf=%.2f<%.2f)，VLM兜底".format(lar.confidence, LOCAL_CONFIDENCE_THRESHOLD))
+                        // V2.9.598 P1-3修复: useLocal=false时confidence往往=1.00(数字识别本身高置信),
+                        //   真实原因是物理闸不满足(按钮行黄像素/加注行结构不匹配)或非我方行动轮,
+                        //   旧文案"置信度不足(conf=1.00<0.6)"自相矛盾(铁证日志帧38/39/43)。按真实原因输出。
+                        val failReason = when {
+                            !isMyTurn -> "非我方行动轮"
+                            lar.btn3Yellow >= LocalActionRecognizer.BTN_PHYSICAL_THRESHOLD && lar.minRaise == null -> "加注行存在但mr无效"
+                            lar.facingBet && lar.btn2Yellow < LocalActionRecognizer.BTN_PHYSICAL_THRESHOLD -> "跟注行物理信号不足"
+                            lar.btn3Yellow < LocalActionRecognizer.BTN_PHYSICAL_THRESHOLD && !lar.facingBet -> "按钮行物理信号不足(过渡帧/灰钮)"
+                            else -> "按钮结构不匹配(conf=%.2f)".format(lar.confidence)
+                        }
+                        actionDiag += ";USE_LOCAL_FALSE($failReason)"
+                        Log.w(TAG, "🔍 本地CV操作区未采用($failReason)，VLM兜底")
                     } else {
                         actionDiag += ";NULL_RESULT"
                     }
