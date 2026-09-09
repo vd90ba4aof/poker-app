@@ -1344,7 +1344,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.596',
+  CURRENT_VERSION:'2.9.597',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2791,7 +2791,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.596';
+var APP_VERSION='2.9.597';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -9994,7 +9994,7 @@ function postF(k){
     if(_oppBarreled&&outs<8){
       Multiway.log('Draw','对手连续下注outs='+outs+'<8→不追连续下注');
       // 跳过draw跟注，走后面通用判断
-    } else
+    } else {
     // V2.9.105: 多人池听牌(原只追强听牌)
     // V2.9.121: 放宽minOuts 8→6, nutOnly→false, 隐含赔率1.2→1.0
     var _mwDraw=Multiway.drawAdj();
@@ -10004,6 +10004,7 @@ function postF(k){
     } else if(io.total>=io.breakeven*1.0){
       var exploitResult5=applyExploit(eq,'call',_facingOppType,{bet:bet,pot:pot});
       return{a:'call',r:outs+'outs·'+io.advice,eq:exploitResult5.eq,c:'m',po:parseFloat(io.total),scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,bTexture:bTexture,io:io,exploit:exploitResult5.exploit,hClass:hClass,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
+    }
     }
   }
   if(scene==='check'){
