@@ -1345,7 +1345,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.609',
+  CURRENT_VERSION:'2.9.610',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2794,7 +2794,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.609';
+var APP_VERSION='2.9.610';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3216,6 +3216,19 @@ function decidePreflop(k){
     }catch(e){}
   }
 
+  // V2.9.610 FIX(P0, 实机日志2026-09-10 AdQh MP 48BB短码面43BB全押):
+  //   全押数学硬闸——不依赖按钮识别(短码局自己操作区"全下"被误识为加注行→scene误判raise、
+  //   物理闸!_pCanRaise失效→走3bet分支sizing=min(bet*3,stk)=全下,48BB深码用AQo误推jam)。
+  //   数学判据: 翻前需跟注额bet>=自己有效码深85%=实质面对全押(跟注即套牢,3bet无弃牌率=纯jam)。
+  //   铁证: v609日志同局7手大toCall(142-199BB)全被按钮识别正确判allin,唯48BB短码这手按钮误出加注行。
+  //   硬闸直接重写scene='allin',复用下方allin分支统一赔率门槛+深码闸(L3382分级),杜绝短码jam误推。
+  try{
+    if(scene!=='allin' && bet>0 && _myEffBB>0 && bet>=_myEffBB*0.85){
+      console.log('[全押数学硬闸] bet='+bet+'BB >= 码深'+_myEffBB+'BB*85% → scene '+scene+'→allin(按钮识别漏判全押,数学判据兜底)');
+      scene='allin';
+    }
+  }catch(_aiGuardErr){console.log('[全押数学硬闸]异常:'+_aiGuardErr.message);}
+
   var _specBonus=0;
   if(k.length===2&&k[0]===k[1]&&'23456'.indexOf(k[0])>=0)_specBonus+=8;
   if(k.indexOf('s')>=0&&k.length===3){var _sr=k.slice(0,2),_r1=RV[_sr[0]],_r2=RV[_sr[1]];if(_r1!==undefined&&_r2!==undefined){var _gap=Math.abs(_r1-_r2);if(_gap===1)_specBonus+=5;else if(_gap===2)_specBonus+=4;else _specBonus+=2;if(_sr[0]==='A')_specBonus+=3;}}
@@ -3397,6 +3410,14 @@ function decidePostflop(k){
   var ip=postflopIP(G.pos);
   var scene=G.scene||'check';
   var street=getCurrentStreet();
+  // V2.9.610 FIX(P0): 翻后同款全押数学硬闸——bet>=码深85%实质面对全押,
+  //   不依赖按钮识别(短码局"全下"按钮可能被误识为加注行致scene误判bet/raise)。
+  try{
+    if(scene!=='allin' && bet>0 && stk>0 && bet>=stk*0.85){
+      console.log('[全押数学硬闸-翻后] bet='+bet+'BB >= 码深'+stk+'BB*85% → scene '+scene+'→allin');
+      scene='allin';
+    }
+  }catch(_aiGuardE2){console.log('[全押数学硬闸-翻后]异常:'+_aiGuardE2.message);}
   var bTexture=boardTexture(bc);
   var hClass=handClassify(hole,comm);
   var oppType=G.opp||'unknown';
