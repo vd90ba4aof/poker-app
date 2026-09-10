@@ -246,6 +246,39 @@ assert(js.indexOf('公牌数倒退')>=0 && js.indexOf('公牌清零')>=0,
 assert(js.indexOf('_suitConflictSameRank')>=0,
   "同手花色分歧保旧牌+多帧复核分支存在");
 
+// ============ 用例7: V2.9.605 offsuit BTN弱牌过滤（62o等不得因posMod越闸）============
+console.log('\n【用例7】V2.9.605 offsuit BTN弱牌过滤');
+// 静态断言: _earlyPos数组包含'btn'
+assert(code.indexOf("['utg','utg1','mp','mp1','hj','co','btn']") >= 0,
+  "BTN已加入_earlyPos offsuit弱牌过滤数组");
+// 静态断言: 62o不在RFI.BTN范围
+var rfiBtnMatch = code.match(/BTN:\{([^}]+)\}/);
+assert(rfiBtnMatch && rfiBtnMatch[1].indexOf('62o') === -1,
+  "62o不在RFI.BTN范围(新引擎fold)");
+// 静态断言: 62o不在O6.btn范围
+var o6btnIdx = code.indexOf("O6={");
+var o6btnSection = code.substring(o6btnIdx, o6btnIdx + 3000);
+assert(o6btnSection.indexOf("'62o'") === -1 && o6btnSection.indexOf("62o") === -1,
+  "62o不在O6.btn范围(fallback eQ=30)");
+// 静态断言: eQ fallback对未匹配手牌base=30
+assert(code.indexOf("base=30") >= 0 && code.indexOf("未匹配手牌") >= 0,
+  "eQ fallback对未匹配手牌base=30(posMod BTN +6→eq=36)");
+// 端到端: 设置G状态调用preF验证62o BTN facing raise → fold
+try {
+  global.G.pos = 'btn'; global.G.scene = 'raise'; global.G.bet = 1;
+  global.G.pot = 3; global.G.stk = 100; global.G.ante = 0;
+  global.G.hole = [{rank:'6',suit:'o'},{rank:'2',suit:'o'}];
+  global.G.comm = []; global.G.opp = 'regular'; global.G.act = 2;
+  global.G.tt = 6; global.G.ap = 2;
+  global.G._inPotPlayers = 2; global.G.opp_seats = [];
+  global.G._lastBlindBB = 100;
+  var _result = global.preF('62o');
+  assert(_result && _result.a === 'fold',
+    "62o BTN facing raise → fold(不是call)", "实际=" + (_result ? _result.a : 'null'));
+} catch(e) {
+  assert(false, "62o BTN facing raise → preF执行异常", e.message);
+}
+
 // ============ 汇总 ============
 console.log('\n========================================');
 console.log('手牌锁专项回归: ' + pass + ' 通过, ' + fail + ' 失败');

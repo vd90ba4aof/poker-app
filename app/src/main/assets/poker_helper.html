@@ -1345,7 +1345,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.604',
+  CURRENT_VERSION:'2.9.605',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2794,7 +2794,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.604';
+var APP_VERSION='2.9.605';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -9447,8 +9447,8 @@ function preF(k){
     // V2.9.591 FIX(P0, 实机日志2026-09-08 UTG进K5o/76o、MP进J6o、CO进103o致筹码崩塌):
     //   前位(UTG/MP/CO)off-suit弱牌(eq<35)不得跟注小注open——前位范围需紧,
     //   off-suit垃圾牌(如K5o/76o/J6o/103o)翻后难玩,进池即送钱。
-    //   后位(BTN/SB/BB)和suited牌不受影响;在cS范围表中的牌不受影响。
-    var _earlyPos=['utg','utg1','mp','mp1','hj','co'].indexOf(G.pos)>=0;
+    //   V2.9.605 FIX: BTN加入offsuit弱牌过滤(62o等eQ fallback+posMod越闸); SB/BB/suited/cS范围牌不受影响。
+    var _earlyPos=['utg','utg1','mp','mp1','hj','co','btn'].indexOf(G.pos)>=0;
     var _isOffsuit=k.indexOf('o')>=0&&k.length===3;
     var _inCallRange=cS.indexOf(k)!==-1;
     if(_earlyPos&&_isOffsuit&&!_inCallRange&&eq<35){
