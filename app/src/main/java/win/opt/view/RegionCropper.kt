@@ -66,6 +66,28 @@ object RegionCropper {
         // seat4 是Hero自己，不在这里
     )
 
+    // ===== V2.9.607: 对手座位状态检测（就座=黑面板 / 参与本手=酒红牌背）=====
+    // 3张实机截图实测校准（2026-09-10）：
+    //   有牌牌背暗酒红占比18.3%~43.8%（2张暗牌卡），国旗/全押红字亮红<3.5%
+    //   在座黑面板占比30.7%~73.2%，空座纯绿桌布0%~9.7%
+    // 顺序与OPP_CHIPS严格一致：idx0=seat0左上, 1=seat1正上, 2=seat2右上, 3=seat3右中, 4=seat5左中
+    // 牌背ROI：座位信息面板上方/重叠处的暗牌区；侧边座位牌背与名字行同高度（实测y1380-1560）
+    private val SEAT_CARDBACK = listOf(
+        RegionRect(0, 655, 270, 850),     // idx0 seat0 左上
+        RegionRect(400, 350, 680, 545),   // idx1 seat1 正上
+        RegionRect(810, 655, 1080, 850),  // idx2 seat2 右上
+        RegionRect(800, 1365, 1080, 1580),// idx3 seat3 右中
+        RegionRect(0, 1365, 280, 1580)    // idx4 seat5 左中
+    )
+    // 面板ROI：名字+筹码深色信息面板；左列x从45起避开屏幕黑边（空座黑边误报实测）
+    private val SEAT_PANEL = listOf(
+        RegionRect(45, 860, 270, 940),    // idx0 seat0 左上
+        RegionRect(420, 495, 660, 600),   // idx1 seat1 正上
+        RegionRect(800, 840, 1075, 950),  // idx2 seat2 右上
+        RegionRect(790, 1430, 1075, 1620),// idx3 seat3 右中
+        RegionRect(45, 1430, 280, 1620)   // idx4 seat5 左中
+    )
+
     // ===== 操作区（底部按钮+筹码+预设）=====
     // 包含：主操作按钮（y≈2140-2340）、预设按钮（x≈730-1060, y≈1640-2130）、
     //       我的筹码（x≈45-310, y≈1935-2020）、底部玩家信息
@@ -233,6 +255,91 @@ object RegionCropper {
     fun cropOpponentChips(bitmap: Bitmap, seatIndex: Int): Bitmap? {
         if (seatIndex < 0 || seatIndex >= OPP_CHIPS.size) return null
         return cropRegion(bitmap, OPP_CHIPS[seatIndex])
+    }
+
+    /**
+     * V2.9.607: 5个对手座位状态检测（纯像素扫描，全程在已加载的截图上运行，~3ms，无新增IO）。
+     *
+     * 判据（3张实机截图30点实测全对，物理信号分离带4倍以上）：
+     *  - 参与本手：座位有2张暗牌→暗酒红像素占比高（实测18.3%~43.8%）。
+     *    颜色收紧为暗酒红 R∈[90,170]、G<80、B<85、R-G>45、R-B>45，
+     *    排除中国/加拿大国旗与"全押"红字的亮红（R>180）。阈值12%。
+     *  - 就座在座：座位有黑色半透明信息面板→深色像素占比高（实测30.7%~73.2%）；
+     *    空座位是纯绿桌布（实测0%~9.7%）。阈值20%。
+     *
+     * 逻辑关系：有牌背 ⇒ 必然在座（牌背只出现在有面板的座位上方）。
+     *
+     * @return List(5)，顺序与 OPP_CHIPS 一致（seat0,1,2,3,5）；每个元素为 Pair(就座, 参与本手)
+     */
+    fun detectSeatStatus(bitmap: Bitmap): List<Pair<Boolean, Boolean>> {
+        val result = ArrayList<Pair<Boolean, Boolean>>(5)
+        try {
+            // 一次性批量读入全图像素（1次JNI），后续数组直访，全5座位<5ms（铁律：不占主链路）
+            val w = bitmap.width
+            val h = bitmap.height
+            val pixels = IntArray(w * h)
+            bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+            // 步长采样（每2px取一像素），进一步压低耗时，占比统计不受影响
+            val step = 2
+            for (i in 0 until 5) {
+                val cb = SEAT_CARDBACK[i].scaled()
+                val pb = SEAT_PANEL[i].scaled()
+                // 暗酒红（牌背）计数
+                var red = 0L; var redTot = 0L
+                val cbx1 = cb.x1.coerceIn(0, w - 1)
+                val cby1 = cb.y1.coerceIn(0, h - 1)
+                val cbx2 = cb.x2.coerceIn(cbx1 + 1, w)
+                val cby2 = cb.y2.coerceIn(cby1 + 1, h)
+                var y = cby1
+                while (y < cby2) {
+                    var x = cbx1
+                    val rowBase = y * w
+                    while (x < cbx2) {
+                        val p = pixels[rowBase + x]
+                        val r = (p shr 16) and 0xFF
+                        val g = (p shr 8) and 0xFF
+                        val b = p and 0xFF
+                        if (r in 90..169 && g < 80 && b < 85 && (r - g) > 45 && (r - b) > 45) red++
+                        redTot++
+                        x += step
+                    }
+                    y += step
+                }
+                // 黑面板（就座）计数
+                var dark = 0L; var darkTot = 0L
+                val pbx1 = pb.x1.coerceIn(0, w - 1)
+                val pby1 = pb.y1.coerceIn(0, h - 1)
+                val pbx2 = pb.x2.coerceIn(pbx1 + 1, w)
+                val pby2 = pb.y2.coerceIn(pby1 + 1, h)
+                y = pby1
+                while (y < pby2) {
+                    var x = pbx1
+                    val rowBase = y * w
+                    while (x < pbx2) {
+                        val p = pixels[rowBase + x]
+                        val r = (p shr 16) and 0xFF
+                        val g = (p shr 8) and 0xFF
+                        val b = p and 0xFF
+                        if (r < 70 && g < 70 && b < 70) dark++
+                        darkTot++
+                        x += step
+                    }
+                    y += step
+                }
+                val inHand = redTot > 0 && red.toDouble() / redTot >= 0.12
+                val seated = darkTot > 0 && (dark.toDouble() / darkTot >= 0.20 || inHand)
+                result.add(Pair(seated, inHand))
+            }
+            Log.d(TAG, "🪑 座位检测: ${result.mapIndexed { i, p ->
+                val seatId = listOf(0, 1, 2, 3, 5)[i]
+                "s$seatId=${if (p.second) "有牌" else if (p.first) "在座" else "空"}"
+            }.joinToString(" ")}")
+        } catch (e: Exception) {
+            Log.e(TAG, "座位检测失败", e)
+            // 失败回退：全部返回"未知"（调用方按空处理→走兜底）
+            return List(5) { Pair(false, false) }
+        }
+        return result
     }
 
     /**

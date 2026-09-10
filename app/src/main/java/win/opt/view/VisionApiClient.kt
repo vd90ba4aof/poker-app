@@ -1452,6 +1452,33 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     Log.w(TAG, "对手筹码识别失败: ${e.message}")
                 }
 
+                // V2.9.607: 座位状态本地CV检测（纯像素扫描，~3ms，不占主链路）
+                //   有牌背=本手仍持牌参与（弃牌/空座/留座离桌全押均无牌背）；黑面板=就座在座。
+                //   牌背检测 → 修正 activePlayers（真实在池人数，驱动多人池/河牌抓诈/L10265口径）。
+                //   面板检测 → players列表active标记 + 玩家进出追踪。
+                //   ⚠️ totalPlayers 保持桌型=6 不改：JS G.tt是"桌型"，锁定后驱动整套位置映射表
+                //   (O2~O9/开局位置)，若按空座改成4会导致6人桌位置定位错误；G.act才是每手在池人数。
+                // idx顺序与OPP_CHIPS一致：0→seat0, 1→seat1, 2→seat2, 3→seat3, 4→seat5（seat4=Hero）
+                var localActiveCount = 1  // Hero自己始终持牌参与
+                var seatStatusOk = false
+                val seatStatus = ArrayList<Pair<Boolean, Boolean>>(5)  // (就座, 参与本手)
+                try {
+                    val tSeat = System.currentTimeMillis()
+                    seatStatus.addAll(RegionCropper.detectSeatStatus(screenshotBmp))
+                    if (seatStatus.size == 5) {
+                        val activeOpp = seatStatus.count { it.second }
+                        val seatedOpp = seatStatus.count { it.first }
+                        localActiveCount = activeOpp + 1  // +Hero
+                        seatStatusOk = true               // 像素检测5座位全部出结果即有效
+                        Log.d(TAG, "🪑 座位检测: ${System.currentTimeMillis() - tSeat}ms | 在座=${seatedOpp + 1} 在池参与=$localActiveCount 对手=[${seatStatus.mapIndexed { i, p -> "s${listOf(0,1,2,3,5)[i]}=${if (p.second) "有牌" else if (p.first) "在座" else "空"}" }.joinToString(",")}]")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "座位检测异常，activePlayers走兜底: ${e.message}")
+                }
+                // totalPlayers=桌型6（位置映射依赖，固定）；activePlayers=牌背实测在池人数
+                val finalTotalPlayers = 6
+                val finalActivePlayers = if (seatStatusOk) localActivePlayersSafe(localActiveCount) else (oppChipsMap.size + 1)
+
                 // V2.9.554: 盲注本地CV识别（牌桌中央"德州扑克, 100/200"白灰小字，~5ms）
                 // 独立try-catch，失败不影响主流程；结果作为inferredBB=0时的兜底
                 // V2.9.598 P0-2修复: recognizeBlinds斜杠锚定读法在跑马帧/过渡帧会把中央异常
@@ -1828,8 +1855,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     potSize = finalPot,
                     // V2.9.526: 本地CV筹码优先，VLM操作区次之，都没有则0
                     playerChips = if (localChipsValue > 0) localChipsValue else (action?.myChips ?: 0),
-                    totalPlayers = 6,
-                    activePlayers = oppChipsMap.size + 1,
+                    totalPlayers = finalTotalPlayers,
+                    activePlayers = finalActivePlayers,
                     myPosition = "",
                     street = determineStreet(finalCommCards),
                     toCall = finalToCall,
@@ -1839,7 +1866,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     blindSB = if (inferredSB > 0) inferredSB else localBlindSB,
                     blindBB = if (inferredBB > 0) inferredBB else localBlindBB,
                     ante = 0,
-                    players = buildOppPlayerList(oppChipsMap, localChipsValue, dButtonSeatLocal),
+                    players = buildOppPlayerList(oppChipsMap, localChipsValue, dButtonSeatLocal, if (seatStatusOk) seatStatus else emptyList()),
                     dButtonPosition = mapDSeatToPosition(
                         if (dButtonSeatLocal >= 0) dButtonSeatLocal else (action?.dButtonSeat ?: -1)
                     ),
@@ -1862,7 +1889,16 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 )
 
                 // V2.9.540: 动态玩家追踪——对比前后帧，检测谁加入/谁离场
-                val currentSeats = (oppChipsMap.keys + 4).toSet()  // oppChipsMap的keys + Hero(seat4)
+                // V2.9.607: 座位检测可用时以"在座黑面板"为准（筹码OCR读不到离桌"全押"红字会漏在座）；
+                //   不可用回退旧口径（筹码OCR keys + Hero）
+                val currentSeats = if (seatStatusOk) {
+                    val seated = HashSet<Int>().apply { add(4) }  // Hero seat4
+                    val seatByIdx = listOf(0, 1, 2, 3, 5)
+                    seatStatus.forEachIndexed { idx, (s, _) -> if (s && idx < seatByIdx.size) seated.add(seatByIdx[idx]) }
+                    seated
+                } else {
+                    (oppChipsMap.keys + 4).toSet()  // oppChipsMap的keys + Hero(seat4)
+                }
                 val joined = currentSeats - prevPlayerSeats
                 val left = prevPlayerSeats - currentSeats
                 lastJoinedSeats = joined.toList().sorted()
@@ -2094,25 +2130,44 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
      * @param myChips 自己的筹码
      * @param dSeat D按钮座位号
      */
+    /**
+     * V2.9.607: 本地CV参与人数下限保护。
+     * 策略引擎/JS以active_players驱动多人池判定，最小有效对局=2人(Hero+1对手)。
+     * 牌背检测天然满足(决策帧Hero持牌+至少1个对手在池)，此函数仅兜底异常帧。
+     */
+    private fun localActivePlayersSafe(active: Int): Int = if (active < 2) 2 else active
+
     private fun buildOppPlayerList(
         oppChipsMap: Map<Int, Int>,
         myChips: Int,
-        dSeat: Int
+        dSeat: Int,
+        seatStatus: List<Pair<Boolean, Boolean>> = emptyList()
     ): List<PlayerInfo> {
         val players = mutableListOf<PlayerInfo>()
+        // idx(0..4) → seat(0,1,2,3,5)，与OPP_CHIPS/SEAT_CARDBACK顺序一致
+        val seatByIdx = listOf(0, 1, 2, 3, 5)
         // 按seat顺序0-5构建
         for (seat in 0..5) {
             val pos = mapDSeatToPosition(seat)
             if (seat == 4) {
-                // Hero自己
+                // Hero自己：保持原有myChips>0入列条件（计数走finalTotalPlayers独立字段，不依赖此列表）
                 if (myChips > 0) {
                     players.add(PlayerInfo(pos, 0, myChips, true))
                 }
             } else {
+                val idx = seatByIdx.indexOf(seat)
                 val chips = oppChipsMap[seat]
-                if (chips != null && chips > 0) {
-                    // 有筹码的座位视为活跃玩家
-                    players.add(PlayerInfo(pos, 0, chips, true))
+                val seated = idx in seatStatus.indices && seatStatus[idx].first
+                val inHand = idx in seatStatus.indices && seatStatus[idx].second
+                if (seatStatus.isEmpty()) {
+                    // 旧路径兜底：座位检测不可用时，有筹码OCR结果的座位视为活跃
+                    if (chips != null && chips > 0) {
+                        players.add(PlayerInfo(pos, 0, chips, true))
+                    }
+                } else if (seated) {
+                    // V2.9.607: 在座即列入players（chips OCR读不到离桌"全押"红字时给0）；
+                    // active=true 仅当仍持牌参与本手，弃牌/离桌座位 active=false（JS action标fold）
+                    players.add(PlayerInfo(pos, 0, chips ?: 0, inHand))
                 }
             }
         }
