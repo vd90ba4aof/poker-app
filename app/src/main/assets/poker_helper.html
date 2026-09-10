@@ -1345,7 +1345,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.607',
+  CURRENT_VERSION:'2.9.608',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2794,7 +2794,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.607';
+var APP_VERSION='2.9.608';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -2840,7 +2840,7 @@ var _3B={
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},KQs:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},AJs:{a:'c',f:.7},ATs:{a:'c',f:.8},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.6},JTs:{a:'c',f:.7}}
   },
   vs_BTN:{
-    from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},AJo:{a:'3b',f:.2},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.3},KJs:{a:'3b',f:.2},QJs:{a:'3b',f:.2},KQo:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},"44":{a:'c',f:.3},"33":{a:'c',f:.25},"22":{a:'c',f:.25},ATo:{a:'c',f:.7},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KTs:{a:'c',f:.6},K9s:{a:'c',f:.4},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},Q9s:{a:'c',f:.3},QJo:{a:'c',f:.25},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},JTo:{a:'c',f:.3},T9s:{a:'c',f:.6},T8s:{a:'c',f:.4},T9o:{a:'c',f:.3},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},"65s":{a:'c',f:.25},"54s":{a:'c',f:.2}},
+    from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},AJo:{a:'3b',f:.2},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.3},KJs:{a:'3b',f:.2},QJs:{a:'3b',f:.2},KQo:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},"44":{a:'c',f:.3},"33":{a:'c',f:.25},"22":{a:'c',f:.25},ATo:{a:'c',f:.7},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KTs:{a:'c',f:.6},K9s:{a:'c',f:.4},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},Q9s:{a:'c',f:.3},QJo:{a:'c',f:.25},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},JTo:{a:'c',f:.3},T9s:{a:'c',f:.6},T8s:{a:'c',f:.4},T9o:{a:'c',f:.3},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},"65s":{a:'c',f:.25},"64s":{a:'c',f:.15},"54s":{a:'c',f:.2}},
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},"99":{a:'3b',f:.3},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},AJs:{a:'3b',f:.2},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},K5s:{a:'3b',f:.2},K4s:{a:'3b',f:.2},"98s":{a:'3b',f:.3},"87s":{a:'3b',f:.2},ATs:{a:'c',f:.7},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},A6s:{a:'c',f:.3},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},K9s:{a:'c',f:.4},QJs:{a:'c',f:.5},QTs:{a:'c',f:.4},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.6},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},"65s":{a:'c',f:.3},"54s":{a:'c',f:.2},AJo:{a:'c',f:.3},KQo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.2},K8o:{a:'c',f:.2},K7o:{a:'c',f:.15},Q9o:{a:'c',f:.3},Q8o:{a:'c',f:.2},J9o:{a:'c',f:.25},T9o:{a:'c',f:.3},"98o":{a:'c',f:.25},"87o":{a:'c',f:.15},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.45},"55":{a:'c',f:.4},"44":{a:'c',f:.35},"33":{a:'c',f:.3},"22":{a:'c',f:.3},}},
   vs_SB:{
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},"99":{a:'3b',f:.4},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.4},KJs:{a:'3b',f:.3},QJs:{a:'3b',f:.25},KQo:{a:'3b',f:.35},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},"44":{a:'c',f:.4},"33":{a:'c',f:.35},"22":{a:'c',f:.35},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KTs:{a:'c',f:.6},K9s:{a:'c',f:.5},QTs:{a:'c',f:.5},Q9s:{a:'c',f:.4},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.5},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},AJo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.25},K8o:{a:'c',f:.2},K7o:{a:'c',f:.15},K5s:{a:'3b',f:.2},K4s:{a:'3b',f:.2},Q9o:{a:'c',f:.3},Q8o:{a:'c',f:.2},J9o:{a:'c',f:.25},T9o:{a:'c',f:.3},"98o":{a:'c',f:.25},"87o":{a:'c',f:.15},"65s":{a:'c',f:.3},"54s":{a:'c',f:.2}},
@@ -3379,8 +3379,8 @@ function decidePreflop(k){
     var _preAiRatio=pot>0?allinBet/(pot+allinBet):0;
     callThresh=_preAiRatio>=0.5?Math.max(callThresh,45):Math.min(callThresh+3,25);
     // V2.9.592 FIX(P1, 实机日志2026-09-08 A7o stk61BB面61BB全押eq41%用25%地板跟):
-    //   25%小jam地板为短码推弃设计;深码(>40BB)跟全押套牢大额,收紧到40%门槛(复用L3191 _oppEffBB)。
-    if(_oppEffBB>40){callThresh=Math.max(callThresh,40);}
+    //   25%小jam地板为短码推弃设计;深码跟全押套牢大额,分级收紧门槛(复用L3191 _oppEffBB):>40BB→40%,>80BB→45%,>120BB→50%。
+    if(_oppEffBB>120){callThresh=Math.max(callThresh,50);}else if(_oppEffBB>80){callThresh=Math.max(callThresh,45);}else if(_oppEffBB>40){callThresh=Math.max(callThresh,40);}
     if(allinEq>=callThresh){var exploitA=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});return{a:'call',r:'GTO vs allin eq'+Math.round(allinEq)+'%>='+callThresh+'%',eq:exploitA.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitA.exploit,_se:true};}
     return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%',spr);
   }
