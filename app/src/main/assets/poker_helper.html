@@ -1345,7 +1345,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.603',
+  CURRENT_VERSION:'2.9.604',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2591,10 +2591,12 @@ var VPP={
   },
   // 6. 手牌锁定：同一手牌内手牌不变
   lockHeroHand:function(d){
-    if(G._rankLockKey&&d.hole_cards&&d.hole_cards.length>=2){
-      var newRankKey=d.hole_cards[0].rank+d.hole_cards[1].rank;
-      if(newRankKey===G._rankLockKey&&G.hole[0]&&G.hole[1]){
-        // rank相同但suit可能不同→保留旧suit（如果旧suit非空）
+    // V2.9.604: 判据升级rank+suit全牌key——v603 rank-only在跨手同rank时会把上一手suit
+    //   补进新手牌(与onVisionResult锁段同族rank-only缺陷, 锁段已根治, 此处同步对齐)
+    if(G._handLockKey&&d.hole_cards&&d.hole_cards.length>=2){
+      var newHandKey=d.hole_cards[0].rank+(d.hole_cards[0].suit||'')+d.hole_cards[1].rank+(d.hole_cards[1].suit||'');
+      if(newHandKey===G._handLockKey&&G.hole[0]&&G.hole[1]){
+        // 同一手牌：新帧suit缺失→补旧suit（识别偶发丢suit场景）
         if(G.hole[0].suit&&!d.hole_cards[0].suit)d.hole_cards[0].suit=G.hole[0].suit;
         if(G.hole[1].suit&&!d.hole_cards[1].suit)d.hole_cards[1].suit=G.hole[1].suit;
       }
@@ -2792,7 +2794,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.603';
+var APP_VERSION='2.9.604';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8980,8 +8982,15 @@ function _decideInner(){
         // V2.9.144: EV护栏主动fold=数学负EV,不反fold(避免乱call新坑)
         // 阈值同步放宽到-4，与EV护栏一致
         var _evGuardedFold=result._evs&&result._evs.fold&&result._evs.fold.ev<-4;
+        // V2.9.604 BUG-2修复: 赔率不足型fold(SE数学fold: eq<赔率要求)不反转为付费动作
+        //   v603日志实锤: 河牌两对Q4无花5人池面对4BB, SE fold(eq12.9%<赔率29%)被'5+人厚池'
+        //   反转raise 25%pot——call eq不够时raise(需对手弃牌率/更高eq)数学上更亏。
+        //   check动作仍可反转(免费看牌/摊牌不亏)。
+        var _oddsFold=result.r&&result.r.indexOf('fold(odds)')>=0;
         if(_evGuardedFold){
           console.log('[' + APP_VERSION + '] EV护栏主动fold→不反fold');
+        }else if(_oddsFold){
+          console.log('[' + APP_VERSION + '] 赔率不足fold(eq<赔率)→不反转付费动作: '+result.r);
         }else{
           var _poolType=PoolTypeDetector.detect();
           var _holeArr=G.hole.filter(function(c){return c;});
@@ -8989,6 +8998,17 @@ function _decideInner(){
           var _hClassPost=typeof handClassify==='function'?handClassify(_holeArr,_commArr):null;
           var _thickness=ValueThicknessAnalyzer.analyze(k,G.comm,_poolType,_hClassPost);
           var _psmResult=PoolStrategyMatrix.decide(_poolType,_thickness,k,G.comm,G.pos);
+          // V2.9.604: 非赔率型反转也要牌力下限——AIR空气牌反转成raise/bluff, 且eq<30%
+          //   (连跟注都不够)的薄场景, 禁止付费动作(留check); 多人池AIR更严格到eq<40%。
+          //   依据: 0%bluff厚池场景(5+人MP)PSM已自己返check, 此闸拦3/4人池THIN bluff分支。
+          var _psmAggro=_psmResult&&(_psmResult.action==='raise'||_psmResult.action==='call');
+          var _psmAir=(_hClassPost&&_hClassPost.name==='AIR')||_thickness==='AIR';
+          var _psmEq=(typeof result.eq==='number')?result.eq:0;
+          var _airEqFloor=(_poolType==='MP')?40:30;
+          if(_psmAggro&&_psmAir&&_psmEq<_airEqFloor){
+            console.log('[V2.9.604 池驱反fold闸门] AIR+eq'+Math.round(_psmEq)+'%<'+_airEqFloor+'%→不反转付费动作(留fold/check)');
+            _psmResult={action:(G.bet>0?'fold':'check'),reason:'牌力不足不反转(空气低eq)',colorKey:G.bet>0?'FOLD':'CHECK'};
+          }
           if(_psmResult&&_psmResult.action&&_psmResult.action!=='fold'){
             // V2.9.139: 面对bet时PoolStrategyMatrix返回check→无效(不能check过牌)，保留fold
             if(_psmResult.action==='check' && G.bet>0){
@@ -11602,7 +11622,7 @@ function onVisionResult(data){
   // V2.9.156: VPP后处理纠错——在数据进G之前修正常见识别错误
   if(data&&data.hole_cards&&data.hole_cards.length>=2&&data.is_poker_table!==false){data=VPP.process(data);}
   // V2.9.595 P2-FIX-v2: rank归一化已移至onVisionResult入口(DIAG之后/PV之前,见L11436+)
-  if(data&&data.hole_cards&&data.hole_cards.length>=2&&_ft!=='auto'&&_ft!=='verify'){var _nk=data.hole_cards[0].rank+(data.hole_cards[0].suit||'')+data.hole_cards[1].rank+(data.hole_cards[1].suit||'');var _pk=G._rankLockKey||'';if((_pk&&_nk!==_pk)||_isStreetChange(data)){try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.triggerMultiFrame)AndroidBridge.triggerMultiFrame();}catch(e){}}}
+  if(data&&data.hole_cards&&data.hole_cards.length>=2&&_ft!=='auto'&&_ft!=='verify'){var _nk=data.hole_cards[0].rank+(data.hole_cards[0].suit||'')+data.hole_cards[1].rank+(data.hole_cards[1].suit||'');var _pk=G._handLockKey||'';if((_pk&&_nk!==_pk)||_isStreetChange(data)){try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.triggerMultiFrame)AndroidBridge.triggerMultiFrame();}catch(e){}}}
   // V2.9.111: NO_TABLE增强检测——优先is_poker_table，其次3信号联合判断
   var _modelNoTable = data && data.is_poker_table === false;
   var _noHole = !data || !data.hole_cards || data.hole_cards.length<2;
@@ -11660,18 +11680,45 @@ function onVisionResult(data){
   if (G._holeCardsSource === 'fallback_lock') {
     console.log('[回退帧] hole_cards_source=fallback_lock: 本帧手牌为历史锁回退, 禁付费自动动作');
   }
+  // V2.9.604: 换手检测信号（根治rank-only跨手锁死: v603日志Qh4h手结束→Qh4s手同rank不同suit,
+  //   rank-only判据误判同手→JS锁把上一手Qh4h锁进Qh4s手→4红桃听牌当同花NUTS全下25BB实锤）
+  //   信号① Kotlin手牌锁从空到有=新一手首帧(Kotlin无手牌帧已清锁; 同手内锁持续存在不重建)
+  //   信号② 公牌清零(旧手有公牌→新手preflop)或公牌数倒退(同手公牌只增不减)
+  var _prevLockKey = G._handLockKey || '';
+  var _prevRankKey = G._rankLockKey || '';
+  var _prevCommCount = (G.comm ? G.comm.filter(function(c){return c!==null;}).length : 0);
+  var _newCommCount = (data.community_cards ? data.community_cards.filter(function(c){return c&&c.rank;}).length : 0);
+  var _newHandSignal = false, _newHandWhy = '';
+  if(data.lock_just_established === true || (data.lock_reason||'').indexOf('首次识别锁定')>=0){
+    _newHandSignal = true; _newHandWhy = 'Kotlin新锁建立('+(_lockReason||'')+')';
+  }else if(_prevCommCount > 0 && _newCommCount === 0){
+    _newHandSignal = true; _newHandWhy = '公牌清零(新一手preflop)';
+  }else if(_newCommCount < _prevCommCount){
+    _newHandSignal = true; _newHandWhy = '公牌数倒退'+_prevCommCount+'→'+_newCommCount;
+  }
   var _newHandKey = '';
   var _newRankKey = '';
   if(data.hole_cards && data.hole_cards.length >= 2){
     _newHandKey = data.hole_cards[0].rank + (data.hole_cards[0].suit||'') + data.hole_cards[1].rank + (data.hole_cards[1].suit||'');
     _newRankKey = data.hole_cards[0].rank + data.hole_cards[1].rank;
   }
-  var _prevRankKey = G._rankLockKey || '';
-  var _isSameHand = (_prevRankKey !== '' && _newRankKey === _prevRankKey);
-  var _isNewHand = (_prevRankKey !== '' && _newRankKey !== _prevRankKey);
+  // V2.9.604: 同手判据升级rank+suit全牌key(rank-only是v603跨手锁死根因)
+  var _isSameHand = (_prevLockKey !== '' && _newHandKey === _prevLockKey && !_newHandSignal);
+  var _isNewHand = (_prevLockKey !== '' && (_newHandKey !== _prevLockKey || _newHandSignal));
+  // 同手但花色分歧=单帧花色抖动(v603起同手suit以Kotlin锁为准, 分歧帧大概率误识别):
+  //   保守保旧牌+触发多帧复核, 不让分歧帧覆盖锁
+  var _suitConflictSameRank = (_handLocked && _prevRankKey !== '' && _newRankKey === _prevRankKey
+    && _newHandKey !== _prevLockKey && !_newHandSignal && G.hole[0] && G.hole[1]);
+  if(_newHandSignal && _prevLockKey){
+    console.log('[V2.9.604换手信号] '+_newHandWhy+'（旧锁key='+_prevLockKey+'）→清锁按新手牌处理');
+  }
   if(_handLocked && _isSameHand && G.hole[0] && G.hole[1]) {
-    console.log('[手牌锁定] 已锁定('+_lockReason+')，rank='+_newRankKey+'，只更新公共牌/底池');
+    console.log('[手牌锁定] 已锁定('+_lockReason+')，hand='+_newHandKey+'，只更新公共牌/底池');
     G.comm = [null,null,null,null,null];
+  } else if(_suitConflictSameRank) {
+    console.log('[手牌锁定] rank相同suit分歧(帧'+_newHandKey+'≠锁'+_prevLockKey+')，保守保旧牌+多帧复核');
+    G.comm = [null,null,null,null,null];
+    try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.triggerMultiFrame)AndroidBridge.triggerMultiFrame();}catch(_smfe){}
   } else {
     G._handLockKey = _newHandKey;
     G._rankLockKey = _newRankKey;
@@ -11679,7 +11726,7 @@ function onVisionResult(data){
   }
   
   // 1. V2.9.134: 手牌填入——保留suit（vision已返回花色）
-  if(_handLocked && _isSameHand && G.hole[0] && G.hole[1]) {
+  if(_handLocked && (_isSameHand || _suitConflictSameRank) && G.hole[0] && G.hole[1]) {
     console.log('[手牌锁定] 保持锁定手牌: '+G.hole[0].rank+(G.hole[0].suit||'')+' '+G.hole[1].rank+(G.hole[1].suit||''));
   } else if(data.hole_cards && data.hole_cards.length>=2){
     G.hole=[];
@@ -11740,11 +11787,9 @@ function onVisionResult(data){
       // V2.9.79: 新一手牌→重置行动线
       var _newHandId=(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'');
       ActionLine.startHand(_newHandId);
-      // V2.9.83: 新一手牌(rank变了)→重置锁定
-      var _prevHandIdForLearn=G._handLockKey||'';
-      if(_isNewHand){
-        G._handLockKey='';
-      }
+      // V2.9.604: _handLockKey全手保持作为同手/换手判据, preflop不再清空
+      //   (v603在此清空会让新手牌后续帧_prevLockKey=''锁判据失效); 学习用上一手key取帧初旧值
+      var _prevHandIdForLearn=_prevLockKey||'';
       // V2.9.143: 新一手牌开始→对比筹码差值算上一手盈亏
       // 逻辑：上一手翻后记录了_prevRawChips，新一手preflop的my_chips就是这手开始时的筹码
       // 差值=上一手赢/输了多少（非摊牌时也有效——比如我们fold后对手赢了）

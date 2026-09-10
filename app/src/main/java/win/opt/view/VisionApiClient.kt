@@ -115,6 +115,10 @@ object VisionApiClient {
     // V2.9.582: 手牌锁定时间戳——锁定回退TTL(实机日志2026-09-06: 29分钟前测试手AcKh被回退并全下)。
     // 同手正常对局成功帧持续刷新本时间戳; 只有双路持续失败超TTL才失效, 不影响正常手。
     @Volatile var holeCardsLockedAt: Long = 0L
+    // V2.9.604: 手牌锁从无到有(新一手首帧)标志——toJson透传JS后清零。
+    //   JS侧手牌锁判据的换手铁信号: Kotlin无手牌帧已清锁, 锁重建=新一手开始
+    //   (同手内锁持续存在不重建; v603真机Qh4h→Qh4s同rank跨手rank-only判据漏判即由此信号兜住)
+    @Volatile var lockJustEstablished: Boolean = false
     val HOLE_LOCK_TTL_MS = 180_000L  // 3分钟: 一手牌内截图过渡/动画帧通常<30s; 超TTL=已换手或离桌
     // V2.9.197: 混合方案 — 仅锁定rank（本地CV高置信度），suit仍由API识别
     @Volatile var holeCardsRankLocked: List<String>? = null
@@ -303,6 +307,8 @@ object VisionApiClient {
             // V2.9.114: 只锁定非空手牌，防止空列表锁死
             // V2.9.134: 保留suit（vision已识别花色），不再抹掉
             if (result.holeCards.isNotEmpty()) {
+                // V2.9.604: 锁从无到有=新一手首帧(进入本分支前已确认holeCardsLocked==null)
+                lockJustEstablished = true
                 holeCardsLocked = result.holeCards; holeCardsLockedAt = System.currentTimeMillis(); lockReason = "首次识别锁定"; suitUncertain = false
             } else {
                 holeCardsLocked = null; holeCardsLockedAt = 0L; lockReason = "手牌为空不锁定"; suitUncertain = false
@@ -1049,6 +1055,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 put("active", p.active)
                 if(p.nickname.isNotEmpty()) put("nickname", p.nickname)
             } }))
+            put("lock_just_established", lockJustEstablished); lockJustEstablished = false; // V2.9.604: 一次性标志,透传即清
             put("is_poker_table", result.isPokerTable); put("d_button_position", result.dButtonPosition); put("suit_uncertain", result.suitUncertain); put("hole_cards_locked", holeCardsLocked != null); put("rank_locked", holeCardsRankLocked != null); put("rank_lock_values", holeCardsRankLocked?.joinToString(",") ?: ""); put("lock_reason", lockReason)
             // V2.9.574: 牌面物理非法（52张重复/结构非法）→JS拒帧转人工
             put("cards_illegal", result.cardsIllegal); put("cards_illegal_reason", result.cardsIllegalReason); put("hole_cards_source", result.holeCardsSource)
@@ -1086,6 +1093,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
     fun resetLocks() {
         holeCardsLocked = null
         holeCardsLockedAt = 0L
+        lockJustEstablished = false
         holeCardsRankLocked = null
         streetLocked = null
         dButtonLocked = ""
@@ -1872,6 +1880,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 //   只有本帧新鲜识别(finalHoleCards来自本地CV/缓存/VLM)才刷新锁，
                 //   回退帧沿用旧锁龄→TTL正常到期→过期清锁空手牌转人工
                 if (finalHoleCards.size == 2 && !handFromLockedFallback) {
+                    // V2.9.604: 仅锁从空到有=新一手首帧才透传; 同手持续刷新锁龄不置位
+                    if (holeCardsLocked == null) lockJustEstablished = true
                     holeCardsLocked = finalHoleCards
                     holeCardsLockedAt = System.currentTimeMillis()
                     streetLocked = result.street

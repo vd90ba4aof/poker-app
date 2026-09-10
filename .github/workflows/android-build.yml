@@ -35,6 +35,8 @@ jobs:
 
     - name: JS engine runtime smoke test
       run: node tests/engine_smoke.test.js
+    - name: 手牌锁跨手回归(v604 P0门禁)
+      run: node tests/engine_lock_regression.test.js
       
     - name: Build with Gradle
       run: ./gradlew assembleDebug

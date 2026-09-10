@@ -37,6 +37,8 @@ jobs:
         # 运行时行为门禁：加载真实poker_helper.html喂vision数据，断言go()决策时刻stk/pot已就绪。
         # 拦截静态检查抓不到的时序/分支回归（如2026-09-01 stk时序倒置：决策用默认100BB）。
         run: node tests/engine_smoke.test.js
+    - name: 手牌锁跨手回归(v604 P0门禁)
+      run: node tests/engine_lock_regression.test.js
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
