@@ -82,7 +82,7 @@ object DiagnosticLogger {
         val detail: String? = null
     )
     
-    private const val MAX_LOGS = 100          // 最多保留100次识别记录
+    private const val MAX_LOGS = 300          // V2.9.606: 100→300（v605日志铁证：100帧仅覆盖8min，13min数据丢失）
     private const val MAX_DECISIONS = 200     // 最多保留200次决策记录
     private const val MAX_ERRORS = 200        // 最多保留200条错误
     

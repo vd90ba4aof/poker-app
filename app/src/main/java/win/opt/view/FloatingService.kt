@@ -153,6 +153,10 @@ class FloatingService : Service() {
     @Volatile private var _pipelineEsp32TapTimeMs = 0L
     @Volatile private var _pipelineTotalTimeMs = 0L
     @Volatile private var _pipelineLastAction = ""
+    // V2.9.606: 全局ESP32 tap冷却——防双触发（v605日志铁证：bet_50→raise 156ms/154ms双点不同按钮）
+    //   400ms > bet sizing序列间隔(150ms sleep)但 < 最小牌局决策间隔(>2s)
+    @Volatile private var _lastEsp32TapTimeMs: Long = 0L
+    private val TAP_MIN_INTERVAL_MS = 400L
     // V2.9.114: WebViewAssetLoader——Google官方推荐的本地HTML加载方案
     private lateinit var assetLoader: WebViewAssetLoader
     // V2.9.70: 错误日志——API/截屏失败时记录，豪哥可导出反馈
@@ -949,7 +953,8 @@ class FloatingService : Service() {
                         try { Thread.sleep(150) } catch (_: InterruptedException) {}
                         handler.post {
                             try {
-                                executeAutoTapFallback("raise")
+                                // V2.9.606: exemptCooldown=true——bet sizing序列第2步(150ms间隔<400ms冷却)，必须豁免
+                                executeAutoTapFallback("raise", exemptCooldown = true)
                                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                                 Log.d(TAG, "★ GG bet confirm: raise button tapped")
                             } catch (e: Exception) {
@@ -1004,6 +1009,14 @@ class FloatingService : Service() {
                 try {
                     DiagnosticLogger.logEsp32Tap(action, x, y, targetBtn.text.toString(), "sendTap")
                 } catch (_: Exception) {}
+                // V2.9.606: 全局tap冷却守卫（sendTap路径也受保护）
+                if (guardTapCooldown(action)) {
+                    Log.w(TAG, "★ 防双触发: sendTap $action 被冷却拦截→跳过本次点击")
+                    cancelBleAckTimeout()
+                    pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+                    if (autoCaptureEnabled) scheduleNextAutoCapture()
+                    return
+                }
                 // V2.9.546: 同步等ACK，确认ESP32真的执行了HID点击
                 // R4-fix: bulkTransfer最坏阻塞800ms，移后台线程（ExactBet同款模式），ACK回主线程驱动FSM
                 val tapAction = action
@@ -1145,8 +1158,34 @@ class FloatingService : Service() {
         }
     }
 
+    // V2.9.606: 全局tap冷却守卫——防双触发（v605日志铁证：bet_50+raise 156ms/154ms连点两个不同按钮）
+    //   400ms阈值：> bet sizing序列间隔(150ms) < 最小牌局决策间隔(>2s)
+    //   @return true=冷却中已拦截（调用方应return），false=可继续执行
+    private fun guardTapCooldown(action: String): Boolean {
+        val now = System.currentTimeMillis()
+        val elapsed = now - _lastEsp32TapTimeMs
+        if (_lastEsp32TapTimeMs > 0 && elapsed < TAP_MIN_INTERVAL_MS) {
+            Log.w(TAG, "★ 防双触发: $action 距上次tap仅${elapsed}ms(<${TAP_MIN_INTERVAL_MS}ms)→跳过")
+            try { DiagnosticLogger.logEsp32Tap("cooldown_${action}_BLOCKED", 0, 0, action, "TAP_COOLDOWN") } catch (_: Exception) {}
+            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.MEDIUM,
+                "防双触发拦截: $action 距上次tap ${elapsed}ms", "cooldownMs=$TAP_MIN_INTERVAL_MS") } catch (_: Exception) {}
+            return true
+        }
+        _lastEsp32TapTimeMs = now
+        return false
+    }
+
     // V2.9.200: 回退动态坐标——使用GameModeConfig根据当前平台自动适配
-    private fun executeAutoTapFallback(action: String) {
+    // V2.9.606: exemptCooldown=true跳过冷却检查（仅用于bet sizing序列的raise确认tap，间隔150ms<400ms冷却）
+    private fun executeAutoTapFallback(action: String, exemptCooldown: Boolean = false) {
+        // V2.9.606: 全局tap冷却（bet sizing确认路径豁免）
+        if (!exemptCooldown && guardTapCooldown(action)) {
+            // 冷却拦截：不点击，RESET FSM继续下一轮
+            cancelBleAckTimeout()
+            pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)
+            if (autoCaptureEnabled) scheduleNextAutoCapture()
+            return
+        }
         // V2.9.546: ESP32 USB连接检查
         if (bleManager?.isConnected != true) {
             Log.w(TAG, "★ autoTapFallback跳过: ESP32未连接 (action=$action)")
