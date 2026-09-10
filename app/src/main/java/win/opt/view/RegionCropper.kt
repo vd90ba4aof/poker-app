@@ -42,10 +42,7 @@ object RegionCropper {
     // V2.9.538: 实测11张训练截图：底池"500"~"6,469"黄色数字，h≈30-31px
     private val POT_AMOUNT = RegionRect(460, 975, 620, 1050)
 
-    // ===== 盲注文字区域（牌桌中央"德州扑克, 100 / 200"白灰小字）=====
-    // V2.9.554: 基于Screenshot_2026-08-22实测，豪哥红框标注确认定死(370,885)-(700,935)
-    // 与POT_AMOUNT(y=975起)不重叠，间隙40px
-    private val BLIND_TEXT = RegionRect(370, 885, 700, 935)
+    // v612: BLIND_TEXT已删除(本地盲注OCR裁剪不再需要)
 
     // ===== 我的筹码区域（左下角，白色数字）=====
     // V2.9.526: 新增本地CV筹码识别。实测白色数字h≈28-29px
@@ -234,12 +231,7 @@ object RegionCropper {
         return cropRegion(bitmap, POT_AMOUNT)
     }
 
-    /**
-     * 裁剪盲注文字区域（V2.9.554新增，"德州扑克, 100/200"白灰小字）
-     */
-    fun cropBlindText(bitmap: Bitmap): Bitmap? {
-        return cropRegion(bitmap, BLIND_TEXT)
-    }
+    // v612: cropBlindText已删除
 
     /**
      * 裁剪我的筹码区域（V2.9.526新增，用于本地CV数字识别）

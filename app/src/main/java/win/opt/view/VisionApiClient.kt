@@ -109,6 +109,8 @@ object VisionApiClient {
         private set
 
     @Volatile var holeCardsLocked: List<CardInfo>? = null
+    // v612: blindBB锁存(翻后GCD不成立时沿用上一翻前锁存值, 供opp_seats加注标注/pot兜底使用)
+    @Volatile private var _lockedBBKotlin: Int = 0
     @Volatile var streetLocked: String? = null  // V2.9.165: 本地CV根据公共牌数量锁定的street
     @Volatile var suitUncertain: Boolean = false
     @Volatile var lockReason: String = ""
@@ -541,7 +543,7 @@ object VisionApiClient {
         // V2.9.200: 根据当前平台动态调整prompt描述（GG/标准/短牌）
         val platformHint = buildPlatformPromptHint()
         val prompt = """${platformHint.first}5-max识别引擎。只输出JSON。
-Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"blinds":"100/200","phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"GGPOKER"}
+Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"GGPOKER"}
 花色:s=♠黑 h=♥红心 d=♦方块 c=♣梅花。对子花色须不同。
 pot展开简写:1.2K=1200,1.5M=1500000。底池=桌面中央筹码堆。
 active_players=仅有牌(明/暗)的玩家,弃牌/空座不计。
@@ -551,7 +553,7 @@ opp_seats须含nickname(头像旁用户名)。showdown_cards=摊牌对手牌,看
 GG特有字段:is_straddle=是否Straddle(第三盲注);is_bomb_pot=是否BombPot(所有玩家ante后直接翻牌);is_insurance=是否出现Insurance/EV Cashout按钮;is_pko=是否PKO赏金赛(牌桌有赏金标识)。
 game_mode=现金桌填cash,锦标赛填tournament。判断依据:有"锦标赛/报名费/奖池/剩余人数/盲注倒计时"填tournament,否则填cash。
 detected_platform=根据桌面logo/品牌文字自动识别平台。判断依据:看到GGPoker/GG标志填GGPOKER,仅支持GGPOKER。
-示例:{"is_poker_table":true,"hole_cards":[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}],"community_cards":[{"rank":"Q","suit":"d"}],"pot":1500,"my_chips":25000,"bet_to_call":0,"dealer_seat":3,"my_seat":1,"blinds":"100/200","phase":"flop","opp_seats":[{"seat":2,"nickname":"King","chips":"18000","action":"check"}],"buttons":["让牌","下注500"],"button_positions":[{"text":"让牌","xPct":0.50,"yPct":0.88},{"text":"下注500","xPct":0.83,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"GGPOKER"}
+示例:{"is_poker_table":true,"hole_cards":[{"rank":"A","suit":"s"},{"rank":"K","suit":"h"}],"community_cards":[{"rank":"Q","suit":"d"}],"pot":1500,"my_chips":25000,"bet_to_call":0,"dealer_seat":3,"my_seat":1,"phase":"flop","opp_seats":[{"seat":2,"nickname":"King","chips":"18000","action":"check"}],"buttons":["让牌","下注500"],"button_positions":[{"text":"让牌","xPct":0.50,"yPct":0.88},{"text":"下注500","xPct":0.83,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"GGPOKER"}
 ${streetHint}${rankHint}识别:"""
 
         return JSONObject().apply {
@@ -646,7 +648,9 @@ ${streetHint}${rankHint}识别:"""
         val players = if (isCompact) parseOppSeats(data.optJSONArray("opp_seats")) else parseLegacyPlayers(data.optJSONArray("players"))
         val callFromButtons = parseCallAmountFromButtons(buttons)
         val finalToCall = if (callFromButtons >= 0) callFromButtons else if (isCompact) parseChipValue(data, "bet_to_call") else data.optInt("to_call", 0)
-        val (blindSB, blindBB) = if (isCompact) parseBlindsString(data.optString("blinds", "")) else Pair(parseChipValue(data, "blind_sb"), parseChipValue(data, "blind_bb"))
+        // v612: 杀VLM盲注(93%帧0/0+乱跳), blind字段一律0; BB唯一来源=本地GCD筹码推断
+        val blindSB = 0
+        val blindBB = 0
         val street = if (isCompact) data.optString("phase", "preflop") else data.optString("street", "preflop")
         val potSize = if (isCompact) parseChipValue(data, "pot") else parsePotSize(data, "pot_size")
         val insuredPot = if (potSize == 0 && data.has("pot_size")) { val v = parsePotSize(data, "pot_size"); if (v > 0) v else potSize } else potSize
@@ -698,7 +702,6 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
         if (arr == null) return emptyList()
         return try { (0 until arr.length()).mapNotNull { i -> val o = arr.optJSONObject(i) ?: return@mapNotNull null; val p = o.optString("position", ""); if (p.isNotEmpty()) PlayerInfo(p, o.optInt("bet", 0), o.optInt("chips", 0), o.optBoolean("active", true)) else null } } catch (_: Exception) { emptyList() }
     }
-    private fun parseBlindsString(blinds: String): Pair<Int, Int> = try { val p = blinds.split("/"); if (p.size == 2) Pair(parseChipString(p[0].trim()), parseChipString(p[1].trim())) else Pair(0, 0) } catch (_: Exception) { Pair(0, 0) }
 
     // V2.9.194: extractJson 重写——逐个尝试每个{位置+详细日志
     private fun extractJson(text: String): String? {
@@ -1040,6 +1043,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             put("community_cards", JSONArray(result.communityCards.map { JSONObject().apply { put("rank", it.rank); put("suit", it.suit) } }))
             put("pot_size", result.potSize); put("my_chips", result.playerChips); put("total_players", result.totalPlayers); put("active_players", result.activePlayers)
             put("my_position", result.myPosition); put("street", result.street); put("to_call", result.toCall); put("min_raise", result.minRaise)
+            // v612: result.blindBB已是构建期锁存后的值(翻后沿用上一翻前GCD锁存)
             put("buttons", JSONArray(result.buttons)); put("blind_sb", result.blindSB); put("blind_bb", result.blindBB); put("ante", result.ante)
             put("button_positions", JSONArray(result.buttonPositions.map { JSONObject().apply { put("text", it.text); put("x_pct", it.xPct); put("y_pct", it.yPct) } }))
             put("players", JSONArray(result.players.map { JSONObject().apply { put("position", it.position); put("bet", it.bet); put("chips", it.chips); put("active", it.active); if(it.nickname.isNotEmpty()) put("nickname", it.nickname) } }))
@@ -1375,9 +1379,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var localPotOk = false
                 var localChipsValue: Int = 0
                 var amountDiag = "skipped"
-                // V2.9.554: 本地CV盲注识别（牌桌中央"100/200"白灰小字），作为inferredBB的兜底
-                var localBlindSB = 0
-                var localBlindBB = 0
+                // v612: 本地CV盲注OCR已删除(牌桌小字不可读, GCD筹码推断为唯一来源)
                 // V2.9.526: 检测是否轮到我行动（绿色进度条）
                 val isMyTurn = try {
                     LocalActionRecognizer.getInstance(context).isMyTurn(screenshotBmp)
@@ -1479,30 +1481,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val finalTotalPlayers = 6
                 val finalActivePlayers = if (seatStatusOk) localActivePlayersSafe(localActiveCount) else (oppChipsMap.size + 1)
 
-                // V2.9.554: 盲注本地CV识别（牌桌中央"德州扑克, 100/200"白灰小字，~5ms）
-                // 独立try-catch，失败不影响主流程；结果作为inferredBB=0时的兜底
-                // V2.9.598 P0-2修复: recognizeBlinds斜杠锚定读法在跑马帧/过渡帧会把中央异常
-                //   数字串误拼成垃圾盲注(铁证日志: SB=7/BB=17100200,跑马帧中央出现非盲注数字)。
-                //   JS侧v572硬闸(严格1:2+范围)能挡住,但Kotlin侧blindBB裸奔会污染:
-                //   ①toJson opp_seats的bet>3BB误标raise ②pot=0时pot=BB*3兜底。
-                //   在此加与JS对齐的合理性校验: BB∈[20,10000]且SB>0且BB≈2×SB,不满足丢弃。
-                try {
-                    val blindBmp = RegionCropper.cropBlindText(screenshotBmp)
-                    if (blindBmp != null) {
-                        val (sbBlind, bbBlind) = LocalActionRecognizer.getInstance(context).recognizeBlinds(blindBmp)
-                        blindBmp.recycle()
-                        val ratioOk = sbBlind > 0 && kotlin.math.abs(bbBlind - 2 * sbBlind) <= maxOf(2, (bbBlind * 0.05).toInt())
-                        if (bbBlind in 20..10000 && ratioOk) {
-                            localBlindBB = bbBlind
-                            localBlindSB = sbBlind
-                            Log.d(TAG, "🎯 本地CV盲注: SB=$localBlindSB BB=$localBlindBB")
-                        } else if (bbBlind > 0) {
-                            Log.w(TAG, "🎯 本地CV盲注丢弃(非标准1:2/超范围): SB=$sbBlind BB=$bbBlind → 不采信,防跑马帧垃圾值")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "盲注识别失败: ${e.message}")
-                }
+                // v612: 本地CV盲注OCR段已删除(recognizeBlinds/cropBlindText同步移除), GCD为唯一盲注来源
 
                 // 2. 裁剪操作区（每帧必识别）
                 val actionBmp = RegionCropper.cropActionArea(screenshotBmp)
@@ -1825,28 +1804,39 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         ?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
                 } ?: 0
 
-                // V2.9.526: 盲注推断。
-                // 首选：翻前预设快捷按钮和主加注额都是BB整数倍，取GCD即为BB（能抗有人open/3bet/straddle）。
-                // 兜底：预设缺失且无人加注时，主加注额=2BB；用toCall校验BB位/SB位/未入场位。
+                // V2.9.612: 盲注推断唯一来源——翻前快捷按钮筹码+主加注额(GG桌设置铁证: 下注单位=大盲,
+                //   快捷方式=40%/60%/80%底池档, 按钮显示BB整数倍, 最小加注=2BB)。
+                //   杀VLM blinds(93%帧0/0+乱跳)、杀本地OCR盲注小字(不可读)、杀JS侧pot×2/3/跟注额(被门控架空)。
+                // 锚定法: candidateBB=mr/2(最小加注=2BB), 用预设按钮验证——≥2个预设落在candidateBB整数倍(±10%容差)才采信。
+                //   全押/3bet帧mr非标(实测5305/6201/4376/2320) → 预设匹配不足 → 拒绝, JS沿用锁存。
                 val isPreflop = finalHoleCards.size == 2 && finalCommCards.isEmpty()
                 var inferredBB = 0
                 var inferredSB = 0
-                if (isPreflop && finalMinRaise > 0) {
-                    fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)
-                    val gcdInputs = (localPresets.filter { it > 0 } + finalMinRaise).distinct()
-                    var g = gcdInputs.first()
-                    for (v in gcdInputs.drop(1)) g = gcd(g, v)
-
-                    if (g > 0 && finalMinRaise % g == 0 && finalMinRaise / g >= 2) {
-                        inferredBB = g
-                    } else if (finalMinRaise % 2 == 0) {
-                        val candidateBB = finalMinRaise / 2
-                        if (finalToCall == 0 || finalToCall == candidateBB || finalToCall * 2 == candidateBB) {
+                if (isPreflop && finalMinRaise in 40..20000 && finalMinRaise % 2 == 0) {
+                    val candidateBB = finalMinRaise / 2  // 最小加注=2BB
+                    if (candidateBB in 20..10000) {
+                        var presetMatch = 0
+                        for (p in localPresets.filter { it > 0 }) {
+                            val n = Math.round(p.toDouble() / candidateBB).toInt()
+                            if (n >= 2) {
+                                val nearest = n * candidateBB
+                                if (Math.abs(p - nearest) <= nearest * 0.10) presetMatch++  // ±10%容差吸收OCR误读
+                            }
+                        }
+                        if (presetMatch >= 2) {
                             inferredBB = candidateBB
+                            inferredSB = candidateBB / 2
+                            Log.d(TAG, "🎯 GCD盲注推断: BB=$inferredBB (mr=$finalMinRaise 预设匹配$presetMatch/${localPresets.size})")
+                        } else {
+                            Log.d(TAG, "GCD盲注拒绝: mr=$finalMinRaise candidate=$candidateBB 预设匹配仅$presetMatch/${localPresets.size}(疑全押/3bet帧)")
                         }
                     }
-                    if (inferredBB > 0 && inferredBB % 2 == 0) inferredSB = inferredBB / 2
                 }
+
+                // v612: blindBB锁存——GCD有效则更新锁存, 翻后/异常帧(GCD=0)沿用锁存
+                //   (翻后GCD不成立: 快捷按钮=底池%非BB整数倍; 悬浮窗显示/opp_seats阈值/ggLevel分类都需要)
+                val finalBlindBB = if (inferredBB > 0) { _lockedBBKotlin = inferredBB; inferredBB } else if (_lockedBBKotlin > 0) _lockedBBKotlin else 0
+                val finalBlindSB = if (inferredSB > 0) inferredSB else if (_lockedBBKotlin > 0) _lockedBBKotlin / 2 else 0
 
                 val result = VisionResult(
                     isPokerTable = finalHoleCards.size == 2,
@@ -1863,8 +1853,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     minRaise = finalMinRaise,
                     buttons = action?.buttons ?: emptyList(),
                     // V2.9.554: 盲注三级——本地GCD推断(翻前加注时最准) > 本地CV盲注文字(每帧可读) > 0
-                    blindSB = if (inferredSB > 0) inferredSB else localBlindSB,
-                    blindBB = if (inferredBB > 0) inferredBB else localBlindBB,
+                    blindSB = finalBlindSB,
+                    blindBB = finalBlindBB,
                     ante = 0,
                     players = buildOppPlayerList(oppChipsMap, localChipsValue, dButtonSeatLocal, if (seatStatusOk) seatStatus else emptyList()),
                     dButtonPosition = mapDSeatToPosition(

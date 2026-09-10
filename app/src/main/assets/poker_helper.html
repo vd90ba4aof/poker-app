@@ -1345,7 +1345,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.610',
+  CURRENT_VERSION:'2.9.612',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2794,7 +2794,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.610';
+var APP_VERSION='2.9.612';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -12071,131 +12071,40 @@ function onVisionResult(data){
   
   // 5. 更新筹码/底池/面对下注
   // V2.9.564 FIX: ★ 建立唯一BB真相源 ★
-  // 问题根因：VLM翻后返回垃圾blind_bb(如17100200)，_lastVisionBB每帧盲从，7个消费点全部被污染
-  // 修复策略：4级优先级，preflop底池反推(确定性数学)→VLM范围校验→锁存降级→默认值
+  // v612 P0: 重写BB出口。杀VLM blinds(认不出来乱跳)+杀JS自计(跟注额/pot×2/3,被硬源门控架空)+杀粗暴的"默认200锁存死锁"。
+  // 现在唯一可信的盲注来源=快捷按钮+主加注额GCD推断(Kotlin侧已净化), 不信VLM、不信OCR、不信pot。
+  // 多帧一致性锁存: 3帧一致才建立/覆盖, 避单帧OCR抖动; 换桌/升盲自适配。
   var bbValue=0;
   var _bbSource='unknown';
-
-  // V2.9.571 P0修复：pot×2/3数学只在"BB免费看牌行动帧"成立 ★
-  //   v570实机铁证：旧逻辑对无按钮帧（非行动窗口：动画/切桌/他人行动中）也锁存，
-  //   这些帧pot是VLM回读的错乱值（300~48132乱飞），41次锁存40次来自无按钮帧，
-  //   BB被锁成200~32088（真实100）→G.bet归一化→0→free-check保护把fold改成check，
-  //   中间按钮点中"跟注 100"白输钱×2。
-  //   数学前提：pot仅含SB+BB(1.5BB)仅当"翻前轮到BB行动且无人加注/无人limp"——
-  //   屏幕判据=按钮中有让牌且无跟注(免费过牌)。无按钮帧不锁存，沿用旧锁/默认值。
-  var _btnArrForBB=(data.buttons||[]);
-  var _preHasCheck=_btnArrForBB.some(function(b){return b.indexOf('让牌')>=0||b.indexOf('过牌')>=0||b.indexOf('check')>=0||b.indexOf('Check')>=0||((b.indexOf('让牌')>=0||b.indexOf('过牌')>=0)&&b.indexOf('弃牌')>=0);});
-  var _preHasCall=_btnArrForBB.some(function(b){return b.indexOf('跟注')>=0||b.indexOf('call')>=0||b.indexOf('Call')>=0;});
-  var _preActionFrame=_btnArrForBB.length>0;  // 有按钮=行动窗口帧（屏幕真相）
-
-  // V2.9.572 P0(根因③): 翻前位置硬规则反校——扑克铁规则:翻前无人加注时只有大盲(BB)能"让牌"免费看牌,
-  // 非BB位(SB/UTG/...)面对的是"跟注X"而非"让牌"。D按钮VLM误判致位置公式错时,屏幕按钮真相反校。
-  // 全量回归铁证:57个让牌帧旧公式位置全错(如D=right-top给mp/co,真值bb)。仅翻前生效,翻后check人人可点不反校。
-  try{
-    if(data.street==='preflop' && _preActionFrame && _preHasCheck && !_preHasCall){
-      if(G.pos!=='bb'){
-        console.log('[V2.9.572位置反校] 翻前免费看牌帧(让牌无跟注) hero必为BB: 位置'+G.pos+'→bb (D='+data.d_button_position+')');
-        G.pos='bb';
-        G._lastPos='bb';
-      }
-    }
-  }catch(_posFixErr){console.log('[V2.9.572位置反校] 异常: '+_posFixErr.message);}
-
-  // ★ V2.9.572 P0(根因②): BB多源交叉真相源——替代v571单一pot×2/3假设 ★
-  // v571铁证:pot×2/3假设"底池=SB+BB=1.5BB"仅单挑无人limp成立;实战免费看牌帧多为多人limp池
-  // (50/100桌pot=500=5BB×333被锁,真实BB=100;全量回归4个有锁存日志全部锁错400/533/333)。
-  // 多源交叉,矛盾时保守(降级锁存/默认),绝不单源锁存:
-  //   源A(最硬): VLM blinds字符串严格正则 ^小盲/大盲$ 且 大盲=2×小盲(标准现金桌),垃圾值天然被正则排除
-  //   源B(次硬): 翻前"跟注N"按钮额——非盲注位面对limp/无人加注时跟注额恰=BB,且须与源A/锁存一致才采信
-  //   源C(弱):   pot×2/3——仅在免费看牌帧 且 pot∈[1.3,1.7]BB(单挑无limp数学区间)与源A/B一致时成立
-  var _rawPotCheck=parseInt(data.pot_size)||0;
-  var _rawCallCheck=parseInt(data.to_call)||0;
-  var _bbCandidates=[];  // {v,src,hard} 硬源(源A)可直接锁存,软源需交叉
-  // 源A: blinds正则(兼容compact "50/100"与字段blind_bb/blind_sb)
-  try{
-    var _blindsStr=String(data.blinds||'');
-    var _bm=_blindsStr.match(/^\s*(\d+)\s*\/\s*(\d+)\s*$/);
-    var _aBB=0,_aSB=0;
-    if(_bm){_aSB=parseInt(_bm[1]);_aBB=parseInt(_bm[2]);}
-    else{
-      var _fBB=parseInt(data.blind_bb)||0,_fSB=parseInt(data.blind_sb)||0;
-      // 字段路径同样要求比值1:2且都是合理整数(垃圾17100200/7天然过不了比值校验)
-      if(_fBB>=20&&_fBB<=10000&&_fSB>0&&Math.abs(_fBB-2*_fSB)<=Math.max(2,_fBB*0.05)){_aBB=_fBB;_aSB=_fSB;}
-    }
-    if(_aBB>=20&&_aBB<=10000&&_aSB>0&&Math.abs(_aBB-2*_aSB)<=Math.max(2,_aBB*0.05)){
-      _bbCandidates.push({v:_aBB,src:'blinds('+_aSB+'/'+_aBB+')',hard:true});
-    }else if(_blindsStr||(parseInt(data.blind_bb)||0)>0){
-      console.log('[V2.9.572 BB真相] blinds源拒绝: blinds="'+_blindsStr+'" blind_bb='+data.blind_bb+' blind_sb='+data.blind_sb+' (非标准X/2X格式)');
-    }
-  }catch(_bAErr){}
-  // 源B: 翻前"跟注N"按钮额(非盲注位面对limp/无人加注时N=BB;盲注位/面对加注时N≠BB,用场景排除)
-  try{
-    if(data.street==='preflop' && _preActionFrame && _preHasCall && _rawCallCheck>0){
-      var _isBbPos=(G.pos==='bb');
-      var _isSbPos=(G.pos==='sb');
-      // BB位面对加注跟注额≠BB(是加注额-1);SB位面对limp跟0.5BB;都排除。
-      // btn/co/mp/utg位且前面无人加注(无3bet信号):跟注额=1BB
-      if(!_isBbPos && !_isSbPos && _rawCallCheck>=20 && _rawCallCheck<=10000 && !G._facing3bet){
-        _bbCandidates.push({v:_rawCallCheck,src:'跟注按钮额('+_rawCallCheck+')',hard:false});
-      }
-    }
-  }catch(_bBErr){}
-  // 源C: pot×2/3——仅免费看牌行动帧,且要求pot在单挑区间(1.3~1.7BB反推)与硬源一致才采信
-  if(data.street==='preflop' && _rawCallCheck===0 && _rawPotCheck>0 && _preActionFrame && _preHasCheck && !_preHasCall){
-    var _derivedBB=Math.round(_rawPotCheck*2/3);
-    if(_derivedBB>=20 && _derivedBB<=10000){
-      _bbCandidates.push({v:_derivedBB,src:'pot×2/3('+_rawPotCheck+'→'+_derivedBB+',免费看牌帧)',hard:false});
-    }
-  }else if(data.street==='preflop' && _rawCallCheck===0 && _rawPotCheck>0 && !_preActionFrame){
-    console.log('[V2.9.572 BB真相] 无按钮帧(非行动窗口) pot='+_rawPotCheck+' → 不参与BB推断，防止垃圾BB污染');
-  }
-  // 多源交叉裁决
-  var _hardSrcs=_bbCandidates.filter(function(c){return c.hard;});
-  function _bbConsistent(v1,v2){return Math.abs(v1-v2)<=Math.max(5,v1*0.1);} // ±10%或±5视为一致
-  var _bbDefaultUsed=false; // 优先级④默认兜底标记(默认值不落锁存,防硬源首手被误拦死锁)
-  if(_hardSrcs.length>0){
-    // 硬源(blinds正则+1:2比值)为准;软源仅作交叉验证记录,矛盾时硬源优先
-    bbValue=_hardSrcs[0].v;
-    var _softConflict=_bbCandidates.filter(function(c){return !c.hard&&!_bbConsistent(c.v,bbValue);});
-    _bbSource=_hardSrcs[0].src;
-    if(_softConflict.length>0){
-      console.log('[V2.9.572 BB真相] 软源矛盾(疑limp池/加注帧): 硬源'+bbValue+' vs '+_softConflict.map(function(c){return c.src+'='+c.v;}).join(',')+' → 采信硬源');
-    }else if(_bbCandidates.length>1){
-      console.log('[V2.9.572 BB真相] 多源一致✓ '+_bbCandidates.map(function(c){return c.src+'='+c.v;}).join(' | ')+' → '+bbValue);
+  var _preflop=(data.street==='preflop');
+  var _gcdBB=parseInt(data.blind_bb)||0; // 来自 Kotlin GCD 推断(快捷按钮+加注额GCD, 已经过范围/备选规则净化)
+  var _gcdValid=_gcdBB>=20 && _gcdBB<=20000; // GCD范围校验(捕捉全押/异常帧)
+  if(_gcdValid){
+    // GCD候选一致性: 值一致计数++, 值不同重置
+    if(typeof G._gcdLockCandidate==='undefined') G._gcdLockCandidate=0;
+    if(typeof G._gcdLockCount==='undefined') G._gcdLockCount=0;
+    if(G._gcdLockCandidate!==_gcdBB){
+      G._gcdLockCandidate=_gcdBB; G._gcdLockCount=1;
     }else{
-      console.log('[V2.9.572 BB真相] 硬源采信: '+_bbSource+' → '+bbValue);
+      G._gcdLockCount=(G._gcdLockCount||0)+1;
     }
-    // 锁存保护:真实锁存(非默认兜底)与新硬源矛盾>10%时不覆盖(防单帧误读);默认兜底不拦截硬源
-    if(G._lockedBB && G._lockedBB>0 && !G._bbLockedDefault && !_bbConsistent(G._lockedBB,bbValue)){
-      console.log('[V2.9.572 BB真相] 与真实锁存矛盾: 新值'+bbValue+' vs 锁存'+G._lockedBB+' → 不覆盖(防单帧误读),沿用锁存');
-      bbValue=G._lockedBB;_bbSource='locked_keep('+G._lockedBB+',新值'+_hardSrcs[0].v+'矛盾)';
+    // 3帧一致 → 建立/覆盖锁存(换桌/升盲自适应纠错)
+    if(G._gcdLockCount>=3){
+      if(!G._lockedBB || G._lockedBB!==_gcdBB){
+        console.log('[V2.9.612 BB真相] GCD多帧一致确认: '+_gcdBB+' (连续'+G._gcdLockCount+'帧) '+(G._lockedBB?'覆盖旧锁'+G._lockedBB:'建立锁存'));
+      }
+      G._lockedBB=_gcdBB;
+      bbValue=_gcdBB; _bbSource='gcd_lock('+_gcdBB+',frames='+G._gcdLockCount+')';
     }else{
-      G._lockedBB=bbValue;G._bbLockedDefault=false;
+      // 候选尚未达3帧: 用候选BB当帧兜底, 不落锁存
+      bbValue=_gcdBB; _bbSource='gcd_pending('+_gcdBB+',frames='+(G._gcdLockCount||0)+')';
     }
+  }else if(G._lockedBB && G._lockedBB>0){
+    // 翻后无GCD(翻后快捷按钮=底池%非BB整数倍,GCD不成立) 或 GCD异常帧 → 沿用锁存
+    bbValue=G._lockedBB; _bbSource='locked('+G._lockedBB+')';
   }else{
-    // 无硬源:软源(pot×2/3/跟注额)一律不锁存、不当帧采信——同帧软源互斥(跟注/让牌按钮不同帧),
-    // 单软源pot×2/3正是v571锁错路径(多人limp池pot≠1.5BB)。保守沿用锁存/默认,仅记录候选供排查
-    if(_bbCandidates.length>0){
-      console.log('[V2.9.572 BB真相] 无硬源(blinds不可用),软源仅记录不采信: '+_bbCandidates.map(function(c){return c.src+'='+c.v;}).join(' | ')+' → 沿用锁存/默认');
-    }
-  }
-  // 无任何候选源 → 落到下方优先级③锁存/④默认
-
-  // ★ 优先级③：锁存值（之前的可靠BB）★
-  if(bbValue===0 && G._lockedBB && G._lockedBB>0){
-    bbValue=G._lockedBB;
-    _bbSource='locked('+G._lockedBB+')';
-    console.log('[V2.9.566 BB真相] '+_bbSource);
-  }
-
-  // ★ 优先级④：都没有 → 默认200（统一兜底，消除||100和||200不一致）★
-  // V2.9.572 P0(根因②): 默认值仅当帧兜底,绝不落锁存——旧逻辑默认200写入_lockedBB后,
-  // 首手硬源(blinds=100)反被"锁存矛盾保护"拦成死锁。默认值标记_bbLockedDefault,不拦截后续硬源
-  if(bbValue===0){
-    bbValue=200;
-    _bbSource='default_200';
-    if(!G._lockedBB || G._lockedBB<=0){ G._bbLockedDefault=true; }
-    console.log('[V2.9.572 BB真相] '+_bbSource+' (无任何可靠来源,仅当帧兜底不落锁存)');
+    // 无锁存且无有效GCD候选 → 默认200仅当帧兜底, 不落锁存
+    bbValue=200; _bbSource='default_200';
   }
   // [REV4_DIAG] bbValue计算完成后的快照
   console.log("[bbValue_DIAG] final_bbValue="+bbValue+" data.blind_bb="+data.blind_bb+" data.blind_sb="+data.blind_sb+" G._lockedBB="+(G._lockedBB||'undef')+" data.my_chips="+data.my_chips);
@@ -12212,11 +12121,9 @@ function onVisionResult(data){
   
   // V2.9.76: ★ Vision数据保险层 ★
   // 原则：手牌/公共牌以外的数据，识别不准就不更新，保持旧值，不让策略引擎乱
-  // V2.9.564 FIX: bbValue已通过4级优先级验证(范围1~50000)，安全赋值
-  // V2.9.572 P0(根因②): 锁存只由硬源(blinds正则)建立;默认兜底200不写锁存(标记_bbLockedDefault),
-  //   否则首手默认200落锁后会拦截真实硬源100→BB死锁。锁存保护已在BB真相块内完成
+  // v612: bbValue唯一来源=Kotlin GCD(快捷按钮+加注额), JS侧3帧一致性锁存(换桌/升盲自适配)
   window._lastVisionBB=bbValue;
-  if((!G._lockedBB || G._lockedBB<=0) && !G._bbLockedDefault){ G._lockedBB=bbValue; }
+  // v612: 锁存由BB真相块的GCD多帧一致性逻辑管理, 此处仅同步_lastVisionBB
   // 新一手牌时重置底池连续性追踪
   if(G.phase==='pre'){G._lastPotBB=0;}
   // V2.9.144: 追踪进池人数——翻前从底池推断，翻后沿用
