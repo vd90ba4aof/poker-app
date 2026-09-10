@@ -3077,16 +3077,18 @@ class FloatingService : Service() {
                     }  // R10-fix: !isMultiFrame2 策略生命周期结束（verify帧跳过）
                     handler.post {
                         val taggedJson=if(frameTag.isNotEmpty()) resultJson.dropLast(1)+frameTag+"}" else resultJson
+                        // V3.0-fix: 统一级别分类（消除重复when + 修正阈值 + 同步JS）
+                        // blindBB=chips值（NL5=5,NL10=10,NL25=25,NL50=50,NL100=100,NL200=200）
+                        val ggLevel = if (result.blindBB > 0) when {
+                            result.blindBB <= 5 -> "micro_nl2"      // NL2-NL5
+                            result.blindBB <= 25 -> "low_nl10"      // NL10-NL25
+                            else -> "mid_nl50"                       // NL50+
+                        } else "micro_nl2"  // blindBB=0 fallback
                         // V3.3: 摊牌结果检测 — 记录赢/输到HudLearner (EV闭环)
                         try {
                             if (result.showdownCards.isNotEmpty()) {
-                                val level = when {
-                                    result.blindBB <= 10 -> "micro_nl2"
-                                    result.blindBB <= 25 -> "low_nl10"
-                                    else -> "mid_nl50"
-                                }
                                 val heroWon = result.showdownCards.none { it.won }
-                                HudLearner.recordResult(heroWon, result.potSize, level)
+                                HudLearner.recordResult(heroWon, result.potSize, ggLevel)
                                 Log.d(TAG, "★ 摊牌记录: hero${if(heroWon) "赢" else "输"} 底池${result.potSize} (亮牌${result.showdownCards.size}个对手)")
                             }
                         } catch (e: Exception) {
@@ -3094,12 +3096,7 @@ class FloatingService : Service() {
                         }
                         // V3.1: HudLearner桥接 — 把自积累记忆注入JS的applyHudData
                         try {
-                            val level = when {
-                                result.blindBB <= 10 -> "micro_nl2"
-                                result.blindBB <= 25 -> "low_nl10"
-                                else -> "mid_nl50"
-                            }
-                            val profile = HudLearner.getOpponentProfile(level)
+                            val profile = HudLearner.getOpponentProfile(ggLevel)
                             if (profile.totalHandsObserved >= 200 && profile.type == "self") {
                                 val hudJson = "[" + (1..6).joinToString(",") { s ->
                                     "{seat:$s,vpip:${profile.vpip},pfr:${profile.pfr},threeBet:${profile.threeBet},ats:${profile.ats}}"
@@ -3110,7 +3107,9 @@ class FloatingService : Service() {
                         } catch (e: Exception) {
                             Log.w(TAG, "HudLearner桥接失败", e)
                         }
-                        // V2.9.113: 先检测WebView是否就绪，再调onVisionResult
+                        // V3.0-fix: 同步级别到JS策略引擎（_getBaseline依赖G.ggLevel）
+                        executeJs("if(typeof StrategyEngine!=='undefined')StrategyEngine.setGGLevel('"+ggLevel+"');")
+                                                // V2.9.113: 先检测WebView是否就绪，再调onVisionResult
                         executeJs("(function(){try{if(typeof onVisionResult==='function'){onVisionResult($taggedJson);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.confirmVisionReceived){AndroidBridge.confirmVisionReceived()}}else{console.log('[V2.9.125] onVisionResult不存在,尝试重载HTML');if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:策略引擎未加载');}setTimeout(function(){location.reload();},1000);}}catch(e){console.log('[V2.9.125] onVisionResult异常:'+e.message);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:JS异常:'+e.message.substring(0,30));}}})()")
                         tvAction?.alpha = 1.0f
                         Log.d(TAG, "★ onVisionResult已调用")

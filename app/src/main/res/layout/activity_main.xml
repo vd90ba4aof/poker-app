@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.608 · 本地CV座位检测:暗牌背判参与/黑面板判就座,全像素不走VLM"
+        android:text="V2.9.609 · 本地CV座位检测:暗牌背判参与/黑面板判就座,全像素不走VLM"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

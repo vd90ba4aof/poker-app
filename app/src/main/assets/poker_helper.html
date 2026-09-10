@@ -1345,7 +1345,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.608',
+  CURRENT_VERSION:'2.9.609',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2192,7 +2192,7 @@ var OppProfiler={
   _fetchProfile:function(){
     try{
       if(typeof AndroidBridge==='undefined'||!AndroidBridge.getLearnedProfile)return;
-      var lvl=G.ggLevel||'micro';
+      var lvl=G.ggLevel||'micro_nl2';  // V3.0-fix: fallback与HudLearner key对齐
       var json=AndroidBridge.getLearnedProfile(lvl);
       if(!json)return null;
       return JSON.parse(json);
@@ -2794,7 +2794,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.608';
+var APP_VERSION='2.9.609';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
