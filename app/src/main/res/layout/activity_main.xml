@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.617 · 修复低置信闸误杀强牌(短码allin底池豁免+免费局check/强牌跟注放行)"
+        android:text="V2.9.618 · 回撤自动刹车+翻前小注垃圾牌硬底(短码桌止损)"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

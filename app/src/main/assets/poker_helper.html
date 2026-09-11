@@ -1366,7 +1366,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.617',
+  CURRENT_VERSION:'2.9.618',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2815,7 +2815,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.617';
+var APP_VERSION='2.9.618';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -5495,7 +5495,8 @@ var SelfTiltGuard={
   // 历史基线（前8手用均值建立）
   baseline:{avgDecisionMs:5000,foldRatePre:0.5},
   // 触发阈值常量
-  TH:{lossBB2:100,lossBB3:150,fastN1:3,fastN2:5,foldRatio1:1.3,foldRatio2:1.5,revengeBB:5,stableMs:10000},
+  // V2.9.618: 相对码深回撤阈值(短码桌止损用)——旧100/150BB绝对值对40BB短码桌永远不触发
+  TH:{lossBB2:100,lossBB3:150,ddWarn:0.30,ddDanger:0.45,fastN1:3,fastN2:5,foldRatio1:1.3,foldRatio2:1.5,revengeBB:5,stableMs:10000},
 
   init:function(){
     this.state={
@@ -5510,7 +5511,8 @@ var SelfTiltGuard={
       warningStart:0,
       dangerStart:0,
       tiltStart:0,
-      sampleBuilt:false
+      sampleBuilt:false,
+      peakStk:0   // V2.9.618: 本session峰值码深(BB),相对回撤止损基准
     };
   },
 
@@ -5524,6 +5526,12 @@ var SelfTiltGuard={
     if(!this.state)this.init();
     var s=this.state;
 
+    // V2.9.618: 跟踪本session峰值码深(BB)——相对回撤止损基准,只用有效码深(OCR异常0值忽略)
+    try{
+      var _curStk=(typeof rec.stk==='number'&&rec.stk>0)?rec.stk:0;
+      if(_curStk>0&&_curStk>s.peakStk)s.peakStk=_curStk;
+    }catch(ePk){}
+
     // 1) 累计盈亏（只看实结果，不预测）
     var bb=rec.bbResult||0;
     if(bb<0)s.lossBB+=Math.abs(bb);
@@ -5534,8 +5542,10 @@ var SelfTiltGuard={
     if(ms>0&&ms<30000){
       s.fastHistory.push(ms);
       if(s.fastHistory.length>10)s.fastHistory.shift();
-      // 快速点击：<2秒=乱点信号
-      if(ms<2000)s.fastClicks++;
+      // 快速点击：V2.9.618修正——decisionMs是JS引擎决策耗时(自动化恒为300ms左右,非人手反应时间),
+      //   旧<2000ms阈值按人手设计,致自动化正常对局speed信号恒"狂点"(2026-09-11日志decisionMs=311ms实证)。
+      //   现仅<100ms(引擎异常重入/疯狂连点,正常Worker决策150ms+)才算异常快。
+      if(ms<100)s.fastClicks++;
       else s.fastClicks=0;  // 中断一次清零（连续性要求）
     }
 
@@ -5569,11 +5579,25 @@ var SelfTiltGuard={
     var TH=this.TH;
 
     // === 信号检测 ===
-    var sig={loss:0,speed:0,fold:0,revenge:0};
+    var sig={loss:0,speed:0,fold:0,revenge:0,dd:0};
 
     // 信号1: 亏损速度
     if(s.lossBB>=TH.lossBB3)sig.loss=2;
     else if(s.lossBB>=TH.lossBB2)sig.loss=1;
+
+    // V2.9.618 信号1b: 相对码深回撤(短码桌核心止损信号)——峰值回撤30%=黄/45%=红
+    //   旧lossBB绝对阈值(100/150BB)为深码桌设计,40BB短码桌全程不触发;回撤比码深无关。
+    //   峰值只在码深创新高时更新(向下波动不降低基准),reset随session/换桌清零。
+    try{
+      if(s.peakStk>=15){  // 峰值样本下限:<15BB不具基准意义,避免极小码深误触发
+        var _ddNow=(typeof G!=='undefined'&&G.stk>0)?G.stk:0;
+        if(_ddNow>0){
+          var _ddRatio=(s.peakStk-_ddNow)/s.peakStk;
+          if(_ddRatio>=TH.ddDanger)sig.dd=2;
+          else if(_ddRatio>=TH.ddWarn)sig.dd=1;
+        }
+      }
+    }catch(eDd){}
 
     // 信号2: 连续快速点击
     if(s.fastClicks>=TH.fastN2)sig.speed=2;
@@ -5600,11 +5624,11 @@ var SelfTiltGuard={
 
     // === 状态机判定（4档）===
     // 权重: 亏损2=红, 速度2=红, 弃牌2=红, 任一红+任一黄=橙, 纯黄=黄
-    var red=sig.loss+sig.speed+sig.fold;  // 0-6
+    var red=sig.loss+sig.speed+sig.fold+sig.dd;  // 0-8 (V2.9.618: +sig.dd回撤)
     var yellow=sig.revenge;                 // 0-1
     var newLevel=0;
     if(red>=5||sig.loss>=2&&sig.speed>=1&&sig.fold>=1)newLevel=3;        // TILT
-    else if(red>=3||sig.loss>=2&&(sig.speed>=1||sig.fold>=1))newLevel=2; // DANGER
+    else if(red>=3||sig.loss>=2&&(sig.speed>=1||sig.fold>=1)||sig.dd===2)newLevel=2; // DANGER(V2.9.618: 回撤45%单独升档)
     else if(red>=1||yellow>=1)newLevel=1;                                  // WARNING
     else newLevel=0;                                                        // NORMAL
 
@@ -5638,7 +5662,8 @@ var SelfTiltGuard={
   },
 
   _summary:function(sig){
-    if(sig.loss===0&&sig.speed===0&&sig.fold===0&&sig.revenge===0)return'';
+    // V2.9.618: 早退条件补sig.dd——回撤为唯一信号时不得提前返回空串(否则回撤文案永不显示)
+    if(sig.loss===0&&sig.speed===0&&sig.fold===0&&sig.revenge===0&&(sig.dd||0)===0)return'';
     var p=[];
     if(sig.loss>=2)p.push('重亏');
     else if(sig.loss>=1)p.push('亏损');
@@ -5646,6 +5671,8 @@ var SelfTiltGuard={
     else if(sig.speed>=1)p.push('快打');
     if(sig.fold>=2)p.push('弃牌↑↑');
     else if(sig.fold>=1)p.push('弃牌↑');
+    if(sig.dd===2)p.push('回撤45%');
+    else if(sig.dd===1)p.push('回撤30%');
     if(sig.revenge>=1)p.push('报复');
     return p.join('+');
   },
@@ -9172,6 +9199,28 @@ function _decideInner(){
     if(typeof SelfTiltGuard!=='undefined'){
       try{
         var _stEval=SelfTiltGuard.eval();
+        // V2.9.618: DANGER/TILT(level>=2)动作收紧——回撤刹车。
+        //   旧设计"只改r给预警,不动action",深回撤时仍照常跟注垃圾牌(2026-09-11日志:70BB峰
+        //   值回撤至44BB期间仍K3o/T9o/As8h连续跟注放血)。现仅把【弱跟注】收紧为fold:
+        //   翻前call且eq<48(对子/双高张/范围强牌eq自然达标不受影响);
+        //   翻后call且hClass=AIR且eq<40(强牌/听牌赔率闸/池驱反fold放行的不命中)。
+        //   raise类不碰(强牌加注是回血来源,紧≠放弃强牌);强牌call放行不受影响。
+        if(_stEval&&_stEval.level>=2&&result){
+          var _stA=result.a;
+          var _stEq=(typeof result.eq==='number'&&result.eq>0)?result.eq:50;
+          var _stHC=(result.hClass&&result.hClass.name)?result.hClass.name:'';
+          var _stBlock=false,_stWhy='';
+          if(G.phase==='pre'&&(_stA==='call'||_stA==='weak_call')&&_stEq<48){
+            _stBlock=true;_stWhy='翻前弱牌跟注(eq'+Math.round(_stEq)+'<48)';
+          }else if(G.phase!=='pre'&&(_stA==='call'||_stA==='weak_call')&&_stHC==='AIR'&&_stEq<40){
+            _stBlock=true;_stWhy='空气牌跟注(eq'+Math.round(_stEq)+'<40)';
+          }
+          if(_stBlock){
+            console.log('[SelfTiltGuard] 回撤刹车level'+_stEval.level+'→fold: '+_stWhy);
+            result.a='fold';result.v=0;result.c='l';
+            result.r='[回撤刹车] '+_stWhy+'→弃 | '+(result.r||'');
+          }
+        }
         var _stDisp=SelfTiltGuard.getDisplay(_stEval);
         if(_stDisp&&_stDisp.prefix){
           result.r=_stDisp.prefix+' '+result.r;
@@ -9587,6 +9636,22 @@ function preF(k){
     //   「vs随机牌桌」查表口径(J6s≈52%)，vs紧3bet范围真实eq≈27%，口径错配致误跟。
     //   小注open(<=4BB,便宜赔率)维持原宽松逻辑；大注表外牌要eq>=58(AA/KK级)才放行。
     var _big3betCall=(actualBet||0)>=5; // 3bet级跟注额(BB): open 2-3BB / 3bet 7BB+
+    // V2.9.618 P1: 翻前小注跟注牌力硬底——cS范围外的垃圾牌不得靠"小注open维持宽松"口子进场。
+    //   2026-09-11日志实证: 92s(UTG)/K3o(btn)/T9o(mp)/K8o(co)小注跟注入池后翻后全丢,累计失血~15BB。
+    //   仅对【小注+cS范围外】生效: 放行对子22+、同花Ax(A2s-A5s)、同花双高张(两张>=T)、offsuit双高张;
+    //   cS范围表内的牌(上方已判cS.indexOf)不受影响; 大注(>=5BB)走eq>=58原逻辑不受影响。
+    if(!_big3betCall&&cS.indexOf(k)===-1){
+      var _pfRk='23456789TJQKA';
+      var _pr0=_pfRk.indexOf(k[0])+2,_pr1=_pfRk.indexOf(k[1])+2;
+      var _pfPair=(k.length===2&&k[0]===k[1]);
+      var _pfSt=(k.length===3&&k[2]==='s');
+      var _pfBroad=(_pr0>=10&&_pr1>=10);
+      var _pfAxs=(_pfSt&&k[0]==='A');
+      if(!(_pfPair||_pfAxs||(_pfSt&&_pfBroad)||(!_pfSt&&_pfBroad))){
+        console.log('[V2.9.618硬底] '+k+' 小注cS外牌力不足→fold (stk='+G.stk+')');
+        return{a:'fold',r:k+' 小注硬底(牌力不足)→弃',eq:eq,c:'l',scene:sceneLabel,spr:spr,drta:{type:profile.type,confidence:profile.confidence,weights:weights}};
+      }
+    }
     if(!_big3betCall||cS.indexOf(k)!==-1||eq>=58){
       var exploitResult5=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});
       return{a:'call',r:k+' 跟注',eq:exploitResult5.eq,c:eq>=55?'h':'m',scene:sceneLabel,spr:spr,evs:compareEVs(eq,pot,actualBet,0),exploit:exploitResult5.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
