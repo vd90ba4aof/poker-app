@@ -1108,6 +1108,8 @@ var SessionStats={
     if(typeof HandClassifier!=='undefined')HandClassifier.reset();
     // V2.9.131: 重置TableQualityMeter（桌质评估随session重置）
     if(typeof TableQualityMeter!=='undefined')TableQualityMeter.reset();
+    // V2.9.620: 重置TableChangeAdvisor（起始码深止损随session重置）
+    if(typeof TableChangeAdvisor!=='undefined')TableChangeAdvisor.reset();
   },
   recordHand:function(rec){
     var d=this.data;
@@ -1366,7 +1368,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.619',
+  CURRENT_VERSION:'2.9.620',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2815,7 +2817,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.619';
+var APP_VERSION='2.9.620';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -6353,15 +6355,27 @@ var TableChangeDialog={
 var TableChangeAdvisor={
   // 触发间隔：每 3 手评估一次（避免过度打扰）
   EVAL_INTERVAL_HANDS:3,
+  // V2.9.620: 起始码深止损阈值（70%，约28BB@40BB起始）
+  START_STK_THRESHOLD:0.70,
   _a:null,
   init:function(){
     if(this._a)return;
-    this._a={lastEvalHands:0};
+    this._a={lastEvalHands:0,startStk:0};
     console.log('[' + APP_VERSION + '] [TableChangeAdvisor] 初始化完成（联动钩子）');
   },
   // 主入口：HandHistory.add 末调用 TableQualityMeter.recordHand 后再调用本函数
   tick:function(){
     if(!this._a)this.init();
+    // V2.9.620: 记录起始码深（仅首次有效码深时记录，换桌后reset重新记录）
+    if(this._a.startStk===0){
+      try{
+        var _initStk=(typeof G!=='undefined'&&typeof G.stk==='number'&&G.stk>0)?G.stk:0;
+        if(_initStk>=15){  // 15BB下限防OCR异常
+          this._a.startStk=_initStk;
+          console.log('['+APP_VERSION+'] [TableChangeAdvisor] 记录起始码深:'+_initStk+'BB');
+        }
+      }catch(e){}
+    }
     if(typeof TableQualityMeter==='undefined')return;
     var stats=TableQualityMeter.getStats();
     if(!stats)return;
@@ -6369,17 +6383,43 @@ var TableChangeAdvisor={
     if(h<TableQualityMeter.THRESHOLDS.MIN_HANDS)return;
     if(h-this._a.lastEvalHands<this.EVAL_INTERVAL_HANDS)return;
     this._a.lastEvalHands=h;
+
+    // V2.9.620: 起始码深止损检查（独立于TableQualityMeter，自成一档L2换桌建议）
+    var _adv=null;
+    try{
+      var _curStk=(typeof G!=='undefined'&&typeof G.stk==='number'&&G.stk>0)?G.stk:0;
+      if(_curStk>0&&this._a.startStk>0&&_curStk<this._a.startStk*this.START_STK_THRESHOLD){
+        _adv={level:2,advice:'当前码深'+_curStk.toFixed(0)+'BB，已跌破起始码深'+Math.round(this.START_STK_THRESHOLD*100)+'%（'+this._a.startStk.toFixed(0)+'BB），建议换桌止损'};
+        console.log('['+APP_VERSION+'] [TableChangeAdvisor] 起始码深止损触发 curStk='+_curStk+' startStk='+this._a.startStk+' threshold='+(this._a.startStk*this.START_STK_THRESHOLD).toFixed(1));
+      }
+    }catch(e){}
+
     var er=TableQualityMeter.eval();
     if(!er||er.level===0){
+      // 无桌质问题时，只处理起始码深止损（取level更高者）
+      if(_adv){
+        try{if(typeof FloatBallBlink!=='undefined')FloatBallBlink.setLevel(_adv.level,_adv.advice);}catch(e){}
+        return;
+      }
       try{if(typeof FloatBallBlink!=='undefined')FloatBallBlink.clear();}catch(e){}
       return;
     }
-    // L1/L2 同步到 FloatBallBlink
-    try{
-      if(typeof FloatBallBlink!=='undefined'){
-        FloatBallBlink.setLevel(er.level, er.advice);
-      }
-    }catch(e){}
+    // 桌质问题时，取level更高者（max防止起始码深止损被桌质L1覆盖）
+    var finalLevel=Math.max(er.level||0,_adv?(_adv.level||0):0);
+    var finalAdvice=er.advice||'';
+    if(_adv&&(_adv.level||0)>er.level)finalAdvice=_adv.advice;
+    if(finalLevel>0){
+      try{if(typeof FloatBallBlink!=='undefined')FloatBallBlink.setLevel(finalLevel,finalAdvice);}catch(e){}
+    }else{
+      try{if(typeof FloatBallBlink!=='undefined')FloatBallBlink.clear();}catch(e){}
+    }
+  },
+  // V2.9.620: 换桌/重置时清空起始码深
+  reset:function(){
+    if(!this._a)this.init();
+    this._a.startStk=0;
+    this._a.lastEvalHands=0;
+    console.log('['+APP_VERSION+'] [TableChangeAdvisor] 重置（清空起始码深）');
   }
 };
 // V2.9.131 初始化联动
