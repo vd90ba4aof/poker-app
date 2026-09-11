@@ -570,11 +570,15 @@ var PotConfidence={
   _corrections:[],
 
   // 评估底池置信度 + 自动纠正
-  evaluate:function(pot,bet,stk,bb,street,warnings){
+  evaluate:function(pot,bet,stk,bb,street,warnings,scene){
     var s=100;
     var reasons=[];
     var corrected=pot;
     this._corrections=[];
+    // V2.9.617: 短码/全下场景豁免——pot天然远大于残码(stk<=10BB或面对allin),
+    //   为深码局设计的"pot>stk*5=误读"规则在此场景前提失效(20:16日志铁证:5BB残码对216BB真allin,
+    //   score=55误判→强牌AhKh eq55%/77%被低置信闸误fold)。此场景底池大=正常,不扣分不cap。
+    var _shortAllin=(scene==='allin')||(stk>0&&stk<=10&&pot>stk*3);
 
     // === 规则1: 底池与BB比例校验 + 纠正 ===
     if(pot>0&&bb>0){
@@ -583,19 +587,24 @@ var PotConfidence={
         s-=30; reasons.push('翻后pot仅'+potBB.toFixed(1)+'BB(太小)');
         if(corrected<2*bb) corrected=2*bb;
       }
-      if(potBB>200){
+      if(potBB>200&&!_shortAllin){
         s-=15; reasons.push('pot='+potBB.toFixed(0)+'BB(异常大)');
+      }else if(potBB>200&&_shortAllin){
+        reasons.push('pot='+potBB.toFixed(0)+'BB(短码全下局,豁免异常大判定)');
       }
     }
 
     // === 规则2: 底池与筹码比例校验 + 纠正 ===
     if(pot>0&&stk>0){
-      if(pot>stk*5){
-        s-=25; reasons.push('pot>>stk(可能误读对手筹码为底池)');
+      if(pot>stk*5&&_shortAllin){
+        reasons.push('pot='+pot+'>残码'+stk+'*5(短码全下局,豁免误读判定)');
+      }else if(pot>stk*5){
+        s-=25; reasons.push('pot>stk(可能误读对手筹码为底池)');
         corrected=Math.min(corrected, Math.round(stk*3));
         this._corrections.push('pot>'+stk+'*5→cap to '+corrected);
       }else if(pot>stk*3){
-        s-=10; reasons.push('pot>3x stk(需谨慎)');
+        if(_shortAllin){ reasons.push('pot>3x残码(短码全下局,豁免)'); }
+        else{ s-=10; reasons.push('pot>3x stk(需谨慎)'); }
       }
     }
 
@@ -623,22 +632,28 @@ var PotConfidence={
 
     // === 规则4: 跨街底池约束（V2.9.54新增）===
     if(street&&this._lastStreet&&pot>0&&this._lastStreetPot>0){
-      if(street!==this._lastStreet){
         if(corrected<this._lastStreetPot*0.8){
-          s-=20; reasons.push('新街底池('+corrected+')<上街('+this._lastStreetPot+')*0.8');
-          corrected=Math.max(corrected, this._lastStreetPot);
-          this._corrections.push('跨街纠正: pot '+pot+'→'+corrected);
-        }
-        if(corrected>this._lastStreetPot*5){
-          s-=15; reasons.push('新街底池暴增'+(corrected/this._lastStreetPot).toFixed(1)+'倍(异常)');
-          if(this._emaInited){
-            corrected=Math.round(this._ema);
-            this._corrections.push('暴增纠正→EMA='+corrected);
+          if(_shortAllin){
+            reasons.push('新街底池('+corrected+')<上街('+this._lastStreetPot+')(短码全下局,豁免跨街约束)');
+          }else{
+            s-=20; reasons.push('新街底池('+corrected+')<上街('+this._lastStreetPot+')*0.8');
+            corrected=Math.max(corrected, this._lastStreetPot);
+            this._corrections.push('跨街纠正: pot '+pot+'→'+corrected);
           }
         }
-      }
-    }
+        if(corrected>this._lastStreetPot*5){
+          if(_shortAllin){
+            reasons.push('新街底池暴增(短码全下局,豁免)');
+          }else{
+            s-=15; reasons.push('新街底池暴增'+(corrected/this._lastStreetPot).toFixed(1)+'倍(异常)');
+            if(this._emaInited){
+              corrected=Math.round(this._ema);
+              this._corrections.push('暴增纠正→EMA='+corrected);
+            }
+          }
+    }  // V2.9.617: 规则4外层if闭合(补)
 
+        }
     // === 规则5: EMA多帧平滑（V2.9.54升级，阈值25%）===
     this._history.push({pot:corrected,ts:Date.now(),street:street});
     if(this._history.length>this._maxHistory)this._history.shift();
@@ -651,12 +666,16 @@ var PotConfidence={
     if(this._history.length>=3&&this._ema>0){
       var emaDeviation=Math.abs(corrected-this._ema)/this._ema;
       if(emaDeviation>0.25){
-        var emaPenalty=emaDeviation>1.0?30:15;
-        s-=emaPenalty; reasons.push('与EMA偏差'+(emaDeviation*100).toFixed(0)+'%'+(emaDeviation>1.0?'(极端)':''));
-        if(s<80){
-          corrected=Math.round(this._ema);
-          this._corrections.push('EMA平滑: pot '+pot+'→'+corrected);
-          console.log('[底池EMA纠正] pot '+pot+'→'+corrected+' (EMA='+this._ema.toFixed(1)+')');
+        if(_shortAllin){
+          reasons.push('与EMA偏差'+(emaDeviation*100).toFixed(0)+'%(短码全下局,豁免)');
+        }else{
+          var emaPenalty=emaDeviation>1.0?30:15;
+          s-=emaPenalty; reasons.push('与EMA偏差'+(emaDeviation*100).toFixed(0)+'%'+(emaDeviation>1.0?'(极端)':''));
+          if(s<80){
+            corrected=Math.round(this._ema);
+            this._corrections.push('EMA平滑: pot '+pot+'→'+corrected);
+            console.log('[底池EMA纠正] pot '+pot+'→'+corrected+' (EMA='+this._ema.toFixed(1)+')');
+          }
         }
       }
     }
@@ -666,9 +685,11 @@ var PotConfidence={
       if(prev.street===street&&prev.pot>0&&corrected>0){
         var changeRatio=Math.abs(corrected-prev.pot)/prev.pot;
         if(changeRatio>0.3&&street==='river'){
-          s-=15; reasons.push('河牌底池突变'+(changeRatio*100).toFixed(0)+'%');
+          if(_shortAllin){ reasons.push('河牌底池突变(短码全下局,豁免)'); }
+          else{ s-=15; reasons.push('河牌底池突变'+(changeRatio*100).toFixed(0)+'%'); }
         }else if(changeRatio>0.5&&street==='turn'){
-          s-=10; reasons.push('转牌底池突变'+(changeRatio*100).toFixed(0)+'%');
+          if(_shortAllin){ reasons.push('转牌底池突变(短码全下局,豁免)'); }
+          else{ s-=10; reasons.push('转牌底池突变'+(changeRatio*100).toFixed(0)+'%'); }
         }
       }
     }
@@ -1345,7 +1366,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.616',
+  CURRENT_VERSION:'2.9.617',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2794,7 +2815,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.616';
+var APP_VERSION='2.9.617';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -10037,7 +10058,7 @@ function postF(k){
   // ===== V2.9.54: 底池识别增强 + 智能纠正 + Fallback路由 =====
   // postF()中pot/bet/stk已转为BB单位，所以bb传1
   var rawWarnings=G._warnings||[];
-  var potConf=PotConfidence.evaluate(pot,bet,stk,1,street,rawWarnings);
+  var potConf=PotConfidence.evaluate(pot,bet,stk,1,street,rawWarnings,scene);
   
   // V2.9.54: 应用自动纠正的底池值（核心升级）
   if(potConf.corrected && potConf.corrected!==pot){
@@ -13323,7 +13344,35 @@ var AutoConfidence = {
     console.log('[AutoConf] confidence=' + conf + ' action=' + action + ' eq=' + (r.eq||'?') + ' hClass=' + (r.hClass?r.hClass.name:'?'));
 
     if (conf === 'low') {
-      console.log('[AutoConf] LOW→强制弃牌');
+      // V2.9.617: 低置信不再一刀切fold——底池/筹码读数不准≠手牌不准(20:16铁证:
+      //   AhKh eq77%免费局/e55%跟5BB赢216BB,因pot置信55被误fold)。分级放行安全动作:
+      var _lcEq = r.eq || 0;
+      var _lcHc = (r.hClass && r.hClass.name) ? r.hClass.name : '?';
+      var _lcStk = (typeof G!=='undefined' && G.stk) ? G.stk : 0;
+      var _lcBet = (typeof G!=='undefined' && G.bet) ? G.bet : 0;
+      var _lcPot = (typeof G!=='undefined' && G.pot) ? G.pot : 0;
+      var _lcNeed = _lcBet>0 ? _lcBet/(_lcPot+_lcBet)*100 : 0;  // 跟注所需胜率%(pot已含对手bet)
+      var _lcStrong = (_lcHc==='NUTS'||_lcHc==='STRONG');
+      var _lcFree = (_lcBet<=0);  // 免费局面(让牌/加注选择,无下注额)
+      if (_lcFree) {
+        // 免费局:check零成本,强牌下注被误判时宁可check也绝不fold(fold=放弃强牌)
+        console.log('[AutoConf] LOW+免费局(bet=0)→check放行(不fold强牌)');
+        return { action: 'check', auto: true, reason: 'low_conf_free_check', confidence: 'medium' };
+      }
+      if (action==='call'||action==='allin') {
+        // 面对下注/全下: 胜率显著优于赔率或绝对强牌→放行(+EV明确);否则维持fold
+        var _lcAllin = ((typeof G!=='undefined' && G.scene==='allin')||action==='allin');
+        var _lcMargin = _lcAllin ? 15 : 10;  // 全下大决策留更厚安全垫
+        if (_lcEq>=50 || ( _lcNeed>0 && _lcEq>=_lcNeed+_lcMargin )) {
+          console.log('[AutoConf] LOW+'+action+'放行: eq='+_lcEq.toFixed(1)+' 需'+_lcNeed.toFixed(1)+'% '+_lcHc);
+          return { action: action, auto: true, reason: 'low_conf_strong_call', confidence: 'medium' };
+        }
+        if (_lcStrong && _lcEq>=_lcNeed) {
+          console.log('[AutoConf] LOW+强牌'+action+'放行: eq='+_lcEq.toFixed(1)+' 需'+_lcNeed.toFixed(1)+'% '+_lcHc);
+          return { action: action, auto: true, reason: 'low_conf_strong_call', confidence: 'medium' };
+        }
+      }
+      console.log('[AutoConf] LOW→弃牌(边缘牌/数据不足)');
       return { action: 'fold', auto: true, reason: 'low_confidence', confidence: 'low' };
     }
 
