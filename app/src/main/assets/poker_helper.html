@@ -1366,7 +1366,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.618',
+  CURRENT_VERSION:'2.9.619',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2815,7 +2815,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.618';
+var APP_VERSION='2.9.619';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3489,6 +3489,35 @@ function decidePreflop(k){
     // V2.9.592 FIX(P1, 实机日志2026-09-08 A7o stk61BB面61BB全押eq41%用25%地板跟):
     //   25%小jam地板为短码推弃设计;深码跟全押套牢大额,分级收紧门槛(复用L3191 _oppEffBB):>40BB→40%,>80BB→45%,>120BB→50%。
     if(_oppEffBB>120){callThresh=Math.max(callThresh,50);}else if(_oppEffBB>80){callThresh=Math.max(callThresh,45);}else if(_oppEffBB>40){callThresh=Math.max(callThresh,40);}
+    // V2.9.619 FIX(P0, 实机日志2026-09-12 Tc6c stk91BB面91BB全押5人池): 翻前allin eq虚高三连——
+    //   查表eQ(k)是"对随机牌单挑"基准(不随人数降),实测T6s查表48%→5人池真实16.7%/vs紧范围30.6%;
+    //   深码大jam全残码接全押用此值=纯负EV跑马。深码(>40BB)或大jam(注池比>=0.5)时双闸收紧:
+    var _aiDeep=(_oppEffBB>40)||(_preAiRatio>=0.5);
+    if(_aiDeep){
+      // B闸-牌力硬底(不依赖eq质量): 翻前深码/大jam接全押,仅对子22+或两张>=J双高张(与L3432强牌硬底同口径);
+      //   垃圾牌(如T6s/T2o/K3o)深码全押直接fold,不把91BB峰值交给跑马。短码小jam(15-40BB推弃)不进此闸。
+      var _aiPair=(k.length===2&&k[0]===k[1]);
+      var _aiTwoBroad=(!_aiPair&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
+      if(!_aiPair&&!_aiTwoBroad){
+        console.log('[V2.9.619全押硬闸] '+k+' 深码/大jam非强牌(非对子非双J+) fold (oppEff='+_oppEffBB+'BB ratio='+_preAiRatio.toFixed(2)+')');
+        return _fold(allinEq,'[V2.9.619全押硬闸] '+k+' 深码接全押牌力不足弃',spr);
+      }
+      // A闸-eq真实化: 查表值替换为mcVsRange对实际开牌范围+实际进池人数的蒙特卡洛胜率(复用翻后同款函数,不拍新范围表)。
+      //   强牌(TT+/AQ+)HU仍65%+正常跟;多人池弱牌eq按人数客观回落。异常try-catch降级查表值。
+      try{
+        var _aiHole=(G.hole||[]).filter(function(c){return c;});
+        var _aiN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
+        var _aiOpp=Math.max(1,_aiN-1);
+        if(_aiHole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'){
+          var _aiRange=gO(G.pos||'btn');
+          var _aiMs=mcVsRange(_aiHole,[],_aiRange,1500,_aiOpp);
+          if(_aiMs&&typeof _aiMs.eq==='number'&&_aiMs.eq>0){
+            console.log('[V2.9.619全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
+            allinEq=_aiMs.eq;
+          }
+        }
+      }catch(_aiE){console.log('[V2.9.619全押eq] 异常降级查表: '+_aiE.message);}
+    }
     if(allinEq>=callThresh){var exploitA=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});return{a:'call',r:'GTO vs allin eq'+Math.round(allinEq)+'%>='+callThresh+'%',eq:exploitA.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitA.exploit,_se:true};}
     return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%',spr);
   }
@@ -9513,6 +9542,29 @@ function preF(k){
     if(_preAct>=6)allinEq-=8;else if(_preAct===5)allinEq-=5;else if(_preAct===4)allinEq-=4;else if(_preAct===3)allinEq-=2;
     var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet)*100):50;  // V2.9.585 FIX(BUG-07): pot已含对手bet,正确赔率=bet/(pot+bet)
     callThresh=Math.max(callThresh,45);
+    // V2.9.619 FIX(旧引擎兜底同款): 深码(>40BB)/大jam(注池比>=0.5)翻前接全押双闸收紧
+    var _oAiRatio=pot>0?allinBet/(pot+allinBet):0;
+    var _oAiDeep=(stk>40)||(_oAiRatio>=0.5);
+    if(_oAiDeep){
+      var _oAiPair=(k.length===2&&k[0]===k[1]);
+      var _oAiBroad=(!_oAiPair&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
+      if(!_oAiPair&&!_oAiBroad){
+        console.log('[V2.9.619全押硬闸-旧] '+k+' 深码/大jam非强牌 fold (stk='+stk+' ratio='+_oAiRatio.toFixed(2)+')');
+        return{a:'fold',r:'[V2.9.619全押硬闸] '+k+' 深码接全押牌力不足弃',eq:allinEq,c:'l',scene:'面对allin',spr:spr,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
+      }
+      try{
+        var _oHole=(G.hole||[]).filter(function(c){return c;});
+        var _oN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:_preAct);
+        var _oOpp=Math.max(1,_oN-1);
+        if(_oHole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'){
+          var _oMs=mcVsRange(_oHole,[],gO(G.pos||'btn'),1500,_oOpp);
+          if(_oMs&&typeof _oMs.eq==='number'&&_oMs.eq>0){
+            console.log('[V2.9.619全押eq-旧] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_oMs.eq.toFixed(1)+'% (nOpp='+_oOpp+')');
+            allinEq=_oMs.eq;
+          }
+        }
+      }catch(_oE){console.log('[V2.9.619全押eq-旧] 异常降级: '+_oE.message);}
+    }
     if(allinEq>=callThresh){
       var exploitAllin=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});
       return{a:'call',r:'胜率'+Math.round(allinEq)+'%够跟全下',eq:exploitAllin.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitAllin.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights}};

@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.618 · 回撤自动刹车+翻前小注垃圾牌硬底(短码桌止损)"
+        android:text="V2.9.619 · 翻前全押双闸:深码牌力硬闸+范围MC真实胜率"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

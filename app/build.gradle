@@ -12,8 +12,8 @@ android {
         applicationId "win.opt.view"
         minSdk 26
         targetSdk 34
-        versionCode 344
-        versionName "2.9.618"
+        versionCode 345
+        versionName "2.9.619"
     }
 
     buildTypes {
