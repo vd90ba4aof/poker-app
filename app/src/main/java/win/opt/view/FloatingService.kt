@@ -2105,6 +2105,14 @@ class FloatingService : Service() {
             fun resetSelfLearn() {
                 try { SelfLearner.reset() } catch (_: Exception) {}
             }
+            // V2.9.615: SelfLearner P3闭环 — 获取leak收紧因子(纯内存缓存读取,零DB,决策链路可调)
+            @JavascriptInterface
+            fun getLeakAdjustments(): String {
+                return try { SelfLearner.getLeakAdjustments() } catch (e: Exception) {
+                    Log.e(TAG, "getLeakAdjustments error: ${e.message}")
+                    "{}"
+                }
+            }
             // V2.9.300: 接收JS端对手统计数据并持久化到HudLearner
             @JavascriptInterface
             fun opponentStats(jsonData: String) {

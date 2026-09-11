@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.614 · 本地CV座位检测:暗牌背判参与/黑面板判就座,全像素不走VLM"
+        android:text="V2.9.615 · 盈亏闭环P3上线:SelfLearner leak维度自动收紧翻前频率+双上报数据覆盖修复"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

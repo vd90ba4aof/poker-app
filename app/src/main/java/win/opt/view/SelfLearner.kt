@@ -18,7 +18,9 @@ import java.util.concurrent.Executors
  * 只记自己的决策和结果，不记对手AD。
  * - P1: SQLite持久化决策+盈亏关联
  * - P2: Leak检测（样本≥30、平均BB<-1.5标记LEAK）
- * - P3: 策略自适应（暂缓，等200手数据）
+ * - P3: V2.9.615策略自适应闭环上线——leak维度转翻前频率收紧因子,
+ *       经getLeakAdjustments()暴露给JS PreflopLeakGuard;总手数≥200且维度样本≥30才激活,
+ *       只收紧(0.7~0.9)不放宽;缓存预计算,桥接读取零DB不阻塞决策链路
  *
  * 铁律：所有IO走后台线程，绝不阻塞pipeline主链路。
  */
@@ -30,6 +32,16 @@ object SelfLearner {
     // Leak检测阈值
     private const val MIN_SAMPLE_FOR_LEAK = 30
     private const val LEAK_BB_THRESHOLD = -1.5f
+
+    // V2.9.615 P3: 闭环激活门槛与收紧分档
+    private const val MIN_TOTAL_HANDS_FOR_ADJ = 200   // 总手数≥200才允许任何自适应
+    private const val LEAK_ADJ_LIGHT = -1.5f          // avg_bb<=此值 → freq*0.9
+    private const val LEAK_ADJ_HEAVY = -3.0f          // avg_bb<=此值 → freq*0.7
+    private const val LEAK_FACTOR_LIGHT = 0.9f
+    private const val LEAK_FACTOR_HEAVY = 0.7f
+
+    // V2.9.615 P3: leak收紧因子缓存(io线程预计算,@JavascriptInterface只读内存)
+    @Volatile private var leakAdjustCache: JSONObject = JSONObject()
 
     private var dbHelper: DbHelper? = null
     private val io = Executors.newSingleThreadExecutor { r ->
@@ -51,6 +63,8 @@ object SelfLearner {
         if (dbHelper != null) return
         dbHelper = DbHelper(context.applicationContext)
         Log.i(TAG, "SelfLearner初始化完成")
+        // V2.9.615 P3: 启动即预计算一次leak调整缓存(io线程,不阻塞)
+        refreshLeakAdjustments()
     }
 
     // ============ P1: 决策记录 + 盈亏关联 ============
@@ -119,10 +133,16 @@ object SelfLearner {
                     flushHandLocked(p, Triple(resultBb, netChips, resultType))
                     pending = null
                 } else {
-                    // 没有对应决策记录，只写结果行（手数统计用）
-                    writeHandRow(handId, "", "", resultBb, netChips, resultType, JSONArray())
+                    // V2.9.615 FIX(P0数据覆盖): 没有对应pending,分两种情况——
+                    //  (a)该行已存在(摊牌帧L12491报当前手+新手牌帧L11834又报旧手,同手双上报):
+                    //      只UPDATE结果字段,严禁CONFLICT_REPLACE写入空position/空decisions,
+                    //      否则打到亮牌的手(大赢大亏手)位置与决策明细被清空,位置leak统计偏倚;
+                    //  (b)行不存在(无决策记录的手):才INSERT占位行
+                    upsertResultOnly(handId, resultBb, netChips, resultType)
                 }
                 Log.i(TAG, "手牌结果: hand=$handId result=${resultBb}BB type=$resultType")
+                // V2.9.615 P3: 新结果落库→重算leak调整缓存(io队列排队,不阻塞当前上报)
+                refreshLeakAdjustments()
             } catch (e: Exception) {
                 Log.e(TAG, "handResult失败: ${e.message}")
             }
@@ -173,6 +193,30 @@ object SelfLearner {
             db.insertWithOnConflict("hands", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
         } catch (e: Exception) {
             Log.e(TAG, "写hands表失败: ${e.message}")
+        }
+    }
+
+    /**
+     * V2.9.615 P0: 结果字段幂等更新——双上报时只写result_bb/net_chips/result_type,
+     * 已存在的行(position/hole_cards/decisions_json)一律不覆盖。
+     * 行不存在才INSERT占位(空position,手数统计仍可用,位置维度WHERE position!=''自动排除)。
+     */
+    private fun upsertResultOnly(handId: String, resultBb: Float, netChips: Long, resultType: String) {
+        val db = dbHelper?.writableDatabase ?: return
+        try {
+            // 先尝试只更新结果字段(已存在的行:position/hole_cards/decisions_json原样保留)
+            db.execSQL(
+                "UPDATE hands SET result_bb=?, net_chips=?, result_type=? WHERE hand_id=?",
+                arrayOf<Any>(resultBb, netChips, resultType, handId)
+            )
+            // 行不存在才INSERT占位行(空position,位置维度WHERE position!=''自动排除)
+            db.rawQuery("SELECT COUNT(*) FROM hands WHERE hand_id=?", arrayOf(handId)).use { c ->
+                if (c.moveToFirst() && c.getInt(0) == 0) {
+                    writeHandRow(handId, "", "", resultBb, netChips, resultType, JSONArray())
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "upsertResultOnly失败: ${e.message}")
         }
     }
 
@@ -338,6 +382,128 @@ object SelfLearner {
         }
     }
 
+    // ============ P3: 策略自适应闭环(V2.9.615) ============
+
+    /**
+     * 供JS桥直接调用:返回当前生效的leak收紧因子(JSON字符串,纯内存读,零DB)。
+     * 结构: {"active":bool,"total_hands":int,"position":{"bb":{"factor":0.9,...}},
+     *        "hand_class":{"SUITED":{"factor":0.7,...}}}
+     * 任何异常返回"{}"——JS侧PreflopLeakGuard按无调整处理(失败静默回退基线)。
+     */
+    fun getLeakAdjustments(): String {
+        return try { leakAdjustCache.toString() } catch (e: Exception) { "{}" }
+    }
+
+    /**
+     * io线程预计算leak收紧因子并刷新缓存。
+     * 规则:
+     *  - 总手数<200 → active=false,无任何调整(样本不足宁可不动)
+     *  - 维度样本≥30 且 avg_bb<=-3.0 → factor=0.7(重度收紧)
+     *  - 维度样本≥30 且 -3.0<avg_bb<=-1.5 → factor=0.9(轻度收紧)
+     *  - 其余维度不出现(只收紧亏损维度,盈利维度绝不反向放宽)
+     * 维度:位置(直接喂翻前RFI/3B/4B频率)、手牌类型(翻前粗分类PAIR/BROADWAY/SUITED/OTHER)。
+     * 翻前动作维度只用于复盘展示,不参与闭环(避免多轴叠加过度收紧)。
+     */
+    fun refreshLeakAdjustments() {
+        io.execute {
+            try {
+                val out = JSONObject()
+                val total = getTotalHands()
+                out.put("total_hands", total)
+                out.put("generated_at", System.currentTimeMillis())
+                if (total < MIN_TOTAL_HANDS_FOR_ADJ) {
+                    out.put("active", false)
+                    leakAdjustCache = out
+                    Log.d(TAG, "P3调整未激活: 总手数$total < $MIN_TOTAL_HANDS_FOR_ADJ")
+                    return@execute
+                }
+                val posAdj = JSONObject()
+                val hcAdj = JSONObject()
+                val db = dbHelper?.readableDatabase
+                if (db != null) {
+                    // 位置维度
+                    db.rawQuery(
+                        "SELECT position, COUNT(*), AVG(result_bb) FROM hands " +
+                        "WHERE position != '' AND result_type != 'unknown' " +
+                        "GROUP BY position HAVING COUNT(*) >= ?",
+                        arrayOf(MIN_SAMPLE_FOR_LEAK.toString())
+                    ).use { c ->
+                        while (c.moveToNext()) {
+                            val key = c.getString(0)
+                            val cnt = c.getInt(1)
+                            val avg = c.getFloat(2)
+                            val f = leakFactorFor(avg)
+                            if (f < 1f) {
+                                posAdj.put(key, JSONObject().apply {
+                                    put("factor", f)
+                                    put("count", cnt)
+                                    put("avg_bb", Math.round(avg * 10f) / 10f)
+                                })
+                            }
+                        }
+                    }
+                    // 手牌类型维度(翻前粗分类,从decisions_json取preflop h_class)
+                    db.rawQuery(
+                        "SELECT decisions_json, result_bb FROM hands WHERE result_type != 'unknown' LIMIT 500",
+                        null
+                    ).use { c ->
+                        val stats = mutableMapOf<String, Pair<Int, Float>>()
+                        while (c.moveToNext()) {
+                            try {
+                                val decisions = JSONArray(c.getString(0) ?: "[]")
+                                val resultBb = c.getFloat(1)
+                                var hc = ""
+                                for (i in 0 until decisions.length()) {
+                                    val d = decisions.getJSONObject(i)
+                                    if (d.optString("street") == "preflop") {
+                                        hc = d.optString("h_class", "")
+                                        break
+                                    }
+                                }
+                                // 只统计P3翻前粗分类4类,旧数据UNKNOWN/PRE自动排除
+                                if (hc == "PAIR" || hc == "BROADWAY" || hc == "SUITED" || hc == "OTHER") {
+                                    val (cnt0, sum0) = stats[hc] ?: (0 to 0f)
+                                    stats[hc] = (cnt0 + 1) to (sum0 + resultBb)
+                                }
+                            } catch (_: Exception) {}
+                        }
+                        for ((hc, pair) in stats) {
+                            val (cnt, sumBb) = pair
+                            if (cnt >= MIN_SAMPLE_FOR_LEAK) {
+                                val avg = sumBb / cnt
+                                val f = leakFactorFor(avg)
+                                if (f < 1f) {
+                                    hcAdj.put(hc, JSONObject().apply {
+                                        put("factor", f)
+                                        put("count", cnt)
+                                        put("avg_bb", Math.round(avg * 10f) / 10f)
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+                out.put("position", posAdj)
+                out.put("hand_class", hcAdj)
+                out.put("active", posAdj.length() > 0 || hcAdj.length() > 0)
+                leakAdjustCache = out
+                Log.i(TAG, "P3调整缓存已刷新: active=${out.getBoolean("active")} " +
+                        "位置leak=${posAdj.length()}个 手牌leak=${hcAdj.length()}个 (总手数$total)")
+            } catch (e: Exception) {
+                Log.e(TAG, "refreshLeakAdjustments失败: ${e.message}")
+            }
+        }
+    }
+
+    /** avg_bb → 收紧因子;未达leak阈值返回1f(不调整) */
+    private fun leakFactorFor(avgBb: Float): Float {
+        return when {
+            avgBb <= LEAK_ADJ_HEAVY -> LEAK_FACTOR_HEAVY
+            avgBb <= LEAK_ADJ_LIGHT -> LEAK_FACTOR_LIGHT
+            else -> 1f
+        }
+    }
+
     /** 总手数 */
     fun getTotalHands(): Int {
         val db = dbHelper?.readableDatabase ?: return 0
@@ -365,6 +531,8 @@ object SelfLearner {
                 dbHelper?.writableDatabase?.execSQL("DELETE FROM hands")
                 pending = null
                 Log.i(TAG, "学习数据已清空")
+                // V2.9.615 P3: 数据清空→leak调整缓存同步归零
+                refreshLeakAdjustments()
             } catch (e: Exception) {
                 Log.e(TAG, "reset失败: ${e.message}")
             }

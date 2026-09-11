@@ -1345,7 +1345,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.614',
+  CURRENT_VERSION:'2.9.615',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2794,7 +2794,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.614';
+var APP_VERSION='2.9.615';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3176,6 +3176,65 @@ function decideTurnDoubleBarrel(k, spr, eq, oppProfile, bTexture, hClass){
   return{a:'check', r:'GTO Turn check(DB未中)', eq:eq, c:'m', scene:'check', spr:spr, _se:true};
 }
 
+// ====== V2.9.615 PreflopLeakGuard: SelfLearner P3盈亏闭环(翻前leak收紧) ======
+// 铁律:
+//  1. 只收紧不放宽——亏损维度乘0.7~0.9,盈利维度绝不反向加注频率;
+//  2. 零阻塞——决策时只读内存_cache,刷新(setTimeout异步拉取)不在决策链路;
+//  3. 失败静默——任何异常/未激活/未命中都返回1,回退GTO基线,绝不影响主决策;
+//  4. 硬闸豁免——Nash(<15BB)/vs allin/5bet/强牌硬底分支不调用本模块。
+var PreflopLeakGuard={
+  _cache:null,        // Kotlin getLeakAdjustments()返回的JSON
+  _loadTried:false,
+  refresh:function(){
+    try{
+      if(typeof AndroidBridge==='undefined'||!AndroidBridge.getLeakAdjustments){this._cache=null;return;}
+      var self=this;
+      setTimeout(function(){
+        try{
+          var raw=AndroidBridge.getLeakAdjustments();
+          var d=raw?JSON.parse(raw):null;
+          if(d&&typeof d==='object'){
+            self._cache=d;
+            if(d.active){
+              var pkeys=d.position?Object.keys(d.position):[];
+              var hkeys=d.hand_class?Object.keys(d.hand_class):[];
+              console.log('[LeakGuard] 闭环激活: 位置收紧['+pkeys.join(',')+'] 手牌收紧['+hkeys.join(',')+'] 样本'+(d.total_hands||0)+'手');
+            }
+          }
+        }catch(e){}
+      },300);
+    }catch(e){}
+  },
+  _pfClass:function(k){
+    // 翻前粗分类4类(与Kotlin统计口径一致): PAIR对子 / BROADWAY两张高张(J+) / SUITED同花 / OTHER
+    try{
+      if(!k||k.length<2)return '';
+      if(k.length===2&&k[0]===k[1])return 'PAIR';
+      if(k.length===3&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0)return 'BROADWAY';
+      if(k.length===3&&k[2]==='s')return 'SUITED';
+      return 'OTHER';
+    }catch(e){return '';}
+  },
+  factor:function(pos,k){
+    try{
+      var d=this._cache;
+      if(!d||!d.active)return 1;
+      var f=1;
+      if(pos&&d.position&&d.position[pos]&&d.position[pos].factor){
+        f=Math.min(f,d.position[pos].factor);
+      }
+      var hc=this._pfClass(k);
+      if(hc&&d.hand_class&&d.hand_class[hc]&&d.hand_class[hc].factor){
+        f=Math.min(f,d.hand_class[hc].factor);
+      }
+      return f;
+    }catch(e){return 1;}
+  },
+  active:function(){
+    try{return !!(this._cache&&this._cache.active);}catch(e){return false;}
+  }
+};
+
 // ====== 翻前决策 (保持V2.9.215) ======
 function decidePreflop(k){
   // V3.9: 入参防护 — 识别失败时返回null让旧引擎/兜底接管
@@ -3280,6 +3339,11 @@ function decidePreflop(k){
       }
     }
     var adj=_quantExploitAdjust(freq||0,'raise',profile);freq=adj.freq>freq?adj.freq:(freq||0);
+    // V2.9.615 P3闭环: SelfLearner位置/手牌leak收紧(exploit调整之后的最后一道,只收紧)
+    if(typeof freq==='number'&&freq>0){
+      var _lgF1=PreflopLeakGuard.factor(p,k);
+      if(_lgF1<1){console.log('[LeakGuard] RFI开池收紧 '+p5+' '+k+' freq '+freq.toFixed(2)+'->'+(freq*_lgF1).toFixed(2)+'(x'+_lgF1+')');freq=freq*_lgF1;}
+    }
     if(freq===undefined||freq===0){if(oppType==='nit'||oppType==='tight')freq=0.05;else return _fold(eq,'不在'+p5+'RFI范围',spr);}
     if(Math.random()>freq)return _fold(eq,p5+' RFI '+Math.round(freq*100)+'%→弃牌',spr);
     var sz=_preflopSizing(p,pot,scene,spr);
@@ -3331,6 +3395,11 @@ function decidePreflop(k){
     var entry=posTable[k];if(!entry)return _fold(eq,'vs '+rP5+' open不在3B范围',spr);
     var act=entry.a,f=entry.f;f=_adjFreq3bet(act,f,oppType,raiserRole,p,k);
     if(act==='3b'){var adj3=_quantExploitAdjust(f,'raise',profile);f=adj3.freq>f?Math.min(1,adj3.freq):f;}
+    // V2.9.615 P3闭环: vs open的3b/c频率leak收紧(掷骰前最后一道,只收紧;fold动作不受影响)
+    if(typeof f==='number'&&f>0){
+      var _lgF2=PreflopLeakGuard.factor(p,k);
+      if(_lgF2<1){console.log('[LeakGuard] vs3B收紧 '+p5+' '+k+' '+act+' f '+f.toFixed(2)+'->'+(f*_lgF2).toFixed(2)+'(x'+_lgF2+')');f=f*_lgF2;}
+    }
     if(Math.random()>f){
       if(act==='3b'){act='c';f=_get3bAlt(k,posTable,'c')||0.3;}
       else if(act==='c'){
@@ -3376,6 +3445,11 @@ function decidePreflop(k){
     var f3b=_F3B[_f3bKey];if(!f3b)return null;var entry3=f3b[k];if(!entry3)return _fold(eq,k+' vs 3bet→fold',spr);
     var act3=entry3.a,f3=entry3.f;
     f3=_adjFreq4bet(act3,f3,oppType,k);  // rev11 PRE-4: 4b频率按对手类型调整(maniac×1.2/nit×0.8)
+    // V2.9.615 P3闭环: vs 3bet的4b/c频率leak收紧(4b未中降级s路径保持基线不动;只收紧)
+    if(typeof f3==='number'&&f3>0){
+      var _lgF3=PreflopLeakGuard.factor(p,k);
+      if(_lgF3<1){console.log('[LeakGuard] vs4B收紧 '+p5+' '+k+' '+act3+' f '+f3.toFixed(2)+'->'+(f3*_lgF3).toFixed(2)+'(x'+_lgF3+')');f3=f3*_lgF3;}
+    }
     if(act3==='4b'&&Math.random()>f3){if(entry3.s){act3=entry3.s.a;f3=entry3.s.f;if(Math.random()>f3)return _fold(eq,k+' vs 3bet 4b未中→'+act3+'未中→fold',spr);}else return _fold(eq,k+' vs 3bet 4b'+Math.round(f3*100)+'%未中→fold',spr);}
     var actualBet3=bet||pot*3;
     if(act3==='4b'){var sz4=Math.round(actualBet3*2.5);sz4=_sprSizingAdjust(spr,Math.min(sz4,stk),'4bet');G._heroDid4bet=true;var exploitR4=applyExploit(eq,'raise',oppType,{bet:actualBet3,pot:pot,facing3bet:true});var weights4=DRTA.getWeights?DRTA.getWeights(profile):{};return{a:'raise',v:sz4,r:'GTO 4bet('+Math.round(f3*100)+'%)',eq:exploitR4.eq,c:'h',sizing:sz4,scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,sz4),exploit:exploitR4.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights4},_se:true,_seFreq:f3};}
@@ -10771,7 +10845,9 @@ function bridgeAdvice(r){
             action:r.a||'fold',
             sizing:r.v||0,
             eq:r.eq||0,
-            h_class:r.hClass?r.hClass.name:'UNKNOWN',
+            // V2.9.615 P3: 翻前决策无hClass对象,用粗分类4类供SelfLearner手牌维度统计
+            //   (翻后r.hClass.name保持原样:NUTS/STRONG/MEDIUM/DRAW/AIR/PRE等,与4类不会冲突)
+            h_class:(G.phase==='pre')?PreflopLeakGuard._pfClass(_holeCards):(r.hClass?r.hClass.name:'UNKNOWN'),
             confidence:r.confidence||'medium',
             reason:(r.r||'').substring(0,100),
             bb:window._lastVisionBB||G._lockedBB||200
@@ -10974,6 +11050,27 @@ function renderSelfLearn(){
   h+='<div style="text-align:right"><div style="font-size:22px;font-weight:bold;color:'+bbColor+'">'+(totalBb>=0?'+':'')+totalBb+' BB</div>';
   h+='<div style="font-size:11px;color:#888">总盈亏</div></div>';
   h+='</div></div>';
+
+  // V2.9.615 P3: 盈亏闭环状态(读getLeakAdjustments缓存)
+  try{
+    var _lgRaw='{}';
+    try{_lgRaw=(typeof AndroidBridge!=='undefined'&&AndroidBridge.getLeakAdjustments)?AndroidBridge.getLeakAdjustments():'{}';}catch(eLg){_lgRaw='{}';}
+    var _lgD=JSON.parse(_lgRaw||'{}');
+    var _lgAdj=[];
+    if(_lgD&&_lgD.active){
+      if(_lgD.position){for(var _pk in _lgD.position){_lgAdj.push('位置'+_pk+'×'+_lgD.position[_pk].factor+'('+_lgD.position[_pk].avg_bb+'BB/'+_lgD.position[_pk].count+'手)');}}
+      if(_lgD.hand_class){for(var _hk in _lgD.hand_class){_lgAdj.push('手牌'+_hk+'×'+_lgD.hand_class[_hk].factor+'('+_lgD.hand_class[_hk].avg_bb+'BB/'+_lgD.hand_class[_hk].count+'手)');}}
+    }
+    h+='<div style="margin-top:8px;padding:7px 9px;background:rgba(0,230,118,.07);border-radius:6px;border-left:3px solid #00E676">';
+    h+='<div style="font-size:11px;font-weight:bold;color:#00E676;margin-bottom:2px">🧠 盈亏闭环(P3自适应)</div>';
+    if(_lgAdj.length>0){
+      h+='<div style="font-size:10px;color:#ccc">已收紧: '+_lgAdj.join('；')+'</div>';
+    }else{
+      var _th=_lgD.total_hands||0;
+      h+='<div style="font-size:10px;color:#888">'+(_th>0?('样本'+_th+'手,暂无leak维度触发(阈值:总200手+维度30手+均亏≥1.5BB)'):'尚未积累样本')+'</div>';
+    }
+    h+='</div>';
+  }catch(eLgUi){}
 
   // Leak检测
   var leaks=d.leaks||[];
@@ -11810,6 +11907,8 @@ function onVisionResult(data){
         G._facing3bet=false; G._raiserRole='unknown'; G._raiserStackType='unknown'; G._numCallersBefore=0;
         G._heroDid4bet=false; G._slowplayed=false; G.oppSeats=[];
         console.log('[V2.9.566新手牌] 跨手策略标记已清零(3bet/raiser/4bet/slowplay/oppSeats)');
+        // V2.9.615 P3: 新手牌异步刷新leak收紧因子(setTimeout 300ms,不占截图->决策主链路)
+        try{PreflopLeakGuard.refresh();}catch(_lgRfErr){}
       }
       // V2.9.79: 新一手牌→重置行动线
       var _newHandId=(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'');
