@@ -118,11 +118,17 @@ object VisionApiClient {
     //         ②锁建立后单帧候选不覆盖, 连续3帧一致才更新(升盲/换桌自适配)。
     @Volatile private var _bbLockCandidate: Int = 0
     @Volatile private var _bbLockCount: Int = 0
+    // v614 P0修复: 最后有效BB记忆——翻后GCD不成立时兜底(防换桌频繁→3帧锁未建立→翻后fallback默认200污染)。
+    //   实机日志铁证(2026-09-11): 豪哥200→500→1000→200→500频繁换桌, _bbLockCount从未达3,
+    //   _lockedBBKotlin=0, 翻后inferredBB=0→finalBlindBB=0→JS走default_200→rawBB=200(实际BB=500)。
+    //   修复: pending/lock任一有效时更新_lastKnownGoodBB, 翻后用它兜底(不为0不fallback默认200)。
+    @Volatile private var _lastKnownGoodBB: Int = 0
+    @Volatile private var _lastKnownGoodSB: Int = 0
 
-    // GG现金桌标准大盲档位(1-2-5进制, 实机桌BB=500)。candidateBB必须snap到其中一档(±5%)才采信。
+    // GG现金桌标准大盲档位(1-2-5进制, 覆盖NL50~NL10000)。candidateBB必须snap到其中一档(±5%)才采信。
     //   非档位值(1443/1858/3150等)=OCR误读铁证, 一律拒绝。
     private val BB_STANDARD_LEVELS = intArrayOf(
-        20, 40, 50, 100, 200, 250, 400, 500, 1000, 2000, 2500, 4000, 5000, 10000, 20000
+        25, 50, 100, 200, 250, 400, 500, 1000, 2000, 2500, 4000, 5000, 10000, 20000
     )
     private fun snapToStandardBB(raw: Int): Int {
         for (lvl in BB_STANDARD_LEVELS) {
@@ -1843,7 +1849,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     val rawCandidate = finalMinRaise / 2  // 最小加注=2BB
                     // 闸A: snap到标准盲注档, snap失败(=0)即OCR误读脏帧, 直接丢弃
                     val candidateBB = snapToStandardBB(rawCandidate)
-                    if (candidateBB in 20..10000) {
+                    if (candidateBB in 50..20000) {
                         var presetMatch = 0
                         for (p in localPresets.filter { it > 0 }) {
                             val n = Math.round(p.toDouble() / candidateBB).toInt()
@@ -1868,6 +1874,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                                 _lockedBBKotlin = candidateBB
                                 inferredBB = candidateBB
                                 inferredSB = candidateBB / 2
+                                _lastKnownGoodBB = candidateBB
+                                _lastKnownGoodSB = candidateBB / 2
                             } else if (_lockedBBKotlin > 0) {
                                 // 锁已建立但候选尚未3帧一致(或与锁不同): 沿用旧锁, 脏帧绝不覆盖
                                 inferredBB = _lockedBBKotlin
@@ -1878,6 +1886,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                                 inferredBB = candidateBB
                                 inferredSB = candidateBB / 2
                                 Log.d(TAG, "🎯 GCD盲注pending: BB=$candidateBB (mr=$finalMinRaise 匹配$presetMatch/${localPresets.size}, ${_bbLockCount}/3帧未落锁)")
+                                _lastKnownGoodBB = candidateBB
+                                _lastKnownGoodSB = candidateBB / 2
                             }
                         } else {
                             Log.d(TAG, "GCD盲注拒绝: mr=$finalMinRaise snap=$candidateBB(raw=$rawCandidate) 预设匹配仅$presetMatch/${localPresets.size}(疑全押/3bet帧)")
@@ -1890,8 +1900,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // v612: blindBB锁存——GCD有效则更新锁存, 翻后/异常帧(GCD=0)沿用锁存
                 //   (翻后GCD不成立: 快捷按钮=底池%非BB整数倍; 悬浮窗显示/opp_seats阈值/ggLevel分类都需要)
                 // v613: inferredBB已在上方一致性状态机内处理(含pending兜底), 此处只处理翻后/无GCD帧沿用锁
-                val finalBlindBB = if (inferredBB > 0) inferredBB else if (_lockedBBKotlin > 0) _lockedBBKotlin else 0
-                val finalBlindSB = if (inferredSB > 0) inferredSB else if (_lockedBBKotlin > 0) _lockedBBKotlin / 2 else 0
+                val finalBlindBB = if (inferredBB > 0) inferredBB else if (_lockedBBKotlin > 0) _lockedBBKotlin else _lastKnownGoodBB
+                val finalBlindSB = if (inferredSB > 0) inferredSB else if (_lockedBBKotlin > 0) _lockedBBKotlin / 2 else _lastKnownGoodSB
 
                 val result = VisionResult(
                     isPokerTable = finalHoleCards.size == 2,

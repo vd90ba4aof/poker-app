@@ -1345,7 +1345,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.613',
+  CURRENT_VERSION:'2.9.614',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2794,7 +2794,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.613';
+var APP_VERSION='2.9.614';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -12084,7 +12084,7 @@ function onVisionResult(data){
   var _bbSource='unknown';
   var _preflop=(data.street==='preflop');
   var _gcdBB=parseInt(data.blind_bb)||0; // 来自 Kotlin GCD 推断(快捷按钮+加注额GCD, 已经过范围/备选规则净化)
-  var _gcdValid=_gcdBB>=20 && _gcdBB<=20000; // GCD范围校验(捕捉全押/异常帧)
+  var _gcdValid=_gcdBB>=50 && _gcdBB<=20000; // v614: GCD范围校验(NL50~NL10000, 捕捉全押/异常帧)
   if(_gcdValid){
     // GCD候选一致性: 值一致计数++, 值不同重置
     if(typeof G._gcdLockCandidate==='undefined') G._gcdLockCandidate=0;
@@ -12112,8 +12112,9 @@ function onVisionResult(data){
     // 翻后无GCD(翻后快捷按钮=底池%非BB整数倍,GCD不成立) 或 GCD异常帧 → 沿用锁存
     bbValue=G._lockedBB; _bbSource='locked('+G._lockedBB+')';
   }else{
-    // 无锁存且无有效GCD候选 → 默认200仅当帧兜底, 不落锁存
-    bbValue=200; _bbSource='default_200';
+    // v614: 无锁存且无有效GCD候选 → 理论上不应到达(Kotlin侧_lastKnownGoodBB兜底保证blind_bb>0)
+    // 保留50作为最终兜底(非200, 避免污染码深计算)。仅当Kotlin侧也异常时才触发。
+    bbValue=50; _bbSource='fallback_50';
   }
   // [REV4_DIAG] bbValue计算完成后的快照
   console.log("[bbValue_DIAG] final_bbValue="+bbValue+" data.blind_bb="+data.blind_bb+" data.blind_sb="+data.blind_sb+" G._lockedBB="+(G._lockedBB||'undef')+" data.my_chips="+data.my_chips);
