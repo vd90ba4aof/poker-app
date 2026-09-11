@@ -111,6 +111,25 @@ object VisionApiClient {
     @Volatile var holeCardsLocked: List<CardInfo>? = null
     // v612: blindBB锁存(翻后GCD不成立时沿用上一翻前锁存值, 供opp_seats加注标注/pot兜底使用)
     @Volatile private var _lockedBBKotlin: Int = 0
+    // v613 P0修复: GCD候选多帧一致性状态机——防单帧OCR误读(mr=2886→candidate=1443)污染锁存。
+    //   实机日志铁证(2026-09-11): mr被OCR误读为偶数2886/3716/6300 → candidateBB=1443/1858/3150,
+    //   ±10%预设投票反而让脏值通过, _lockedBBKotlin每帧覆盖, 连续5手rawBB=1443。
+    //   修复: ①候选必须snap到GG标准盲注档(1-2-5进制, ±5%)才采信;
+    //         ②锁建立后单帧候选不覆盖, 连续3帧一致才更新(升盲/换桌自适配)。
+    @Volatile private var _bbLockCandidate: Int = 0
+    @Volatile private var _bbLockCount: Int = 0
+
+    // GG现金桌标准大盲档位(1-2-5进制, 实机桌BB=500)。candidateBB必须snap到其中一档(±5%)才采信。
+    //   非档位值(1443/1858/3150等)=OCR误读铁证, 一律拒绝。
+    private val BB_STANDARD_LEVELS = intArrayOf(
+        20, 40, 50, 100, 200, 250, 400, 500, 1000, 2000, 2500, 4000, 5000, 10000, 20000
+    )
+    private fun snapToStandardBB(raw: Int): Int {
+        for (lvl in BB_STANDARD_LEVELS) {
+            if (raw >= lvl * 0.95 && raw <= lvl * 1.05) return lvl
+        }
+        return 0
+    }
     @Volatile var streetLocked: String? = null  // V2.9.165: 本地CV根据公共牌数量锁定的street
     @Volatile var suitUncertain: Boolean = false
     @Volatile var lockReason: String = ""
@@ -1517,6 +1536,10 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     //     (LocalActionRecognizer内mr已绑定btn3黄像素门控，minRaise!=null隐含canRaise)；
                     //   B 全押两按钮(弃牌+跟注)：跟注行(btn2)物理存在(facingBet=btn2>=100) 且 callAmount>0；
                     //   加注行不存在时绝不组"加注"按钮(16日志铁证: 全押帧btn3Y=0只有弃牌+跟注)。
+                    //   ★豪哥铁律(v613实证 2026-09-11): 屏幕只有【弃牌+跟注】两按钮时, 跟注极可能就是全压
+                    //   (对手全押/或其下注后后手<最小加注额, GG此时不渲染加注键)。证据图: 弃牌+跟注1,519(零头
+                    //   非BB整数倍)=全押; 实机日志97s手翻前btn3Y=0只有两按钮→scene=allin正确。
+                    //   两按钮≠检测漏了加注键, 是屏幕真相——B分支照走vs allin赔率决策, 禁止补造加注按钮。
                     val useLocal = isMyTurn && lar != null && lar.confidence >= LOCAL_CONFIDENCE_THRESHOLD && (
                         // A: 三按钮正常——加注行物理存在且mr有效(闸1门控已在LocalActionRecognizer内)
                         (lar.btn3Yellow >= LocalActionRecognizer.BTN_PHYSICAL_THRESHOLD && lar.minRaise != null) ||
@@ -1809,11 +1832,17 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 //   杀VLM blinds(93%帧0/0+乱跳)、杀本地OCR盲注小字(不可读)、杀JS侧pot×2/3/跟注额(被门控架空)。
                 // 锚定法: candidateBB=mr/2(最小加注=2BB), 用预设按钮验证——≥2个预设落在candidateBB整数倍(±10%容差)才采信。
                 //   全押/3bet帧mr非标(实测5305/6201/4376/2320) → 预设匹配不足 → 拒绝, JS沿用锁存。
+                // v613 P0: 双闸防OCR误读污染(实机铁证mr=2886→candidate=1443脏值连过5手):
+                //   闸A(标准档): candidateBB必须snap到GG标准盲注档(±5%), 非档位值(1443/1858/3150)直接拒绝;
+                //   闸B(一致性): 锁建立后单帧候选不覆盖, 连续3帧一致才更新(升盲/换桌自适配);
+                //   锁建立前干净帧pending兜底(不置0避免码深失真)。
                 val isPreflop = finalHoleCards.size == 2 && finalCommCards.isEmpty()
                 var inferredBB = 0
                 var inferredSB = 0
                 if (isPreflop && finalMinRaise in 40..20000 && finalMinRaise % 2 == 0) {
-                    val candidateBB = finalMinRaise / 2  // 最小加注=2BB
+                    val rawCandidate = finalMinRaise / 2  // 最小加注=2BB
+                    // 闸A: snap到标准盲注档, snap失败(=0)即OCR误读脏帧, 直接丢弃
+                    val candidateBB = snapToStandardBB(rawCandidate)
                     if (candidateBB in 20..10000) {
                         var presetMatch = 0
                         for (p in localPresets.filter { it > 0 }) {
@@ -1824,18 +1853,44 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                             }
                         }
                         if (presetMatch >= 2) {
-                            inferredBB = candidateBB
-                            inferredSB = candidateBB / 2
-                            Log.d(TAG, "🎯 GCD盲注推断: BB=$inferredBB (mr=$finalMinRaise 预设匹配$presetMatch/${localPresets.size})")
+                            // 闸B: 多帧一致性状态机
+                            if (_bbLockCandidate != candidateBB) {
+                                _bbLockCandidate = candidateBB
+                                _bbLockCount = 1
+                            } else {
+                                _bbLockCount++
+                            }
+                            if (_bbLockCount >= 3) {
+                                // 连续3帧一致 → 建立/覆盖锁存
+                                if (_lockedBBKotlin != candidateBB) {
+                                    Log.d(TAG, "🔒 GCD盲注锁更新: ${_lockedBBKotlin}→$candidateBB (连续${_bbLockCount}帧一致)")
+                                }
+                                _lockedBBKotlin = candidateBB
+                                inferredBB = candidateBB
+                                inferredSB = candidateBB / 2
+                            } else if (_lockedBBKotlin > 0) {
+                                // 锁已建立但候选尚未3帧一致(或与锁不同): 沿用旧锁, 脏帧绝不覆盖
+                                inferredBB = _lockedBBKotlin
+                                inferredSB = _lockedBBKotlin / 2
+                                Log.d(TAG, "GCD候选$candidateBB仅${_bbLockCount}帧(锁=${_lockedBBKotlin})→沿用锁不覆盖")
+                            } else {
+                                // 锁未建立: 干净pending帧兜底(已过标准档闸, 非脏值), 不落锁
+                                inferredBB = candidateBB
+                                inferredSB = candidateBB / 2
+                                Log.d(TAG, "🎯 GCD盲注pending: BB=$candidateBB (mr=$finalMinRaise 匹配$presetMatch/${localPresets.size}, ${_bbLockCount}/3帧未落锁)")
+                            }
                         } else {
-                            Log.d(TAG, "GCD盲注拒绝: mr=$finalMinRaise candidate=$candidateBB 预设匹配仅$presetMatch/${localPresets.size}(疑全押/3bet帧)")
+                            Log.d(TAG, "GCD盲注拒绝: mr=$finalMinRaise snap=$candidateBB(raw=$rawCandidate) 预设匹配仅$presetMatch/${localPresets.size}(疑全押/3bet帧)")
                         }
+                    } else {
+                        Log.d(TAG, "GCD盲注脏帧拦截: mr=$finalMinRaise rawCandidate=$rawCandidate 非标准盲注档→丢弃(防OCR误读污染)")
                     }
                 }
 
                 // v612: blindBB锁存——GCD有效则更新锁存, 翻后/异常帧(GCD=0)沿用锁存
                 //   (翻后GCD不成立: 快捷按钮=底池%非BB整数倍; 悬浮窗显示/opp_seats阈值/ggLevel分类都需要)
-                val finalBlindBB = if (inferredBB > 0) { _lockedBBKotlin = inferredBB; inferredBB } else if (_lockedBBKotlin > 0) _lockedBBKotlin else 0
+                // v613: inferredBB已在上方一致性状态机内处理(含pending兜底), 此处只处理翻后/无GCD帧沿用锁
+                val finalBlindBB = if (inferredBB > 0) inferredBB else if (_lockedBBKotlin > 0) _lockedBBKotlin else 0
                 val finalBlindSB = if (inferredSB > 0) inferredSB else if (_lockedBBKotlin > 0) _lockedBBKotlin / 2 else 0
 
                 val result = VisionResult(
