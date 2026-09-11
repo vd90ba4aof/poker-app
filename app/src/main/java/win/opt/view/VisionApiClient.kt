@@ -1872,7 +1872,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                                 // 锁已建立但候选尚未3帧一致(或与锁不同): 沿用旧锁, 脏帧绝不覆盖
                                 inferredBB = _lockedBBKotlin
                                 inferredSB = _lockedBBKotlin / 2
-                                Log.d(TAG, "GCD候选$candidateBB仅${_bbLockCount}帧(锁=${_lockedBBKotlin})→沿用锁不覆盖")
+                                Log.d(TAG, "GCD候选${candidateBB}仅${_bbLockCount}帧(锁=${_lockedBBKotlin})→沿用锁不覆盖")
                             } else {
                                 // 锁未建立: 干净pending帧兜底(已过标准档闸, 非脏值), 不落锁
                                 inferredBB = candidateBB
