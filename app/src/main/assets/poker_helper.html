@@ -1345,7 +1345,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.615',
+  CURRENT_VERSION:'2.9.616',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2794,7 +2794,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.615';
+var APP_VERSION='2.9.616';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8926,6 +8926,18 @@ function _decideInner(){
     }
     else{result=cc>0?postF(k):preF(k);console.log("[SE] GTO未匹配→旧引擎");}
   }else{result=cc>0?postF(k):preF(k);}
+  // V2.9.615 FIX(Bug A): 旧引擎路径(preF/postF)无hClass字段→统一补挂handClassify
+  // 修复logSelfDecision/logDecision中翻前hClass=UNKNOWN（实证:200条决策61条UNKNOWN占30.5%）
+  if(result && (!result.hClass || !result.hClass.name)){
+    try{
+      var _hcH2=(G.hole||[]).filter(function(c){return c;});
+      var _hcC2=(G.comm||[]).filter(function(c){return c;});
+      if(_hcH2.length>=2){
+        var _hcR2=handClassify(_hcH2,_hcC2);
+        if(_hcR2 && _hcR2.name){result.hClass=_hcR2;console.log("[V2.9.615] 旧引擎hClass补挂: "+_hcR2.name);}
+      }
+    }catch(_hcx){}
+  }
   // V2.9.154: HSM记录Hero翻前行动
   if(result&&typeof HandStateMachine!=='undefined'&&HandStateMachine.getHeroRole()==='unknown'&&G.phase==='pre'){
     if(result.a==='raise'||result.a==='raise_big')HandStateMachine.recordPreflopAction('raise');
@@ -10845,9 +10857,9 @@ function bridgeAdvice(r){
             action:r.a||'fold',
             sizing:r.v||0,
             eq:r.eq||0,
-            // V2.9.615 P3: 翻前决策无hClass对象,用粗分类4类供SelfLearner手牌维度统计
+            // V2.9.615 P3: 翻前用getHandKey()转shorthand供PreflopLeakGuard._pfClass粗分类4类
             //   (翻后r.hClass.name保持原样:NUTS/STRONG/MEDIUM/DRAW/AIR/PRE等,与4类不会冲突)
-            h_class:(G.phase==='pre')?PreflopLeakGuard._pfClass(_holeCards):(r.hClass?r.hClass.name:'UNKNOWN'),
+            h_class:(G.phase==='pre')?PreflopLeakGuard._pfClass(getHandKey()||''):(r.hClass?r.hClass.name:'UNKNOWN'),
             confidence:r.confidence||'medium',
             reason:(r.r||'').substring(0,100),
             bb:window._lastVisionBB||G._lockedBB||200
