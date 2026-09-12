@@ -1367,7 +1367,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.621',
+  CURRENT_VERSION:'2.9.622',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2816,7 +2816,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.621';
+var APP_VERSION='2.9.622';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3486,7 +3486,11 @@ function decidePreflop(k){
     var allinBet=bet||pot,allinEq=eq;  // V2.9.584 FIX(BUG-04): posMod已在L3200统一加过,allin分支不再重复加(旧引擎L9087同理)
     var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet)*100):50;  // V2.9.585 FIX(BUG-07): pot已含对手bet,正确赔率=bet/(pot+bet)
     var _preAiRatio=pot>0?allinBet/(pot+allinBet):0;
-    callThresh=_preAiRatio>=0.5?Math.max(callThresh,45):Math.min(callThresh+3,25);
+    // V2.9.622 FIX(P0, 实机日志2026-09-12 6h4s stk24BB面8BB全押eq31%赔率38%却用25%门槛跟): 
+    //   Math.min(callThresh+3,25)把赔率门槛封顶在25%——赔率要求38%时门槛被压到25%,
+    //   31%>25%通过但31%<38%赔率=纯负EV。改为Math.max保证门槛永远不低于赔率要求,
+    //   同时保留25%地板(赔率<25%时门槛不低于25%,防极小赔率噪声)。
+    callThresh=_preAiRatio>=0.5?Math.max(callThresh,45):Math.max(callThresh,25);
     // V2.9.592 FIX(P1, 实机日志2026-09-08 A7o stk61BB面61BB全押eq41%用25%地板跟):
     //   25%小jam地板为短码推弃设计;深码跟全押套牢大额,分级收紧门槛(复用L3191 _oppEffBB):>40BB→40%,>80BB→45%,>120BB→50%。
     if(_oppEffBB>120){callThresh=Math.max(callThresh,50);}else if(_oppEffBB>80){callThresh=Math.max(callThresh,45);}else if(_oppEffBB>40){callThresh=Math.max(callThresh,40);}
@@ -3582,7 +3586,8 @@ function decidePostflop(k){
     var _aiBet=bet||pot;
     var _aiThresh=_aiBet>0?Math.round(_aiBet/(pot+_aiBet)*100):50;  // V2.9.585 FIX(BUG-07): 同上
     var _aiBetRatio=pot>0?_aiBet/(pot+_aiBet):0; // 注池比: 大jam>=0.5
-    _aiThresh=_aiBetRatio>=0.5?Math.max(_aiThresh,40):Math.min(_aiThresh+3,20); // 翻后放宽(有公共牌信息)
+    // V2.9.622 FIX(P0): 同翻前——Math.min封顶20%导致赔率不足也能通过,改Math.max保赔率兜底
+    _aiThresh=_aiBetRatio>=0.5?Math.max(_aiThresh,40):Math.max(_aiThresh,20);
     // V2.9.592 FIX(P1, 实机日志2026-09-08 J4c stk142BB面118BB全押eq31%/stk166BB面24BB eq22%两跟全输):
     //   小jam赔率门槛+3%裕度是为【短码推弃】设计(跟注浅、风险有限);深码(>40BB)跟全押是套牢大额
     //   筹码,20-25%地板对小jam放太松→深码用弱牌跟大额全押。修复:有效码深>40BB时翻后跟全押
