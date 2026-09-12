@@ -1383,7 +1383,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.623',
+  CURRENT_VERSION:'2.9.624',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -1418,6 +1418,15 @@ var ActionLine={
   record:function(street,scene,heroAction,oppAction,eq,sizing){
     // 避免同一街重复记录
     if(this._lines.length>0 && this._lines[this._lines.length-1].street===street) return;
+    // V2.9.624 FIX(P0,实机日志2026-09-12 QsQh raise_big被漏判PFR):
+    //   动作名单一真相源——所有下游(didPreflopRaise/didFlopCBet/getPrevOppAction/
+    //   HandStateMachine角色回退/SE cbet表/double-barrel/probe等13处)都只认标准动作集
+    //   {'raise','call','check','fold'}。偏移层为强牌(eq>=65)产出的raise_big此前被原样存储,
+    //   导致didPreflopRaise()漏判→翻前最强牌翻后被当路人,cbet/barrel全跳过→被动check到河牌弃牌。
+    //   在唯一写入口归一(与HandStateMachine L9080/DRTA.recordHeroAction L5203口径对齐),
+    //   raise_big语义等同raise(都是主动加注),在唯一写入口归一;读取层无需逐个补丁。
+    //   注意:仅归一raise_big(有实机日志铁证);allin保持独立不归一——其在各读取点语义未全验证,不做无证据扩展。
+    if(heroAction==='raise_big')heroAction='raise';
     this._lines.push({
       street:street, scene:scene, heroAction:heroAction, 
       oppAction:oppAction||'', eq:eq||0, sizing:sizing||0
@@ -2832,7 +2841,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.623';
+var APP_VERSION='2.9.624';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
