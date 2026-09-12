@@ -7179,16 +7179,9 @@ function getAdjustedRange(scene,pos){
     }
     if(scene==='call'){
       (mwAdj.callRemove||[]).forEach(function(k){var i=base.indexOf(k);if(i!==-1)base.splice(i,1);});
-      // V2.9.625 豪哥原则: 高质量同花连张只允许小注跟注看翻牌
-      // 如果 bet/pot > 0.25 (即需要付出超过25%底池比例), 仍然移除这些牌(禁止大注跟注)
-      var _betSize = (typeof G._betToCall==='number' && G._betToCall>0) ? G._betToCall : (typeof G.to_call==='number' ? G.to_call : 0);
-      var _potSize = (typeof G._pot==='number' && G._pot>0) ? G._pot : (typeof G.pot==='number' ? G.pot : 0);
-      var _betToPotRatio = _potSize>0 ? _betSize/_potSize : 0;
-      if(_betToPotRatio>0.25){
-        var _premiumSuitedConnectors=['54s','65s','76s','87s','98s','T9s'];
-        _premiumSuitedConnectors.forEach(function(k){var i=base.indexOf(k);if(i!==-1)base.splice(i,1);});
-        Multiway.log('大注场景', 'bet/pot='+Math.round(_betToPotRatio*100)+'%>25%, 移除高质量同花连张');
-      }
+      // V2.9.626: 旧v625的bet/pot>0.25守卫读取G._betToCall/G.to_call/G._pot(全代码无赋值=死参),
+      //   ratio恒0从未生效,且bet/pot判据不合理(正常open比值天然高)。大注保护改由v626假全押降级
+      //   按真实G.bet(BB)分流: 小注(<5BB)→call场景投机牌可跟看翻牌; 大注(≥5BB)→raise场景收紧。
     }
     Multiway.log('范围调整', scene+' 移除投机牌 剩余'+base.length+'手');
   }
@@ -8042,7 +8035,12 @@ function multiPlayerEquity(eq,opponents){
 }
 // V2.9.105: 多人池策略模块——多人池范围收紧/c-bet降低/bluff减少/draw收窄
 var Multiway={
-  level:function(){var a=G.act||2;if(a<=2)return "hu";if(a===3)return "3way";if(a<=5)return "multiway";return "super";},
+  // V2.9.626 FIX(口径统一): 多人池程度必须按"真实在池人数"_inPotPlayers(V2.9.144底池反推,翻后沿用),
+  //   不能用G.act(=active_players桌人数,翻前发牌恒=桌人数)。旧逻辑6max桌单挑straddle也被判super,
+  //   callRemove最激进档把86s/76s/65s/54s/A2s-A5s全移除→投机牌小注上不去(v625日志QJs/A5s铁证)。
+  //   与preF eq衰减(L9641)、v625全押硬闸(L3537/3552)统一同一真相源;翻后inPot含已fold者略高估→偏紧(安全向)。
+  _effPlayers:function(){return (typeof G!=='undefined'&&typeof G._inPotPlayers==='number'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2);},
+  level:function(){var a=this._effPlayers();if(a<=2)return "hu";if(a===3)return "3way";if(a<=5)return "multiway";return "super";},
   preflopRangeAdj:function(){
     var lv=this.level();
     if(lv==="hu")return{openShrink:0,callShrink:0,threebetShrink:0,openRemove:[],callRemove:[]};
@@ -8059,7 +8057,7 @@ var Multiway={
   drawAdj:function(){var lv=this.level();if(lv==="hu")return{minOuts:4,nutOnly:false};if(lv==="3way")return{minOuts:5,nutOnly:false};return{minOuts:6,nutOnly:false};},
   callThresholdAdj:function(){var a={hu:0,"3way":3,multiway:6,super:10};return a[this.level()]||0;},
   isoRaiseAdj:function(){var m={hu:1.0,"3way":1.3,multiway:1.5,super:1.8};return m[this.level()]||1.0;},
-  isMultiway:function(){return(G.act||2)>=3;},
+  isMultiway:function(){return this._effPlayers()>=3;},
   log:function(action,detail){if(this.isMultiway())console.log("[多人池 "+this.level()+"] "+action+": "+detail);}
 };
 // V2.9.105: C-bet策略模块——翻前加注者翻后决策
@@ -12950,11 +12948,20 @@ function onVisionResult(data){
         }
       }
       if(!_v626MyJam && !_v626OppJam){
-        // 翻前straddle/limped pot(屏幕只有弃牌+跟注)→call场景(preF L9840只产call/fold,不会误发加注);
-        // 不能降级open——open在preF L9870是"开池加注权",会直接发加注指令而屏幕无加注按钮。
-        // 翻后对手下注→bet场景。
-        var _v626RealScene=(G.phase==='preflop')?'call':'bet';
-        console.log('[V2.9.626假全押降级] 两按钮但跟注'+_v626CallBB+'BB<我方码深'+_v626MyStk+'BB的85%且无对手全押→加注按钮漏检,scene allin→'+_v626RealScene);
+        // 豪哥原则大小注分流(翻前):
+        //   小注(<5BB,straddle/limp/小open)→call场景: 小对子/同花连张/同花/A-K类投机牌便宜看翻牌
+        //     (preF L9840只产call/fold,不会误发加注;多人池移除按真实在池人数Multiway口径)。
+        //   大注(≥5BB)→raise场景: 面对实质加注走收紧的防守分支(L9767+大注硬底/Nash全码校验),
+        //     投机牌不便宜看翻牌时不乱跟;即便策略返回raise,屏幕无加注按钮由物理闸L9444强制改call/fold。
+        //   不能降级open——open在preF L9870是"开池加注权",会直接发加注指令而屏幕无加注按钮。
+        //   翻后对手下注→bet场景。
+        var _v626RealScene;
+        if(G.phase==='preflop'){
+          _v626RealScene=(_v626CallBB<5)?'call':'raise';
+        }else{
+          _v626RealScene='bet';
+        }
+        console.log('[V2.9.626假全押降级] 两按钮但跟注'+_v626CallBB+'BB<我方码深'+_v626MyStk+'BB的85%且无对手全押→加注按钮漏检,scene allin→'+_v626RealScene+'('+(G.phase==='preflop'?(_v626CallBB<5?'小注投机牌可看翻牌':'大注收紧防守'):'翻后')+')');
         G.scene=_v626RealScene;
         G._v626RaiseHidden=true;   // 标记加注按钮物理漏检(策略/执行层诊断用)
       }else{
@@ -13658,13 +13665,14 @@ var AutoConfidence = {
     }
 
     if (conf === 'medium') {
-      // V2.9.625 FIX(P1): 面对全压的call也需要人工确认——action='call'但scene='allin'时,
-      // 投机牌无翻后潜力,自动执行风险高;原逻辑只判action==='allin'(主动全压),漏掉被动跟全压
-      if (action === 'allin' || (action === 'call' && typeof G !== 'undefined' && G.scene === 'allin')) {
-        console.log('[AutoConf] MEDIUM+allin→等待确认');
+      // V2.9.626 FIX(豪哥要求): 跟注(call)一律自动点击,含面对全压的跟注——真假全押已由
+      //   v626数学降级(假全押不进allin分支)+全押硬闸/赔率门槛把关,跟注无需人工确认。
+      //   仅主动全压(action==='allin',我方按下全下按钮=拿全部码深冒险)保留人工确认。
+      if (action === 'allin') {
+        console.log('[AutoConf] MEDIUM+主动全压→等待确认');
         return { action: action, auto: false, reason: 'allin_needs_confirm', confidence: 'medium' };
       }
-      console.log('[AutoConf] MEDIUM→自动执行');
+      console.log('[AutoConf] MEDIUM→自动执行(call/fold/raise自动)');
       return { action: action, auto: true, reason: 'medium_auto', confidence: 'medium' };
     }
 

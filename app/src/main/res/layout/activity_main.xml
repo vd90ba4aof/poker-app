@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.626 · 两按钮假全押降级修复+oppSeats变量名BUG修复"
+        android:text="V2.9.626 · 假全押数学降级+多人池口径统一+跟注全自动+oppSeats修复"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
