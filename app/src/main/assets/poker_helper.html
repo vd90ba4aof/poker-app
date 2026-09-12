@@ -1383,7 +1383,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.624',
+  CURRENT_VERSION:'2.9.625',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2841,20 +2841,22 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.624';
+var APP_VERSION='2.9.625';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
 
 // ====== rev11 PRE-2: SQUEEZE挤压表(原表埋在HandStateMachine IIFE内,StrategyEngine跨模块typeof永远undefined=旧squeeze是双重死代码) ======
 var _SQUEEZE={
+  // V2.9.625 FIX(P2): 移除投机牌(A5s/A4s)——squeeze raise后若被4bet-shove,投机牌无翻后潜力可兑现
+  // 保留KQs(双高张有牌力)和价值牌(AA/KK/QQ/JJ/TT/AK/AQ)
   vs_UTG1_vs_caller:{
-    BTN:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.8},AKs:{a:'sq',f:.7},AKo:{a:'sq',f:.6},A5s:{a:'sq',f:.4},A4s:{a:'sq',f:.3},KQs:{a:'sq',f:.2},JJ:{a:'c',f:.7},TT:{a:'c',f:.6},AQs:{a:'c',f:.5},AQo:{a:'c',f:.4}},
-    SB:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.7},AKs:{a:'sq',f:.6},AKo:{a:'sq',f:.5},A5s:{a:'sq',f:.3},JJ:{a:'c',f:.5},TT:{a:'c',f:.4},AQs:{a:'c',f:.4}}
+    BTN:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.8},AKs:{a:'sq',f:.7},AKo:{a:'sq',f:.6},KQs:{a:'sq',f:.2},JJ:{a:'c',f:.7},TT:{a:'c',f:.6},AQs:{a:'c',f:.5},AQo:{a:'c',f:.4}},
+    SB:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.7},AKs:{a:'sq',f:.6},AKo:{a:'sq',f:.5},JJ:{a:'c',f:.5},TT:{a:'c',f:.4},AQs:{a:'c',f:.4}}
   },
   vs_MP_vs_caller:{
-    BTN:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.9},JJ:{a:'sq',f:.5},AKs:{a:'sq',f:.8},AKo:{a:'sq',f:.7},AQs:{a:'sq',f:.5},A5s:{a:'sq',f:.5},A4s:{a:'sq',f:.4},KQs:{a:'sq',f:.3},TT:{a:'c',f:.7},AQo:{a:'c',f:.5},AJs:{a:'c',f:.3}},
-    SB:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.8},AKs:{a:'sq',f:.7},AKo:{a:'sq',f:.6},A5s:{a:'sq',f:.4},JJ:{a:'c',f:.5},AQs:{a:'c',f:.4}}
+    BTN:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.9},JJ:{a:'sq',f:.5},AKs:{a:'sq',f:.8},AKo:{a:'sq',f:.7},AQs:{a:'sq',f:.5},KQs:{a:'sq',f:.3},TT:{a:'c',f:.7},AQo:{a:'c',f:.5},AJs:{a:'c',f:.3}},
+    SB:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.8},AKs:{a:'sq',f:.7},AKo:{a:'sq',f:.6},JJ:{a:'c',f:.5},AQs:{a:'c',f:.4}}
   }
 };
 
@@ -3342,6 +3344,9 @@ function decidePreflop(k){
   var _specSPRMult={ultra_short:.1,short:.3,med_short:.7,standard:1,deep:1.3}[SPRZone.getZone(spr)]||1;
   var _specPosMult={utg:.6,utg1:.7,mp:.8,mp1:.85,hj:.95,co:1.1,btn:1.2,sb:.9,bb:1}[p]||1;
   _specBonus=Math.round(_specBonus*_specSPRMult*_specPosMult);
+  // V2.9.625 FIX(P0, 豪哥原则): 翻前全压场景投机牌无翻后潜力可兑现,清零投机bonus
+  // 投机牌(小对子set mine/同花连张/A低同花)的价值依赖翻后实现,翻前jam无翻后→bonus=0
+  if(scene==='allin')_specBonus=0;
   // V2.9.556: 翻前码深分档调eq — 深码投机牌升值, 短码投机牌清零(只打大牌)
   if(_depthTier==='deep'&&k.indexOf('s')>=0)_specBonus=Math.round(_specBonus*1.5); // 深码同花连牌/同花A奖励翻倍
   if(_depthTier==='short'&&k.indexOf('s')>=0&&'23456789T'.indexOf(k[0])>=0&&'23456789T'.indexOf(k[1])>=0)_specBonus=0; // 短码非高牌同花连牌不给投机
@@ -3374,7 +3379,9 @@ function decidePreflop(k){
         var _isoWiden=_nLimpers===1?1.2:1.05;
         if(freq===undefined){
           // 不在RFI范围的牌:limp池里后位用eq可游戏性兜底(对子/同花连张/A高),给小频率隔离窗口
-          freq=(eq>=48)?0.30*_isoWiden:0;
+          // V2.9.625 FIX(P1): 阈值从48提高到55,防止投机牌(含bonus虚高)在limp池被过度iso-raise
+          // 投机牌翻后被反击时无法实现潜力,收紧后只有真正的价值牌(非投机牌)才能iso
+          freq=(eq>=55)?0.30*_isoWiden:0;
         }else{
           freq=Math.min(0.95,freq*_isoWiden);
         }
@@ -3509,8 +3516,13 @@ function decidePreflop(k){
   //   小jam(短码巨池)回归赔率门槛+3%噪声裕度(翻前eq为查表值,裕度取3%)。
   if(scene==='allin'){
     var allinBet=bet||pot,allinEq=eq;  // V2.9.584 FIX(BUG-04): posMod已在L3200统一加过,allin分支不再重复加(旧引擎L9087同理)
-    var callThresh=allinBet>0?Math.round(allinBet/(pot+allinBet)*100):50;  // V2.9.585 FIX(BUG-07): pot已含对手bet,正确赔率=bet/(pot+bet)
-    var _preAiRatio=pot>0?allinBet/(pot+allinBet):0;
+    // V2.9.625 FIX(P0): 主池cap——pot可能包含边池(对手超额投入部分我们赢不到),需cap到实际能赢的主池
+    // 简化估算: 主池上限 = min(pot, 我方码深 × 在池人数), 因为每人对主池贡献不超过我们的码深
+    var _inPotForCap=(typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:2;
+    var _cappedPot=Math.min(pot,stk*_inPotForCap);
+    if(_cappedPot<pot){console.log('[V2.9.625主池cap] pot '+pot+'→'+_cappedPot+' (stk='+stk+' inPot='+_inPotForCap+')');}
+    var callThresh=allinBet>0?Math.round(allinBet/(_cappedPot+allinBet)*100):50;  // V2.9.585+V2.9.625: 用cappedPot计算真实赔率
+    var _preAiRatio=pot>0?allinBet/(_cappedPot+allinBet):0;
     // V2.9.622 FIX(P0, 实机日志2026-09-12 6h4s stk24BB面8BB全押eq31%赔率38%却用25%门槛跟): 
     //   Math.min(callThresh+3,25)把赔率门槛封顶在25%——赔率要求38%时门槛被压到25%,
     //   31%>25%通过但31%<38%赔率=纯负EV。改为Math.max保证门槛永远不低于赔率要求,
@@ -3519,21 +3531,22 @@ function decidePreflop(k){
     // V2.9.592 FIX(P1, 实机日志2026-09-08 A7o stk61BB面61BB全押eq41%用25%地板跟):
     //   25%小jam地板为短码推弃设计;深码跟全押套牢大额,分级收紧门槛(复用L3191 _oppEffBB):>40BB→40%,>80BB→45%,>120BB→50%。
     if(_oppEffBB>120){callThresh=Math.max(callThresh,50);}else if(_oppEffBB>80){callThresh=Math.max(callThresh,45);}else if(_oppEffBB>40){callThresh=Math.max(callThresh,40);}
-    // V2.9.619 FIX(P0, 实机日志2026-09-12 Tc6c stk91BB面91BB全押5人池): 翻前allin eq虚高三连——
-    //   查表eQ(k)是"对随机牌单挑"基准(不随人数降),实测T6s查表48%→5人池真实16.7%/vs紧范围30.6%;
-    //   深码大jam全残码接全押用此值=纯负EV跑马。深码(>40BB)或大jam(注池比>=0.5)时双闸收紧:
-    var _aiDeep=(_oppEffBB>40)||(_preAiRatio>=0.5);
+    // V2.9.625 FIX(P0, 豪哥原则): 投机牌翻前全压无潜力可兑现,A/B闸扩展覆盖所有非极短码场景
+    // 原条件(_oppEffBB>40||ratio>=0.5)只覆盖深码/大jam,漏掉短码多人池跑马(如2BB 3way jam)
+    // 新条件:>15BB(非极短码) 或 大jam(注池比>=0.5) 或 多人池(3way+),15BB以下仍走Nash路径
+    var _aiDeep=(_oppEffBB>15)||(_preAiRatio>=0.5)||((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=3));
     if(_aiDeep){
-      // B闸-牌力硬底(不依赖eq质量): 翻前深码/大jam接全押,仅对子22+或两张>=J双高张(与L3432强牌硬底同口径);
-      //   垃圾牌(如T6s/T2o/K3o)深码全押直接fold,不把91BB峰值交给跑马。短码小jam(15-40BB推弃)不进此闸。
+      // B闸-牌力硬底(不依赖eq质量): 翻前接全押,仅对子22+或两张>=J双高张(与L3432强牌硬底同口径);
+      //   投机牌(同花连张/小对子/A低同花)翻前无翻后潜力可兑现,直接fold
       var _aiPair=(k.length===2&&k[0]===k[1]);
       var _aiTwoBroad=(!_aiPair&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
       if(!_aiPair&&!_aiTwoBroad){
-        console.log('[V2.9.619全押硬闸] '+k+' 深码/大jam非强牌(非对子非双J+) fold (oppEff='+_oppEffBB+'BB ratio='+_preAiRatio.toFixed(2)+')');
-        return _fold(allinEq,'[V2.9.619全押硬闸] '+k+' 深码接全押牌力不足弃',spr);
+        console.log('[V2.9.625全押硬闸] '+k+' 翻前全压非强牌(非对子非双J+) fold (oppEff='+_oppEffBB+'BB ratio='+_preAiRatio.toFixed(2)+' inPot='+((typeof G._inPotPlayers!=='undefined')?G._inPotPlayers:'?')+')');
+        return _fold(allinEq,'[V2.9.625全押硬闸] '+k+' 翻前全压牌力不足弃',spr);
       }
       // A闸-eq真实化: 查表值替换为mcVsRange对实际开牌范围+实际进池人数的蒙特卡洛胜率(复用翻后同款函数,不拍新范围表)。
       //   强牌(TT+/AQ+)HU仍65%+正常跟;多人池弱牌eq按人数客观回落。异常try-catch降级查表值。
+      //   V2.9.625: 扩展触发条件后,短码多人池(如3way 2BB)也能用MC修正eq,避免单挑eq虚高导致错误call
       try{
         var _aiHole=(G.hole||[]).filter(function(c){return c;});
         var _aiN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
@@ -3542,11 +3555,11 @@ function decidePreflop(k){
           var _aiRange=gO(G.pos||'btn');
           var _aiMs=mcVsRange(_aiHole,[],_aiRange,1500,_aiOpp);
           if(_aiMs&&typeof _aiMs.eq==='number'&&_aiMs.eq>0){
-            console.log('[V2.9.619全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
+            console.log('[V2.9.625全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
             allinEq=_aiMs.eq;
           }
         }
-      }catch(_aiE){console.log('[V2.9.619全押eq] 异常降级查表: '+_aiE.message);}
+      }catch(_aiE){console.log('[V2.9.625全押eq] 异常降级查表: '+_aiE.message);}
     }
     if(allinEq>=callThresh){var exploitA=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});return{a:'call',r:'GTO vs allin eq'+Math.round(allinEq)+'%>='+callThresh+'%',eq:exploitA.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitA.exploit,_se:true};}
     return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%',spr);
@@ -7166,6 +7179,16 @@ function getAdjustedRange(scene,pos){
     }
     if(scene==='call'){
       (mwAdj.callRemove||[]).forEach(function(k){var i=base.indexOf(k);if(i!==-1)base.splice(i,1);});
+      // V2.9.625 豪哥原则: 高质量同花连张只允许小注跟注看翻牌
+      // 如果 bet/pot > 0.25 (即需要付出超过25%底池比例), 仍然移除这些牌(禁止大注跟注)
+      var _betSize = (typeof G._betToCall==='number' && G._betToCall>0) ? G._betToCall : (typeof G.to_call==='number' ? G.to_call : 0);
+      var _potSize = (typeof G._pot==='number' && G._pot>0) ? G._pot : (typeof G.pot==='number' ? G.pot : 0);
+      var _betToPotRatio = _potSize>0 ? _betSize/_potSize : 0;
+      if(_betToPotRatio>0.25){
+        var _premiumSuitedConnectors=['54s','65s','76s','87s','98s','T9s'];
+        _premiumSuitedConnectors.forEach(function(k){var i=base.indexOf(k);if(i!==-1)base.splice(i,1);});
+        Multiway.log('大注场景', 'bet/pot='+Math.round(_betToPotRatio*100)+'%>25%, 移除高质量同花连张');
+      }
     }
     Multiway.log('范围调整', scene+' 移除投机牌 剩余'+base.length+'手');
   }
@@ -8024,7 +8047,9 @@ var Multiway={
     var lv=this.level();
     if(lv==="hu")return{openShrink:0,callShrink:0,threebetShrink:0,openRemove:[],callRemove:[]};
     if(lv==="3way")return{openShrink:0,callShrink:1,threebetShrink:1,openRemove:[],callRemove:["74s","63s","73s","85s","84s","94s","95s","96s","86s","53s","43s","32s","K2s","K3s","Q2s","Q3s","J2s","J3s","T2s","T3s","A2o","A3o","A4o","K5o","K4o","K3o","K2o","Q7o","Q6o","Q5o","J8o","J7o","T7o","98o","97o"]};
-    if(lv==="multiway")return{openShrink:2,callShrink:3,threebetShrink:2,openRemove:["74s","63s","73s","85s","84s","94s","95s","96s","86s","53s","43s","32s","64s","54s","65s","76s","K2s","K3s","K4s","Q2s","Q3s","Q4s","J2s","J3s","J4s","T2s","T3s","T4s","A2o","A3o","A4o","A5o","A7o","A8o","K5o","K4o","K3o","K2o","Q8o","Q7o","Q6o","J9o","J8o","T8o","T7o","98o","97o"],callRemove:["74s","63s","73s","85s","84s","94s","95s","96s","86s","53s","43s","32s","64s","54s","65s","76s","K2s","K3s","K4s","K5s","K6s","Q2s","Q3s","Q4s","Q5s","J2s","J3s","J4s","J5s","T2s","T3s","T4s","A2o","A3o","A4o","A5o","A6o","A7o","A8o","K9o","K8o","K7o","K6o","Q9o","Q8o","J9o","T9o","98o"]};
+    if(lv==="multiway")return{openShrink:2,callShrink:3,threebetShrink:2,openRemove:["74s","63s","73s","85s","84s","94s","95s","96s","86s","53s","43s","32s","64s","K2s","K3s","K4s","Q2s","Q3s","Q4s","J2s","J3s","J4s","T2s","T3s","T4s","A2o","A3o","A4o","A5o","A7o","A8o","K5o","K4o","K3o","K2o","Q8o","Q7o","Q6o","J9o","J8o","T8o","T7o","97o"],callRemove:["74s","63s","73s","85s","84s","94s","95s","96s","86s","53s","43s","32s","64s","K2s","K3s","K4s","K5s","K6s","Q2s","Q3s","Q4s","Q5s","J2s","J3s","J4s","J5s","T2s","T3s","T4s","A2o","A3o","A4o","A5o","A6o","A7o","A8o","K9o","K8o","K7o","K6o","Q9o","Q8o","J9o","T9o","97o"]};
+    // V2.9.625 豪哥原则: 高质量同花连张(54s/65s/76s/87s/98s/T9s)从callRemove移除,允许多⼈池小注跟注看翻牌
+    // 但需配合 L7184 的条件: bet/pot > 0.25 时仍不能跟注(禁止大注跟注)
     return{openShrink:3,callShrink:5,threebetShrink:3,openRemove:["74s","63s","73s","85s","84s","94s","95s","96s","86s","53s","43s","32s","64s","54s","65s","76s","75s","86s","K2s","K3s","K4s","K5s","K6s","K7s","Q2s","Q3s","Q4s","Q5s","Q6s","J2s","J3s","J4s","J5s","J6s","T2s","T3s","T4s","T5s","A2o","A3o","A4o","A5o","A6o","A7o","A8o","A9o","K9o","K8o","K7o","Q9o","Q8o","J9o","T9o","98o","87o"],callRemove:["74s","63s","73s","85s","84s","94s","95s","96s","86s","53s","43s","32s","64s","54s","65s","76s","75s","86s","A2s","A3s","A4s","A5s","K2s","K3s","K4s","K5s","K6s","K7s","Q2s","Q3s","Q4s","Q5s","Q6s","J2s","J3s","J4s","J5s","J6s","T2s","T3s","T4s","T5s","A2o","A3o","A4o","A5o","A6o","A7o","A8o","A9o","ATo","K9o","K8o","K7o","Q9o","Q8o","JTo","J9o","T9o","98o","87o"]};
   },
   threebetAdj:function(){var lv=this.level();if(lv==="hu")return{bluffAllowed:true,bluffReduction:0};if(lv==="3way")return{bluffAllowed:true,bluffReduction:0.5};return{bluffAllowed:false,bluffReduction:1.0};},
@@ -9555,7 +9580,9 @@ function preF(k){
   var cS=adjustPreflopRange(baseC,oppType,scene==='reraise'?'reraise':scene==='raise'?'raise':'open');
   var spr=calcSPR();
   var sprAdvice=getSPRAdvice(spr);
-  var eq=eQ(k,(G.ap||2)-1);
+  // V2.9.625 FIX(P2): G.ap从未赋值恒为2,导致多人池eq不衰减(虚高);改为读取_inPotPlayers或act
+  var _apVal=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
+  var eq=eQ(k,_apVal-1);
   // V2.9.141: 投机手牌隐含赔率加成（统一SPR+位置感知）
   // 以小博大：深码多投机，短码少投机；位置好投机更便宜
   var _specBonus=0;
@@ -13412,7 +13439,9 @@ var NashPushFold={
   },
   shouldUseNash:function(scene,p,spr,effectiveBB){
     // rev10: 门限按有效BB数判断(旧spr>1.5与effBB反向,5-15BB被误挡)
-    if(scene!=='check'&&scene!=='call'&&scene!=='raise')return false;
+    // V2.9.625 FIX(P1): 增加allin场景——短码面对全压时应走Nash CALL表(更保守),
+    // 而非SE主路径(投机bonus虚高+赔率不分池),避免投机牌错误跟注全压
+    if(scene!=='check'&&scene!=='call'&&scene!=='raise'&&scene!=='allin')return false;
     if(effectiveBB===undefined)effectiveBB=SPRZone.estimateBB?SPRZone.estimateBB():0;
     if(effectiveBB<=0){
       // V2.9.556: 直读兜底(不再用stk/pot反推,避免小数桌码深算错)
@@ -13504,6 +13533,14 @@ var NashPushFold={
       }
       return{a:'fold',r:'Nash fold vs push('+p+'/'+bbKey+'BB) '+k,eq:_nashRealEq,c:'l',scene:'纳什fold',spr:spr,_se:true,_nash:true};
     }
+    // V2.9.625 FIX(P1): allin场景走Nash CALL表——面对全压时,投机牌(同花连张/小对子/A低同花)
+    // 没有翻后潜力可兑现,应该用更保守的Nash均衡表判断,而非SE主路径的虚高eq
+    if(scene==='allin'){
+      if(this.isNashCall(k,p,effectiveBB)){
+        return{a:'call',r:'Nash call vs allin('+p+'/'+bbKey+'BB) '+k,eq:50,c:'m',scene:'纳什callvs全压',spr:spr,_se:true,_seFreq:1,_nash:true};
+      }
+      return{a:'fold',r:'Nash fold vs allin('+p+'/'+bbKey+'BB) '+k,eq:_nashRealEq,c:'l',scene:'纳什foldvs全压',spr:spr,_se:true,_nash:true};
+    }
     return null;
   }
 };
@@ -13588,7 +13625,9 @@ var AutoConfidence = {
     }
 
     if (conf === 'medium') {
-      if (action === 'allin') {
+      // V2.9.625 FIX(P1): 面对全压的call也需要人工确认——action='call'但scene='allin'时,
+      // 投机牌无翻后潜力,自动执行风险高;原逻辑只判action==='allin'(主动全压),漏掉被动跟全压
+      if (action === 'allin' || (action === 'call' && typeof G !== 'undefined' && G.scene === 'allin')) {
         console.log('[AutoConf] MEDIUM+allin→等待确认');
         return { action: action, auto: false, reason: 'allin_needs_confirm', confidence: 'medium' };
       }
