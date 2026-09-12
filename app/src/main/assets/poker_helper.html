@@ -996,14 +996,11 @@ var HandHistory={
     }catch(e){this.records=[];}
   },
   add:function(result,rawVision){
-    // V2.9.588 FIX(B1): 记录闸——与执行闸(autoExecuteDecision L13139 _frameBtnCount)同信号。
-    //   0按钮帧(等牌/过牌/手牌切换过渡)decide()照常算并显示悬浮球，但不写入HandHistory及下游
-    //   SessionStats/SelfTiltGuard/HandClassifier/TableQualityMeter——这些帧hero无行动权，
-    //   记录会产生"影子决策"污染复盘与盈利统计。仅拦rawVision=true的正常决策路径；
-    //   rawVision=false的出错/无手牌诊断记录保留(崩溃追溯需要)。
-    if(rawVision===true && (!G._frameBtnCount || G._frameBtnCount===0)){
-      try{console.log('[B1] 0按钮影子帧→跳过HandHistory记录(btnCount=0 action='+(result&&result.a)+')');}catch(_b1e){}
-      return;
+    // V2.9.621 FIX: 0按钮帧也记录手牌到HandHistory（解决DRTA vs HandHistory数据丢失问题）
+    // 但跳过下游消费者（SessionStats/SelfTiltGuard/HandClassifier/TableQualityMeter），避免污染统计
+    var _isZeroBtnFrame = (rawVision===true && (!G._frameBtnCount || G._frameBtnCount===0));
+    if(_isZeroBtnFrame){
+      try{console.log('[V2.9.621] 0按钮帧→仍记录HandHistory但跳过下游统计(btnCount=0 action='+(result&&result.a)+')');}catch(_b1e){}
     }
     // V2.9.129: 决策时间（go 入口记 _goStartTime，这里算 elapsed）
     var _decisionMs=0;
@@ -1038,14 +1035,16 @@ var HandHistory={
     this.records.unshift(rec);
     if(this.records.length>this.MAX_RECORDS)this.records=this.records.slice(0,this.MAX_RECORDS);
     try{localStorage.setItem(this.STORAGE_KEY,JSON.stringify(this.records));}catch(e){}
-    // V2.9.57: 自动推送结果到SessionStats
-    SessionStats.recordHand(rec);
-    // V2.9.129: 自动推送结果到SelfTiltGuard（自己Tilt预警）
-    if(typeof SelfTiltGuard!=='undefined')SelfTiltGuard.recordHand(rec);
-    // V2.9.130: 自动归类到HandClassifier（复盘金矿，不动result.r/悬浮球/通知栏）
-    if(typeof HandClassifier!=='undefined')HandClassifier.classify(rec);
-    // V2.9.131: 桌质评估（触发换桌建议+悬浮球闪烁，不动7色策略色）
-    if(typeof TableQualityMeter!=='undefined'){TableQualityMeter.recordHand(rec);try{if(typeof TableChangeAdvisor!=='undefined')TableChangeAdvisor.tick();}catch(e){}}
+    // V2.9.57: 自动推送结果到SessionStats（0按钮帧跳过，避免污染统计）
+    if(!_isZeroBtnFrame){
+      SessionStats.recordHand(rec);
+      // V2.9.129: 自动推送结果到SelfTiltGuard（自己Tilt预警）
+      if(typeof SelfTiltGuard!=='undefined')SelfTiltGuard.recordHand(rec);
+      // V2.9.130: 自动归类到HandClassifier（复盘金矿，不动result.r/悬浮球/通知栏）
+      if(typeof HandClassifier!=='undefined')HandClassifier.classify(rec);
+      // V2.9.131: 桌质评估（触发换桌建议+悬浮球闪烁，不动7色策略色）
+      if(typeof TableQualityMeter!=='undefined'){TableQualityMeter.recordHand(rec);try{if(typeof TableChangeAdvisor!=='undefined')TableChangeAdvisor.tick();}catch(e){}}
+    }
   },
   getAll:function(){return this.records;},
   clear:function(){this.records=[];try{localStorage.removeItem(this.STORAGE_KEY);}catch(e){}}
@@ -1054,7 +1053,7 @@ var HandHistory={
 // V2.9.47: 运行日志缓冲——捕获console.log用于导出分析
 var LogBuffer={
   records:[],
-  MAX:300,
+  MAX:1000,  // V2.9.621: 从300增大到1000，确保TableChangeAdvisor等重要事件不被丢弃
   origLog:null,
   init:function(){
     this.origLog=console.log;
@@ -1368,7 +1367,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.620',
+  CURRENT_VERSION:'2.9.621',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2817,7 +2816,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.620';
+var APP_VERSION='2.9.621';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -12110,14 +12109,16 @@ function onVisionResult(data){
       // 逻辑：上一手翻后记录了_prevRawChips，新一手preflop的my_chips就是这手开始时的筹码
       // 差值=上一手赢/输了多少（非摊牌时也有效——比如我们fold后对手赢了）
       var _newHandChips=parseInt(data.my_chips)||0;
-      if(G._prevRawChips && G._prevRawChips>0 && _newHandChips>0 && _isNewHand){
-        var _delta=_newHandChips-G._prevRawChips;
+      // V2.9.621 FIX: 使用_handStartChips追踪每手起始筹码，避免prevRawChips只在翻后更新导致preflop亏损被忽略
+      var _refChips = G._handStartChips || 0;
+      if(_refChips>0 && _newHandChips>0 && _isNewHand){
+        var _delta=_newHandChips-_refChips;
         var _bbV=window._lastVisionBB||G._lockedBB||200;
         if(_bbV>0){
           var _bbR=Math.round(_delta/_bbV*10)/10;
           if(Math.abs(_bbR)>=0.5){
             SessionStats.setResult(_bbR);
-            console.log('[V2.9.143盈亏] 新一手: 筹码'+G._prevRawChips+'→'+_newHandChips+' Δ='+_delta+' = '+_bbR+'BB');
+            console.log('[V2.9.621盈亏] 新一手: 筹码'+_refChips+'→'+_newHandChips+' Δ='+_delta+' = '+_bbR+'BB');
             // V2.9.516: SelfLearner——通知上一手结果
             try{
               if(_prevHandIdForLearn && AndroidBridge.selfHandResult){
@@ -12133,7 +12134,7 @@ function onVisionResult(data){
             var _sdSkipReason='';
             if(G._sdHeroFolded){_sdSkipReason='hero_fold';}                    // 我们fold=没摊牌
             else if(!G._sdReachedRiver){_sdSkipReason='not_river';}            // 未到河牌=对手中途fold,无摊牌
-            else if(_delta<0 && _newHandChips<G._prevRawChips*0.65){_sdSkipReason='rebuy_or_table_switch';} // 新筹码<旧码65%=换桌/rebuy/全下后码量断崖,非普通单手结果(实测换桌34658→10123=29%,17168→3407=20%)
+            else if(_delta<0 && _newHandChips<_refChips*0.65){_sdSkipReason='rebuy_or_table_switch';} // V2.9.621: 改用_refChips(=handStartChips)
             else{
               // 间隔保护: 距上一决策帧>90秒=中途离场/长暂停,筹码可能被他事改动,保守跳过
               var _sdGapMs=0;
@@ -12162,21 +12163,23 @@ function onVisionResult(data){
               }
             }
             // 回填真实盈亏到handHistory上一手记录(修断点②: 决策时bbResult恒0,SessionStats.setResult记错手)
+            // V2.9.621 FIX: 移除break，更新同一手牌的所有记录（多街区手牌可能有多条记录）
             if(_prevHandIdForLearn && HandHistory.records){
               for(var _hhI=0;_hhI<HandHistory.records.length;_hhI++){
                 var _hr=HandHistory.records[_hhI];
                 if(_hr && _hr.hole && (_hr.hole.join('')===_prevHandIdForLearn)){
                   _hr.bbResult=_bbR;
-                  break;
                 }
               }
             }
           }catch(_sdErr){console.log('[摊牌学习] 异常: '+_sdErr.message);}
         }
       }
-      // V2.9.590: 快照轮转——新手牌帧结算后清零上一手摊牌门控快照(防跨手残留,同v566残留类BUG)。
-      //   清零放G._prevRawChips盈亏块外: 同手Δ在±0.5BB内盈亏块不进,但快照必须照样清零防跨手残留。
-      if(_isNewHand){G._sdHeroFolded=false;G._sdReachedRiver=false;G._sdRiverAggro=false;}
+      // V2.9.621 FIX: 更新_handStartChips为当前新手的起始筹码（用于下一手盈亏计算）
+      if(_isNewHand){
+        G._handStartChips=_newHandChips;
+        G._sdHeroFolded=false;G._sdReachedRiver=false;G._sdRiverAggro=false;
+      }
     } else {
       G.phase='post';
       // V2.9.567 FIX(P0): 翻牌/转牌/河牌街变化时清零G.bet——v566双保险仅在preflop块内（L11288），
@@ -12762,26 +12765,18 @@ function onVisionResult(data){
         }
       }
     }catch(_drtaSdE){console.log('[DRTA-SD] recordShowdown失败: '+_drtaSdE.message);}
-    // 筹码差值算盈亏——摊牌时比较筹码变化
+    // V2.9.621 FIX: 移除摊牌阶段的SessionStats.setResult和selfHandResult调用，
+    // 避免与新手牌检测处的盈亏记录重复（新手牌检测已用_handStartChips计算完整手牌盈亏）
+    // 仅保留筹码变化的console日志用于调试
     var _curChips=parseInt(data.my_chips)||0;
     var _prevChips=G._prevRawChips||0;
     if(_prevChips>0 && _curChips>0){
       var _chipDelta=_curChips-_prevChips;
       var _bbValue=window._lastVisionBB||G._lockedBB||200;
       if(_bbValue>0){
-        var _bbResult=Math.round(_chipDelta/_bbValue*10)/10; // 保留1位小数
-        // 只在有意义的变化时记录(|bbResult|>0.5)
+        var _bbResult=Math.round(_chipDelta/_bbValue*10)/10;
         if(Math.abs(_bbResult)>=0.5){
-          SessionStats.setResult(_bbResult);
-          console.log('[V2.9.143盈亏] 筹码'+_prevChips+'→'+_curChips+' Δ='+_chipDelta+' = '+_bbResult+'BB');
-          // V2.9.516: SelfLearner——摊牌时记录精确结果
-          try{
-            var _slHid=G._handLockKey||'';
-            if(_slHid && AndroidBridge.selfHandResult){
-              var _slRt=_chipDelta>0?'win':(_chipDelta<0?'loss':'break_even');
-              AndroidBridge.selfHandResult(_slHid,_bbResult,_chipDelta,_slRt);
-            }
-          }catch(_slErr2){}
+          console.log('[V2.9.143盈亏-摊牌] 筹码'+_prevChips+'→'+_curChips+' Δ='+_chipDelta+' = '+_bbResult+'BB (已由新手牌检测处统一记录)');
         }
       }
     }
