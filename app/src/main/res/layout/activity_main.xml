@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.622 · 修复allin赔率门槛逻辑"
+        android:text="V2.9.623 · 修复赔率门槛+防螺旋升级+去重"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
