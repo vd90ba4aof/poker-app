@@ -1383,7 +1383,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.625',
+  CURRENT_VERSION:'2.9.626',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2841,7 +2841,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.625';
+var APP_VERSION='2.9.626';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3300,7 +3300,7 @@ function decidePreflop(k){
   var _myEffBB=stk>0?Math.round(stk):0;
   // 对手码深感知: 取池内最浅对手码深, 池里有人短码按有效码深打
   var _oppEffBB=_myEffBB;
-  try{var _os=G.opp_seats||[];for(var _oi=0;_oi<_os.length;_oi++){var _oc=parseInt(_os[_oi]&&_os[_oi].chips)||0;var _of=(_os[_oi]&&_os[_oi].active!==false&&_os[_oi].action!=='fold');if(_oc>0&&_of){var _ebb=Math.round(_oc/_blindBB);if(_ebb<_oppEffBB)_oppEffBB=_ebb;}}}catch(eOe){}
+  try{var _os=G.oppSeats||[];for(var _oi=0;_oi<_os.length;_oi++){var _oc=parseInt(_os[_oi]&&_os[_oi].chips)||0;var _of=(_os[_oi]&&_os[_oi].active!==false&&_os[_oi].action!=='fold');if(_oc>0&&_of){var _ebb=Math.round(_oc/_blindBB);if(_ebb<_oppEffBB)_oppEffBB=_ebb;}}}catch(eOe){}
   // 码深分档
   var _depthTier=_oppEffBB<=15?'nash':(_oppEffBB<=40?'short':(_oppEffBB>=150?'deep':'standard'));
 
@@ -3633,7 +3633,7 @@ function decidePostflop(k){
     try{
       var _aiBlind=window._lastBlindBB||G._lockedBB||0;
       var _aiEff=(stk>0?stk:0);
-      var _aiOs=G.opp_seats||[];
+      var _aiOs=G.oppSeats||[];
       for(var _aiI=0;_aiI<_aiOs.length;_aiI++){
         var _aiOc=parseInt(_aiOs[_aiI]&&_aiOs[_aiI].chips)||0;
         var _aiOf=(_aiOs[_aiI]&&_aiOs[_aiI].active!==false&&_aiOs[_aiI].action!=='fold');
@@ -12930,6 +12930,39 @@ function onVisionResult(data){
   // [REV4_DIAG] V2.9.527块后的状态快照
   console.log("[V2.9.527_DIAG_EXIT] pot_after="+G.pot+" stk_after="+G.stk+" bet_after="+G.bet);
 
+  // V2.9.626 FIX(P0): 两按钮假全押降级——LocalActionRecognizer加注行黄像素偶发漏检(btn3Y=0),
+  //   detectSceneFromButtons据"有跟注无加注"误判scene=allin。v625日志铁证(2026-09-12 23:48 QJs):
+  //   BTN面对straddle跟注仅2BB(我方码深11.9BB/ratio0.17),物理上必有加注按钮,却被判allin;
+  //   同类A5s跟3BB被误判allin→Nash紧表误弃。数学判据(与L3583全押硬闸同款85%,BB单位):
+  //   真全押=跟注额≥我方码深85%【或】≥任一活跃对手码深85%;两者都不满足→加注按钮漏检→降级真场景。
+  try{
+    if(G.scene==='allin' && G.bet>0 && G.stk>0){
+      var _v626CallBB=G.bet, _v626MyStk=G.stk;
+      var _v626MyJam=_v626CallBB>=_v626MyStk*0.85;            // 跟注吃掉我方≥85%码深
+      var _v626OppJam=false;
+      if(data.opp_seats&&data.opp_seats.length){
+        for(var _v626i=0;_v626i<data.opp_seats.length;_v626i++){
+          var _o=data.opp_seats[_v626i];
+          if(_o.active===false||_o.action==='fold')continue;
+          var _oStk=(typeof _o.chips==='number')?_o.chips:(parseInt(_o.chips)||0);
+          var _oStkBB=bbValue>0?_oStk/bbValue:0;
+          if(_oStkBB>0 && _v626CallBB>=_oStkBB*0.85){_v626OppJam=true;break;}
+        }
+      }
+      if(!_v626MyJam && !_v626OppJam){
+        // 翻前straddle/limped pot(屏幕只有弃牌+跟注)→call场景(preF L9840只产call/fold,不会误发加注);
+        // 不能降级open——open在preF L9870是"开池加注权",会直接发加注指令而屏幕无加注按钮。
+        // 翻后对手下注→bet场景。
+        var _v626RealScene=(G.phase==='preflop')?'call':'bet';
+        console.log('[V2.9.626假全押降级] 两按钮但跟注'+_v626CallBB+'BB<我方码深'+_v626MyStk+'BB的85%且无对手全押→加注按钮漏检,scene allin→'+_v626RealScene);
+        G.scene=_v626RealScene;
+        G._v626RaiseHidden=true;   // 标记加注按钮物理漏检(策略/执行层诊断用)
+      }else{
+        console.log('[V2.9.626全押确认] 跟注'+_v626CallBB+'BB vs 我方'+_v626MyStk+'BB 对手jam='+_v626OppJam+'→维持allin');
+      }
+    }
+  }catch(_v626err){console.log('[V2.9.626假全押降级] 异常: '+_v626err.message);}
+
   uCards();
   
   // 7. ★ V2.9.12: 确保极速模式始终开启 + 移除loading ★
@@ -13501,7 +13534,7 @@ var NashPushFold={
       var _oppShoveBB=0;
       try{
         var _nbb=window._lastBlindBB||G._lockedBB||200;
-        var _os=G.opp_seats||[];
+        var _os=G.oppSeats||[];
         for(var _oi2=0;_oi2<_os.length;_oi2++){
           var _oc2=parseInt(_os[_oi2]&&_os[_oi2].chips)||0;
           var _of2=(_os[_oi2]&&_os[_oi2].active!==false&&_os[_oi2].action!=='fold');

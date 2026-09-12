@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.625 · 投机牌翻前全压保护+赔率主池cap+Nash allin修复"
+        android:text="V2.9.626 · 两按钮假全押降级修复+oppSeats变量名BUG修复"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
