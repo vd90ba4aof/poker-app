@@ -3308,7 +3308,7 @@ var PreflopLeakGuard={
 
 // ====== 翻前决策 (保持V2.9.215) ======
 function decidePreflop(k){
-  // V3.9: 入参防护 — 识别失败时返回null让旧引擎/兜底接管
+  // V3.9/V2.9.632: 入参防护 — 手牌非法返回null,入口归一后由decide()下游统一安全fold(NO_DATA),不再回落旧引擎
   if(!k||typeof k!=='string'||k.length<2){return null;}
   var p=G.pos||'btn', scene=G.scene||'check', stk=G.stk||100000, pot=G.pot||1, bet=G.bet||0;
   var spr=calcSPR(), eq=eQ(k);
@@ -3387,6 +3387,18 @@ function decidePreflop(k){
     // V3.29b: BB check option — 无人加注时BB免费看牌
     if(p5==='BB'&&(scene==='check'||scene==='call'||scene==='open')&&bet===0){
       return{a:'check',r:'BB check option(无人加注免费看牌)',eq:eq,c:'m',scene:'看牌',spr:spr,_se:true,_seFreq:1};
+    }
+    // V2.9.632 FIX(迁移根因): BB面对limp需补盲(bet>0)——BB无RFI表(_RFI顶层无BB键),
+    //   旧代码直接落 L3391 return null→逃逸旧preF的scene='call' limp池赔率决策。
+    //   现把旧preF口径迁移至此(limped pot便宜补盲,不该全弃): 多人池阈值+底池赔率双门槛,否则fold。
+    if(p5==='BB'&&bet>0&&(scene==='check'||scene==='call'||scene==='open')){
+      var _bbLimpPo=bet>0?bet/Math.max(pot+bet*2,1)*100:0;  // 对齐旧preF limp池口径: pot不含需跟注额, bet*2还原(旧preF poCall公式)
+      var _bbLimpTh=35+Multiway.callThresholdAdj();       // 迁移旧preF: 35+多人池加成(3way+3/multi+6)
+      if(eq>=_bbLimpTh&&eq>=_bbLimpPo){
+        var _exBB=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+        return{a:'call',v:bet,r:'GTO BB补盲limp池(eq'+Math.round(eq)+'%≥需'+Math.round(_bbLimpPo)+'%)',eq:_exBB.eq,c:eq>=55?'h':'m',scene:'BB补盲',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exBB.exploit,_se:true,_seFreq:1};
+      }
+      return _fold(eq,'BB补盲eq'+Math.round(eq)+'%<需'+Math.round(_bbLimpPo)+'%',spr);
     }
     if(!rfi)return null;var freq=rfi[k];
     // V3.29: limper调整 — 前面有人平跟时收紧范围(隔离加注质量更高)
@@ -3611,6 +3623,14 @@ function decidePostflop(k){
   var ip=postflopIP(G.pos);
   var scene=G.scene||'check';
   var street=getCurrentStreet();
+  // V2.9.632 FIX(根因): 翻后场景口径归一——Vision自动链路翻后只产出 check/bet/allin
+  //   (detectSceneFromButtons L12099 + Scene自动推断 L12686),永远不会自动产出 raise/reraise。
+  //   但SE面对下注的全部分支(_facingCBet/_facingCR/_donkDecision/decideTurnDefense/_CR)都判
+  //   scene==='raise',导致翻后面对下注时这些分支全是死代码→SE必然return null→落回旧postF。
+  //   归一: 翻后bet(面对下注)统一映射为SE内部raise语义。
+  //   注: check-raise(我方cbet被加)vision无法识别(ActionLine每街仅一条+FrameDiff不追踪hero),
+  //       G._crDetected是从未赋值的死flag; 故CR场景暂按面对下注处理,不做无证据的reraise推断。
+  if(scene==='bet'){scene='raise';console.log('[V2.9.632场景归一] 翻后bet→raise(面对下注)');}
   // V2.9.610 FIX(P0): 翻后同款全押数学硬闸——bet>=码深85%实质面对全押,
   //   不依赖按钮识别(短码局"全下"按钮可能被误识为加注行致scene误判bet/raise)。
   try{
@@ -3912,6 +3932,53 @@ function decidePostflop(k){
       }
     }
   }
+
+  // ====== V2.9.632 翻后最终赔率收口(全量迁移: 纹理/频率表未覆盖时由GTO赔率决策,不再逃逸旧postF) ======
+  // 阈值口径迁移自旧postF末尾赔率决策(SPRZone.raiseThreshold/callThreshold + 街别加成 + 空气牌fold),
+  // 保证从旧引擎迁移后的策略连续性,而非新增一套拍脑袋规则。scene已在入口归一(bet→raise)。
+  try{
+    var _clHN=(hClass&&hClass.name)?hClass.name:'MEDIUM';
+    // scene归一后: raise=面对下注/加注, reraise=面对再加注(check-raise,仅手动UI可设),
+    //   allin已由上游L3665终端处理。两类面对下注的赔率决策口径一致,统一由收口承接(原_facingCR miss/didPFR面注等逃逸点)。
+    var _effBet=bet>0?Math.min(bet,stk):0;  // 有效跟注额封顶为我方码深(对齐旧postF L10443, V2.9.587)
+    if((scene==='raise'||scene==='reraise')&&_effBet>0){
+      var _need=_effBet/Math.max(pot+_effBet,1)*100;  // 跟注所需权益(底池赔率%, pot已含对手bet)
+      // 空气牌面对下注: 弃牌(旧postF"空气牌不追")
+      if(_clHN==='AIR')return _fold(eq,'收口空气牌不追(eq'+Math.round(eq)+'%)',spr);
+      // 加注base阈值: flop +12 / turn +15 / river仅NUTS-STRONG可加(+12),其他+100(河牌非坚果不加注)
+      var _raiseBase=_need+(street==='turn'?15:street==='river'?((_clHN==='NUTS'||_clHN==='STRONG')?12:100):12);
+      var _raiseTh=SPRZone.raiseThreshold(spr,_raiseBase,_clHN);
+      var _callTh=SPRZone.callThreshold(spr,_need+3,ip,_clHN,street);
+      if(_isMultiway){_callTh+=6;_raiseTh+=4;}  // 多人池防守收紧
+      if(eq>=_raiseTh){
+        var _rcSz=Math.round(Math.min(Math.max(pot*0.66,_effBet*2.2),stk));
+        var _exR=applyExploit(eq,'raise',oppType,{bet:_effBet,pot:pot});
+        return{a:'raise',v:_rcSz,r:'GTO收口 加注(eq'+Math.round(eq)+'%≥'+Math.round(_raiseTh)+'%)',eq:_exR.eq,c:eq>=65?'h':'m',sizing:_rcSz,scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
+      }
+      if(eq>=_callTh){
+        var _exC=applyExploit(eq,'call',oppType,{bet:_effBet,pot:pot});
+        return{a:'call',r:'GTO收口 跟注(eq'+Math.round(eq)+'%≥需'+Math.round(_callTh)+'%)',eq:_exC.eq,c:eq>=55?'h':'m',scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
+      }
+      // IP float: 有位置+非河牌+非MEDIUM+接近赔率→便宜看下一街(注池比按有效注算)
+      if(ip&&street!=='river'&&_clHN!=='MEDIUM'&&eq>=_need-5&&_effBet/Math.max(pot+_effBet,1)<0.75){
+        var _exF=applyExploit(eq,'call',oppType,{bet:_effBet,pot:pot});
+        return{a:'call',r:'GTO收口 float(eq'+Math.round(eq)+'%)',eq:_exF.eq,c:'l',scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
+      }
+      return _fold(eq,'收口弃牌(eq'+Math.round(eq)+'%<需'+Math.round(_callTh)+'%)',spr);
+    }
+    // 免费牌(scene==='check')或数据矛盾(bet=0): eq≥50价值下注,否则过牌(旧postF口径)
+    if(scene==='check'||bet<=0){
+      if(eq>=50){
+        var _vbSz=Math.round(Math.min(pot*0.55,stk));
+        if(_vbSz>=2){
+          var _exV=applyExploit(eq,'raise',oppType,{bet:0,pot:pot});
+          return{a:'raise',v:_vbSz,r:'GTO收口 价值下注(eq'+Math.round(eq)+'%≥50%)',eq:_exV.eq,c:eq>=65?'h':'m',sizing:_vbSz,scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
+        }
+      }
+      var _exK=applyExploit(eq,'check',oppType,{bet:0,pot:pot});
+      return{a:'check',r:'GTO收口 过牌(eq'+Math.round(eq)+'%)',eq:_exK.eq,c:eq>=50?'m':'l',scene:'check',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
+    }
+  }catch(_closeE){console.log('[SE]翻后赔率收口异常→null: '+_closeE.message);}
 
   return null;
 }
@@ -9148,8 +9215,22 @@ function _decideInner(){
         }catch(_hce){console.log('[V2.9.599] SE补挂hClass异常: '+_hce.message);}
       }
     }
-    else{result=cc>0?postF(k):preF(k);_engineStats.seFallthrough++;_engineStats.legacyScene[_stScene]=(_engineStats.legacyScene[_stScene]||0)+1;console.log("[SE] GTO未匹配→旧引擎 "+_stScene);}
-  }else{result=cc>0?postF(k):preF(k);_engineStats.legacyOnly++;_engineStats.legacyScene[(G.phase||'?')+'_'+(G.scene||'?')]=(_engineStats.legacyScene[(G.phase||'?')+'_'+(G.scene||'?')]||0)+1;}
+    else{
+      // V2.9.632 入口归一: SE启用时return null不再落回旧postF/preF(全量迁移)。
+      //   翻前/翻后null逃逸已全部收口(BB补盲limp迁移+翻后赔率收口),合法输入下SE必出决策;
+      //   仍返回null仅见于手牌非法等异常帧,此时安全行为=不下注: result保持null,
+      //   由decide()下游(go L11131/L11157)统一显示「弃牌|NO_DATA」并return,绝不误点。
+      result=null;
+      _engineStats.seFallthrough++;_engineStats.legacyScene[_stScene]=(_engineStats.legacyScene[_stScene]||0)+1;
+      console.log("[SE] GTO返回null(异常帧)→安全fold不归一旧引擎 "+_stScene);
+    }
+  }else{
+    // V2.9.632 旧引擎收窄为【超范围桌隔离兜底】: 仅SE未启用时到达。全文件无任何代码把_seEnabled置false,
+    //   故实际唯一可达条件=G.tt>6(7-9人桌)。SE频率表(RFI/3B只含UTG1/MP/CO/BTN/SB五键,_pos5六位置)
+    //   不支持7-9人桌的UTG2/UTG3,强行放SE会错映MP出错误决策;旧引擎gO/gT/gC有完整O7/O8/O9表,
+    //   故7-9人桌保留旧引擎为唯一正确决策源。≤6人主场景(GG标准现金桌)此分支运行时不可达=主链路已全量归一SE。
+    //   清理边界: preF/postF函数体须与7-9人桌支持共存;待SE补齐7-9人频率表后方可物理删除。
+    result=cc>0?postF(k):preF(k);_engineStats.legacyOnly++;_engineStats.legacyScene[(G.phase||'?')+'_'+(G.scene||'?')]=(_engineStats.legacyScene[(G.phase||'?')+'_'+(G.scene||'?')]||0)+1;}
   _engineStats.total++;try{localStorage.setItem('poker_engine_stats',JSON.stringify(_engineStats));}catch(_esErr){}
   // V2.9.615 FIX(Bug A): 旧引擎路径(preF/postF)无hClass字段→统一补挂handClassify
   // 修复logSelfDecision/logDecision中翻前hClass=UNKNOWN（实证:200条决策61条UNKNOWN占30.5%）
