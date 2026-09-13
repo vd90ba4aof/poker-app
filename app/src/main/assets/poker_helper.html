@@ -441,6 +441,8 @@ var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 // 全局状态
 var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',platform:'standard',rake_cap:0};
 var _pi=null,_ms='h';
+// V2.9.630: 引擎路由统计——记录新旧引擎使用分布,指导渐进式迁移优先级
+var _engineStats={seHit:0,seFallthrough:0,legacyOnly:0,seScene:{},legacyScene:{},total:0};
 var _decisionCache={};var _cacheMax=200;
 function cacheKey(){return G.phase+'_'+G.scene+'_'+G.pos+'_'+G.act+'_'+G.opp+'_'+G.stk+'_'+G.pot+'_'+G.bet+'_a'+(G.ante||0)+'_'+(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'')+G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('')+'L'+G.limpers;}
 var camStream=null,scanTimer=null,scanning=false;
@@ -1263,6 +1265,7 @@ function exportLog(){
     handHistory:HandHistory.getAll(),
     drtaTracker:DRTA.tracker,
     drtaType:DRTA.currentType,
+    engineStats:_engineStats,
     logs:LogBuffer.getAll(),
     nativeErrors:nativeErrors,
     // V2.9.560: JS console日志（poker_log.txt中WebChromeClient捕获的异常/策略/识别日志）
@@ -9090,7 +9093,8 @@ function _decideInner(){
   }
   if(typeof StrategyEngine!=="undefined"&&StrategyEngine.isEnabled()){
     var _seR=cc>0?StrategyEngine.decidePostflop(k):StrategyEngine.decidePreflop(k);
-    if(_seR){result=_seR;console.log("[SE] GTO决策: "+_seR.a+" "+(_seR._seFreq?Math.round(_seR._seFreq*100)+"%":""));
+    var _stScene=(G.phase||'?')+'_'+(G.scene||'?');
+    if(_seR){result=_seR;_engineStats.seHit++;_engineStats.seScene[_stScene]=(_engineStats.seScene[_stScene]||0)+1;console.log("[SE] GTO决策: "+_seR.a+" "+(_seR._seFreq?Math.round(_seR._seFreq*100)+"%":""));
       // V2.9.599 FIX(P0实机铁证20:01:41 6d4d河牌: 悬浮球显示加注但零tap):
       //   SE查表返回(_riverDecision/_turnDecision等3050-4000行)全员漏挂hClass字段
       //   →v598脏帧闸条件②(!r.hClass)对SE决策恒真→eq=0帧raise被误判脏帧return false;
@@ -9107,8 +9111,9 @@ function _decideInner(){
         }catch(_hce){console.log('[V2.9.599] SE补挂hClass异常: '+_hce.message);}
       }
     }
-    else{result=cc>0?postF(k):preF(k);console.log("[SE] GTO未匹配→旧引擎");}
-  }else{result=cc>0?postF(k):preF(k);}
+    else{result=cc>0?postF(k):preF(k);_engineStats.seFallthrough++;_engineStats.legacyScene[_stScene]=(_engineStats.legacyScene[_stScene]||0)+1;console.log("[SE] GTO未匹配→旧引擎 "+_stScene);}
+  }else{result=cc>0?postF(k):preF(k);_engineStats.legacyOnly++;_engineStats.legacyScene[(G.phase||'?')+'_'+(G.scene||'?')]=(_engineStats.legacyScene[(G.phase||'?')+'_'+(G.scene||'?')]||0)+1;}
+  _engineStats.total++;
   // V2.9.615 FIX(Bug A): 旧引擎路径(preF/postF)无hClass字段→统一补挂handClassify
   // 修复logSelfDecision/logDecision中翻前hClass=UNKNOWN（实证:200条决策61条UNKNOWN占30.5%）
   if(result && (!result.hClass || !result.hClass.name)){
