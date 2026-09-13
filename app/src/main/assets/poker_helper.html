@@ -442,7 +442,7 @@ var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',platform:'standard',rake_cap:0};
 var _pi=null,_ms='h';
 // V2.9.630: 引擎路由统计——记录新旧引擎使用分布,指导渐进式迁移优先级
-var _engineStats={seHit:0,seFallthrough:0,legacyOnly:0,seScene:{},legacyScene:{},total:0};
+var _engineStats=(function(){try{var _d=localStorage.getItem('poker_engine_stats');if(_d)return JSON.parse(_d);}catch(e){}return{seHit:0,seFallthrough:0,legacyOnly:0,seScene:{},legacyScene:{},total:0};})();
 var _decisionCache={};var _cacheMax=200;
 function cacheKey(){return G.phase+'_'+G.scene+'_'+G.pos+'_'+G.act+'_'+G.opp+'_'+G.stk+'_'+G.pot+'_'+G.bet+'_a'+(G.ante||0)+'_'+(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'')+G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('')+'L'+G.limpers;}
 var camStream=null,scanTimer=null,scanning=false;
@@ -1386,7 +1386,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.630',
+  CURRENT_VERSION:'2.9.631',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2844,7 +2844,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.630';
+var APP_VERSION='2.9.631';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3455,37 +3455,41 @@ function decidePreflop(k){
       }
     }catch(eSq){console.log('[Squeeze]异常回落3B表: '+eSq.message);}
     var raiserRole=G._raiserRole||'unknown',rP5=_pos5(raiserRole),vsKey='vs_'+rP5,fromKey='from_'+p5;
-    var tb=_3B[vsKey];if(!tb)return null;var posTable=tb[fromKey];if(!posTable)return null;
-    var entry=posTable[k];if(!entry)return _fold(eq,'vs '+rP5+' open不在3B范围',spr);
-    var act=entry.a,f=entry.f;f=_adjFreq3bet(act,f,oppType,raiserRole,p,k);
-    if(act==='3b'){var adj3=_quantExploitAdjust(f,'raise',profile);f=adj3.freq>f?Math.min(1,adj3.freq):f;}
-    // V2.9.615 P3闭环: vs open的3b/c频率leak收紧(掷骰前最后一道,只收紧;fold动作不受影响)
-    if(typeof f==='number'&&f>0){
-      var _lgF2=PreflopLeakGuard.factor(p,k);
-      if(_lgF2<1){console.log('[LeakGuard] vs3B收紧 '+p5+' '+k+' '+act+' f '+f.toFixed(2)+'->'+(f*_lgF2).toFixed(2)+'(x'+_lgF2+')');f=f*_lgF2;}
-    }
-    if(Math.random()>f){
-      if(act==='3b'){act='c';f=_get3bAlt(k,posTable,'c')||0.3;}
-      else if(act==='c'){
-        // V2.9.598 P1-2修复: GTO频率掷骰fold加强牌硬底——翻前面对open,口袋对22+或两张高张(≥J)
-        //   且eq≥60时,频率未命中也不fold(随机数不允许弃掉高牌力手牌;铁证日志决策#18: 口袋44
-        //   翻前eq=71被"call频率35%未命中"掷骰fold)。eq数值虽偏松,但强牌fold的损失不可逆,
-        //   降级为call: 自动模式下中置信call仍会执行,把随机性损失从"弃强牌"降为"多跟一次"。
-        var _isPairPF=(k.length===2&&k[0]===k[1]);
-        var _twoBroadway=(!_isPairPF&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
-        if((_isPairPF||_twoBroadway)&&eq>=60){
-          var exploitHF=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});var weightsHF=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};
-          console.log('[SE] 频率未命中但强牌硬底: '+k+' eq='+eq+'≥60 → 不fold,降级call');
-          return{a:'call',r:'GTO强牌硬底 '+k+' eq'+Math.round(eq)+'%('+Math.round(f*100)+'%频率未命中)',eq:exploitHF.eq,c:'m',sizing:0,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet||pot*2.5,0),exploit:exploitHF.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weightsHF},_se:true,_freqHardFloor:true};
-        }
-        return _fold(eq,'vs '+rP5+' call频率'+Math.round(f*100)+'%未命中',spr);
+    var tb=_3B[vsKey],posTable=tb?tb[fromKey]:null;
+    // V2.9.630 FIX: 3B表无此位置/手牌组合→落到数学兜底而非return null
+    if(!tb||!posTable){console.log('[SE] 翻前3B表未覆盖 vs='+vsKey+' from='+fromKey+' → 落数学兜底');}
+    var entry=posTable?posTable[k]:null;if(posTable&&!entry)return _fold(eq,'vs '+rP5+' open不在3B范围',spr);
+    if(entry!==null){ // V2.9.630: 表缺失时跳过，落到数学兜底
+      var act=entry.a,f=entry.f;f=_adjFreq3bet(act,f,oppType,raiserRole,p,k);
+      if(act==='3b'){var adj3=_quantExploitAdjust(f,'raise',profile);f=adj3.freq>f?Math.min(1,adj3.freq):f;}
+      // V2.9.615 P3闭环: vs open的3b/c频率leak收紧(掷骰前最后一道,只收紧;fold动作不受影响)
+      if(typeof f==='number'&&f>0){
+        var _lgF2=PreflopLeakGuard.factor(p,k);
+        if(_lgF2<1){console.log('[LeakGuard] vs3B收紧 '+p5+' '+k+' '+act+' f '+f.toFixed(2)+'->'+(f*_lgF2).toFixed(2)+'(x'+_lgF2+')');f=f*_lgF2;}
       }
-      else return _fold(eq,'vs '+rP5+' fold',spr);
-    }
-    var actualBet=bet||pot*2.5;
-    if(act==='3b'){var sz3=Math.round(actualBet*3);sz3=_sprSizingAdjust(spr,Math.min(sz3,stk),'3bet');var exploitR2=applyExploit(eq,'raise',oppType,{bet:actualBet,pot:pot,facing3bet:true});var weights2=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'raise',v:sz3,r:'GTO 3bet vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR2.eq,c:'h',sizing:sz3,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:exploitR2.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights2},_se:true,_seFreq:f};}
-    if(act==='c'){var exploitR3=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});var weights3=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR3.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet,0),exploit:exploitR3.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights3},_se:true,_seFreq:f};}
-    return _fold(eq,'vs '+rP5+' fold',spr);
+      if(Math.random()>f){
+        if(act==='3b'){act='c';f=_get3bAlt(k,posTable,'c')||0.3;}
+        else if(act==='c'){
+          // V2.9.598 P1-2修复: GTO频率掷骰fold加强牌硬底——翻前面对open,口袋对22+或两张高张(≥J)
+          //   且eq≥60时,频率未命中也不fold(随机数不允许弃掉高牌力手牌;铁证日志决策#18: 口袋44
+          //   翻前eq=71被"call频率35%未命中"掷骰fold)。eq数值虽偏松,但强牌fold的损失不可逆,
+          //   降级为call: 自动模式下中置信call仍会执行,把随机性损失从"弃强牌"降为"多跟一次"。
+          var _isPairPF=(k.length===2&&k[0]===k[1]);
+          var _twoBroadway=(!_isPairPF&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
+          if((_isPairPF||_twoBroadway)&&eq>=60){
+            var exploitHF=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});var weightsHF=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};
+            console.log('[SE] 频率未命中但强牌硬底: '+k+' eq='+eq+'≥60 → 不fold,降级call');
+            return{a:'call',r:'GTO强牌硬底 '+k+' eq'+Math.round(eq)+'%('+Math.round(f*100)+'%频率未命中)',eq:exploitHF.eq,c:'m',sizing:0,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet||pot*2.5,0),exploit:exploitHF.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weightsHF},_se:true,_freqHardFloor:true};
+          }
+          return _fold(eq,'vs '+rP5+' call频率'+Math.round(f*100)+'%未命中',spr);
+        }
+        else return _fold(eq,'vs '+rP5+' fold',spr);
+      }
+      var actualBet=bet||pot*2.5;
+      if(act==='3b'){var sz3=Math.round(actualBet*3);sz3=_sprSizingAdjust(spr,Math.min(sz3,stk),'3bet');var exploitR2=applyExploit(eq,'raise',oppType,{bet:actualBet,pot:pot,facing3bet:true});var weights2=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'raise',v:sz3,r:'GTO 3bet vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR2.eq,c:'h',sizing:sz3,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:exploitR2.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights2},_se:true,_seFreq:f};}
+      if(act==='c'){var exploitR3=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});var weights3=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR3.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet,0),exploit:exploitR3.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights3},_se:true,_seFreq:f};}
+      return _fold(eq,'vs '+rP5+' fold',spr);
+    } // end V2.9.630 guard
   }
 
   // 3: 面对3bet
@@ -3506,19 +3510,24 @@ function decidePreflop(k){
     }catch(e5b){}
     // rev11 PRE-2: 旧死代码squeeze块已移至scene==='raise'分支(此处scene恒为reraise,旧条件scene==='raise'永假)
     var _f3bKey=p5==='MP'?'UTG1':p5;  // V3.31: MP位置用UTG1策略(5人桌早期位置)
-    var f3b=_F3B[_f3bKey];if(!f3b)return null;var entry3=f3b[k];if(!entry3)return _fold(eq,k+' vs 3bet→fold',spr);
-    var act3=entry3.a,f3=entry3.f;
-    f3=_adjFreq4bet(act3,f3,oppType,k);  // rev11 PRE-4: 4b频率按对手类型调整(maniac×1.2/nit×0.8)
-    // V2.9.615 P3闭环: vs 3bet的4b/c频率leak收紧(4b未中降级s路径保持基线不动;只收紧)
-    if(typeof f3==='number'&&f3>0){
-      var _lgF3=PreflopLeakGuard.factor(p,k);
-      if(_lgF3<1){console.log('[LeakGuard] vs4B收紧 '+p5+' '+k+' '+act3+' f '+f3.toFixed(2)+'->'+(f3*_lgF3).toFixed(2)+'(x'+_lgF3+')');f3=f3*_lgF3;}
-    }
-    if(act3==='4b'&&Math.random()>f3){if(entry3.s){act3=entry3.s.a;f3=entry3.s.f;if(Math.random()>f3)return _fold(eq,k+' vs 3bet 4b未中→'+act3+'未中→fold',spr);}else return _fold(eq,k+' vs 3bet 4b'+Math.round(f3*100)+'%未中→fold',spr);}
-    var actualBet3=bet||pot*3;
-    if(act3==='4b'){var sz4=Math.round(actualBet3*2.5);sz4=_sprSizingAdjust(spr,Math.min(sz4,stk),'4bet');G._heroDid4bet=true;var exploitR4=applyExploit(eq,'raise',oppType,{bet:actualBet3,pot:pot,facing3bet:true});var weights4=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'raise',v:sz4,r:'GTO 4bet('+Math.round(f3*100)+'%)',eq:exploitR4.eq,c:'h',sizing:sz4,scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,sz4),exploit:exploitR4.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights4},_se:true,_seFreq:f3};}
-    if(act3==='c'){var exploitR5=applyExploit(eq,'call',oppType,{bet:actualBet3,pot:pot});var weights5=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call 3bet('+Math.round(f3*100)+'%)',eq:exploitR5.eq,c:eq>=50?'m':'l',scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,0),exploit:exploitR5.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights5},_se:true,_seFreq:f3};}
-    return _fold(eq,'vs 3bet fold',spr);
+    var f3b=_F3B[_f3bKey];
+    // V2.9.630 FIX: F3B表缺失→落到数学兜底而非return null
+    if(!f3b){console.log('[SE] 翻前F3B表未覆盖 pos='+_f3bKey+' → 落数学兜底');}
+    var entry3=f3b?f3b[k]:null;if(f3b&&!entry3)return _fold(eq,k+' vs 3bet→fold',spr);
+    if(entry3!==null){ // V2.9.630: F3B表缺失时跳过，落到数学兜底
+      var act3=entry3.a,f3=entry3.f;
+      f3=_adjFreq4bet(act3,f3,oppType,k);  // rev11 PRE-4: 4b频率按对手类型调整(maniac×1.2/nit×0.8)
+      // V2.9.615 P3闭环: vs 3bet的4b/c频率leak收紧(4b未中降级s路径保持基线不动;只收紧)
+      if(typeof f3==='number'&&f3>0){
+        var _lgF3=PreflopLeakGuard.factor(p,k);
+        if(_lgF3<1){console.log('[LeakGuard] vs4B收紧 '+p5+' '+k+' '+act3+' f '+f3.toFixed(2)+'->'+(f3*_lgF3).toFixed(2)+'(x'+_lgF3+')');f3=f3*_lgF3;}
+      }
+      if(act3==='4b'&&Math.random()>f3){if(entry3.s){act3=entry3.s.a;f3=entry3.s.f;if(Math.random()>f3)return _fold(eq,k+' vs 3bet 4b未中→'+act3+'未中→fold',spr);}else return _fold(eq,k+' vs 3bet 4b'+Math.round(f3*100)+'%未中→fold',spr);}
+      var actualBet3=bet||pot*3;
+      if(act3==='4b'){var sz4=Math.round(actualBet3*2.5);sz4=_sprSizingAdjust(spr,Math.min(sz4,stk),'4bet');G._heroDid4bet=true;var exploitR4=applyExploit(eq,'raise',oppType,{bet:actualBet3,pot:pot,facing3bet:true});var weights4=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'raise',v:sz4,r:'GTO 4bet('+Math.round(f3*100)+'%)',eq:exploitR4.eq,c:'h',sizing:sz4,scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,sz4),exploit:exploitR4.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights4},_se:true,_seFreq:f3};}
+      if(act3==='c'){var exploitR5=applyExploit(eq,'call',oppType,{bet:actualBet3,pot:pot});var weights5=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call 3bet('+Math.round(f3*100)+'%)',eq:exploitR5.eq,c:eq>=50?'m':'l',scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,0),exploit:exploitR5.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights5},_se:true,_seFreq:f3};}
+      return _fold(eq,'vs 3bet fold',spr);
+    } // end V2.9.630 guard
   }
 
   // 4: 面对allin
@@ -3533,7 +3542,7 @@ function decidePreflop(k){
     if(_cappedPot<pot){console.log('[V2.9.625主池cap] pot '+pot+'→'+_cappedPot+' (stk='+stk+' inPot='+_inPotForCap+')');}
     var callThresh=allinBet>0?Math.round(allinBet/(_cappedPot+allinBet)*100):50;  // V2.9.585+V2.9.625: 用cappedPot计算真实赔率
     var _preAiRatio=pot>0?allinBet/(_cappedPot+allinBet):0;
-    // V2.9.622 FIX(P0, 实机日志2026-09-12 6h4s stk24BB面8BB全押eq31%赔率38%却用25%门槛跟): 
+    // V2.9.622 FIX(P0, 实机日志2026-09-12 6h4s stk24BB面8BB全押eq31%赔率38%却用25%门槛跟):
     //   Math.min(callThresh+3,25)把赔率门槛封顶在25%——赔率要求38%时门槛被压到25%,
     //   31%>25%通过但31%<38%赔率=纯负EV。改为Math.max保证门槛永远不低于赔率要求,
     //   同时保留25%地板(赔率<25%时门槛不低于25%,防极小赔率噪声)。
@@ -3546,27 +3555,27 @@ function decidePreflop(k){
     // 新条件:>15BB(非极短码) 或 大jam(注池比>=0.5) 或 多人池(3way+),15BB以下仍走Nash路径
     var _aiDeep=(_oppEffBB>15)||(_preAiRatio>=0.5)||((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=3));
     if(_aiDeep){
-      // B闸-牌力硬底(不依赖eq质量): 翻前接全押,仅对子22+或两张>=J双高张(与L3432强牌硬底同口径);
-      //   投机牌(同花连张/小对子/A低同花)翻前无翻后潜力可兑现,直接fold
+    // B闸-牌力硬底(不依赖eq质量): 翻前接全押,仅对子22+或两张>=J双高张(与L3432强牌硬底同口径);
+    //   投机牌(同花连张/小对子/A低同花)翻前无翻后潜力可兑现,直接fold
       var _aiPair=(k.length===2&&k[0]===k[1]);
       var _aiTwoBroad=(!_aiPair&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
       if(!_aiPair&&!_aiTwoBroad){
-        console.log('[V2.9.625全押硬闸] '+k+' 翻前全压非强牌(非对子非双J+) fold (oppEff='+_oppEffBB+'BB ratio='+_preAiRatio.toFixed(2)+' inPot='+((typeof G._inPotPlayers!=='undefined')?G._inPotPlayers:'?')+')');
-        return _fold(allinEq,'[V2.9.625全押硬闸] '+k+' 翻前全压牌力不足弃',spr);
+      console.log('[V2.9.625全押硬闸] '+k+' 翻前全压非强牌(非对子非双J+) fold (oppEff='+_oppEffBB+'BB ratio='+_preAiRatio.toFixed(2)+' inPot='+((typeof G._inPotPlayers!=='undefined')?G._inPotPlayers:'?')+')');
+      return _fold(allinEq,'[V2.9.625全押硬闸] '+k+' 翻前全压牌力不足弃',spr);
       }
-      // A闸-eq真实化: 查表值替换为mcVsRange对实际开牌范围+实际进池人数的蒙特卡洛胜率(复用翻后同款函数,不拍新范围表)。
-      //   强牌(TT+/AQ+)HU仍65%+正常跟;多人池弱牌eq按人数客观回落。异常try-catch降级查表值。
-      //   V2.9.625: 扩展触发条件后,短码多人池(如3way 2BB)也能用MC修正eq,避免单挑eq虚高导致错误call
+    // A闸-eq真实化: 查表值替换为mcVsRange对实际开牌范围+实际进池人数的蒙特卡洛胜率(复用翻后同款函数,不拍新范围表)。
+    //   强牌(TT+/AQ+)HU仍65%+正常跟;多人池弱牌eq按人数客观回落。异常try-catch降级查表值。
+    //   V2.9.625: 扩展触发条件后,短码多人池(如3way 2BB)也能用MC修正eq,避免单挑eq虚高导致错误call
       try{
-        var _aiHole=(G.hole||[]).filter(function(c){return c;});
-        var _aiN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
-        var _aiOpp=Math.max(1,_aiN-1);
-        if(_aiHole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'){
-          var _aiRange=gO(G.pos||'btn');
-          var _aiMs=mcVsRange(_aiHole,[],_aiRange,1500,_aiOpp);
-          if(_aiMs&&typeof _aiMs.eq==='number'&&_aiMs.eq>0){
-            console.log('[V2.9.625全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
-            allinEq=_aiMs.eq;
+      var _aiHole=(G.hole||[]).filter(function(c){return c;});
+      var _aiN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
+      var _aiOpp=Math.max(1,_aiN-1);
+      if(_aiHole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'){
+      var _aiRange=gO(G.pos||'btn');
+      var _aiMs=mcVsRange(_aiHole,[],_aiRange,1500,_aiOpp);
+      if(_aiMs&&typeof _aiMs.eq==='number'&&_aiMs.eq>0){
+      console.log('[V2.9.625全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
+      allinEq=_aiMs.eq;
           }
         }
       }catch(_aiE){console.log('[V2.9.625全押eq] 异常降级查表: '+_aiE.message);}
@@ -9183,7 +9192,7 @@ function _decideInner(){
     }
     else{result=cc>0?postF(k):preF(k);_engineStats.seFallthrough++;_engineStats.legacyScene[_stScene]=(_engineStats.legacyScene[_stScene]||0)+1;console.log("[SE] GTO未匹配→旧引擎 "+_stScene);}
   }else{result=cc>0?postF(k):preF(k);_engineStats.legacyOnly++;_engineStats.legacyScene[(G.phase||'?')+'_'+(G.scene||'?')]=(_engineStats.legacyScene[(G.phase||'?')+'_'+(G.scene||'?')]||0)+1;}
-  _engineStats.total++;
+  _engineStats.total++;try{localStorage.setItem('poker_engine_stats',JSON.stringify(_engineStats));}catch(_esErr){}
   // V2.9.615 FIX(Bug A): 旧引擎路径(preF/postF)无hClass字段→统一补挂handClassify
   // 修复logSelfDecision/logDecision中翻前hClass=UNKNOWN（实证:200条决策61条UNKNOWN占30.5%）
   if(result && (!result.hClass || !result.hClass.name)){
