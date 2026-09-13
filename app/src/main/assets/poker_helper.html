@@ -3787,7 +3787,7 @@ function decidePostflop(k){
   // ★ V3.34: Turn Barrel纹理表 (完整纹理×类型表, 优先于简化DB)
   // rev12修复POST-13: 旧门槛ActionLine.didFlopCBet()把delayed cbet(翻牌check转牌开枪)完全排除,
   // _turnBarrel内本有didFlopCBet===false→freq*0.3的弱化档却永远走不到。改为传入真实状态,延迟开火低频可用
-  if(street==='turn' && didPFR && typeof _turnBarrel==='function'){
+  if(street==='turn' && didPFR && scene==='check' && typeof _turnBarrel==='function'){
     try{
       var _didFCB=ActionLine.didFlopCBet();
       var _tbR=_turnBarrel(k,hcKey,btKey,'b',bet,pot,_didFCB,ip,oppType,{cbet:1,fcb:1,bluff:1},_is3betPot,_isMultiway,eq);
@@ -9314,7 +9314,7 @@ function _decideInner(){
             //   Kotlin侧L906读到非零sizing有走下注路径风险。check/call无下注动作,sizing必须清零。
             if(result.a==='check'||result.a==='call'){result.v=0;result.sizing=0;}
             // sizing 字符串→数字BB
-            var _szMap={allin:function(){return G.stk||100;},big:function(){return G.stk||100;},pot:function(){return G.pot||0;},'80%pot':function(){return Math.round((G.pot||0)*0.8);},'75%pot':function(){return Math.round((G.pot||0)*0.75);},'66%pot':function(){return Math.round((G.pot||0)*0.66);},'50%pot':function(){return Math.round((G.pot||0)*0.5);},'33%pot':function(){return Math.round((G.pot||0)*0.33);}};
+            var _szMap={allin:function(){return G.stk||100;},big:function(){return G.stk||100;},pot:function(){return G.pot||0;},'80%pot':function(){return Math.round((G.pot||0)*0.8);},'75%pot':function(){return Math.round((G.pot||0)*0.75);},'66%pot':function(){return Math.round((G.pot||0)*0.66);},'50%pot':function(){return Math.round((G.pot||0)*0.5);},'33%pot':function(){return Math.round((G.pot||0)*0.33);},'25%pot':function(){return Math.round((G.pot||0)*0.25);}};
             if(_psmResult.sizing&&_szMap[_psmResult.sizing]){result.v=_szMap[_psmResult.sizing]();}
             result.r='[池驱反fold '+_poolType+'/'+_thickness+'] '+_psmResult.reason+' '+result.r;
             var _newColorKey=actionToColor(result.a);
