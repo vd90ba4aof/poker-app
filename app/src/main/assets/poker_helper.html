@@ -1386,7 +1386,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.631',
+  CURRENT_VERSION:'2.9.632',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2844,7 +2844,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.631';
+var APP_VERSION='2.9.632';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -2878,25 +2878,44 @@ var _3B={
     from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4}},
     from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},TT:{a:'c',f:.8},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},ATs:{a:'c',f:.4},KQs:{a:'c',f:.5},KJs:{a:'c',f:.4},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4},T9s:{a:'c',f:.3}},
     from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},"77":{a:'c',f:.4},AJs:{a:'c',f:.5},ATo:{a:'c',f:.5},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},KTs:{a:'c',f:.5},KQo:{a:'c',f:.3},QTs:{a:'c',f:.4},QJs:{a:'c',f:.4},JTs:{a:'c',f:.5},T9s:{a:'c',f:.4},"98s":{a:'c',f:.3},AJo:{a:'c',f:.3},QJo:{a:'c',f:.2}},
-    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},A5s:{a:'3b',f:.3},JJ:{a:'c',f:.8},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQs:{a:'c',f:.6},AQo:{a:'c',f:.5},AJs:{a:'c',f:.4},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}}
+    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},A5s:{a:'3b',f:.3},JJ:{a:'c',f:.8},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQs:{a:'c',f:.6},AQo:{a:'c',f:.5},AJs:{a:'c',f:.4},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}},
+    from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.3},JJ:{a:'c',f:.7},TT:{a:'c',f:.6},"99":{a:'c',f:.5},"88":{a:'c',f:.4},AQo:{a:'c',f:.4},AJs:{a:'c',f:.4},KQs:{a:'c',f:.3},QJs:{a:'c',f:.2},JTs:{a:'c',f:.2}},
+    from_HJ:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}}
   },
   vs_CO:{
     from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.3},A2s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},QJs:{a:'3b',f:.1},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.5},"55":{a:'c',f:.4},"44":{a:'c',f:.3},"33":{a:'c',f:.2},"22":{a:'c',f:.2},ATs:{a:'c',f:.8},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},K9s:{a:'c',f:.5},JTs:{a:'c',f:.7},T9s:{a:'c',f:.7},"98s":{a:'c',f:.6},"87s":{a:'c',f:.5},"76s":{a:'c',f:.4},AJo:{a:'c',f:.5},KQo:{a:'c',f:.4}},
     from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.3},KJs:{a:'3b',f:.2},QJs:{a:'3b',f:.2},KQo:{a:'3b',f:.3},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},"66":{a:'c',f:.4},"55":{a:'c',f:.3},"44":{a:'c',f:.25},"33":{a:'c',f:.2},"22":{a:'c',f:.2},ATo:{a:'c',f:.5},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},KTs:{a:'c',f:.5},K9s:{a:'c',f:.3},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},Q9s:{a:'c',f:.3},QJo:{a:'c',f:.25},JTs:{a:'c',f:.5},J9s:{a:'c',f:.3},JTo:{a:'c',f:.25},T9s:{a:'c',f:.5},T8s:{a:'c',f:.3},"98s":{a:'c',f:.4},"87s":{a:'c',f:.3},"76s":{a:'c',f:.25},AJo:{a:'c',f:.3}},
-    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},"99":{a:'3b',f:.3},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},"98s":{a:'3b',f:.2},"87s":{a:'3b',f:.2},AJs:{a:'c',f:.6},ATs:{a:'c',f:.7},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},QJs:{a:'c',f:.5},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.6},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"88":{a:'c',f:.7},"77":{a:'c',f:.6}}
+    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},"99":{a:'3b',f:.3},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},"98s":{a:'3b',f:.2},"87s":{a:'3b',f:.2},AJs:{a:'c',f:.6},ATs:{a:'c',f:.7},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},QJs:{a:'c',f:.5},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.6},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"88":{a:'c',f:.7},"77":{a:'c',f:.6}},
+    from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.6},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.4},TT:{a:'c',f:.8},"99":{a:'c',f:.7},AQo:{a:'c',f:.5},AJs:{a:'c',f:.6},KQs:{a:'c',f:.5},"88":{a:'c',f:.6},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4}},
+    from_MP:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},ATs:{a:'c',f:.8},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.5},JTs:{a:'c',f:.6},T9s:{a:'c',f:.6},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4}},
+    from_HJ:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},"99":{a:'c',f:.9},"88":{a:'c',f:.7},"77":{a:'c',f:.6},ATs:{a:'c',f:.8},AJs:{a:'c',f:.5},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},QJs:{a:'c',f:.5},JTs:{a:'c',f:.6},T9s:{a:'c',f:.6},AJo:{a:'c',f:.4},KQs:{a:'c',f:.4}},
+    from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},A2s:{a:'3b',f:.2},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},ATs:{a:'c',f:.7},AJs:{a:'c',f:.5},A9s:{a:'c',f:.6},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},QJs:{a:'c',f:.5},JTs:{a:'c',f:.6},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},AJo:{a:'c',f:.4},KQo:{a:'c',f:.3}}
   },
   vs_MP:{
     from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.4},TT:{a:'c',f:.8},"99":{a:'c',f:.7},AQo:{a:'c',f:.6},AJs:{a:'c',f:.6},KQs:{a:'c',f:.5},"88":{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4},A4s:{a:'3b',f:.3}},
     from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},ATs:{a:'c',f:.8},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.5},JTs:{a:'c',f:.7},T9s:{a:'c',f:.7},KQs:{a:'c',f:.5}},
     from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},KQs:{a:'3b',f:.3},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},"66":{a:'c',f:.4},"55":{a:'c',f:.3},ATo:{a:'c',f:.6},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},KTs:{a:'c',f:.5},KJs:{a:'c',f:.4},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},QJo:{a:'c',f:.3},JTs:{a:'c',f:.5},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},"87s":{a:'c',f:.3},AJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJs:{a:'c',f:.5},KQo:{a:'c',f:.3},QJs:{a:'c',f:.4}},
-    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},KQs:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},AJs:{a:'c',f:.7},ATs:{a:'c',f:.8},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.6},JTs:{a:'c',f:.7}}
+    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},KQs:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},AJs:{a:'c',f:.7},ATs:{a:'c',f:.8},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.6},JTs:{a:'c',f:.7}},
+    from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}},
+    from_HJ:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.6},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},TT:{a:'c',f:.8},"99":{a:'c',f:.7},"88":{a:'c',f:.6},AQo:{a:'c',f:.5},AJs:{a:'c',f:.6},KQs:{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4}}
   },
   vs_BTN:{
     from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},AJo:{a:'3b',f:.2},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.3},KJs:{a:'3b',f:.2},QJs:{a:'3b',f:.2},KQo:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},"44":{a:'c',f:.3},"33":{a:'c',f:.25},"22":{a:'c',f:.25},ATo:{a:'c',f:.7},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KTs:{a:'c',f:.6},K9s:{a:'c',f:.4},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},Q9s:{a:'c',f:.3},QJo:{a:'c',f:.25},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},JTo:{a:'c',f:.3},T9s:{a:'c',f:.6},T8s:{a:'c',f:.4},T9o:{a:'c',f:.3},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},"65s":{a:'c',f:.25},"64s":{a:'c',f:.15},"54s":{a:'c',f:.2}},
-    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},"99":{a:'3b',f:.3},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},AJs:{a:'3b',f:.2},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},K5s:{a:'3b',f:.2},K4s:{a:'3b',f:.2},"98s":{a:'3b',f:.3},"87s":{a:'3b',f:.2},ATs:{a:'c',f:.7},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},A6s:{a:'c',f:.3},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},K9s:{a:'c',f:.4},QJs:{a:'c',f:.5},QTs:{a:'c',f:.4},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.6},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},"65s":{a:'c',f:.3},"54s":{a:'c',f:.2},AJo:{a:'c',f:.3},KQo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.2},K8o:{a:'c',f:.2},K7o:{a:'c',f:.15},Q9o:{a:'c',f:.3},Q8o:{a:'c',f:.2},J9o:{a:'c',f:.25},T9o:{a:'c',f:.3},"98o":{a:'c',f:.25},"87o":{a:'c',f:.15},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.45},"55":{a:'c',f:.4},"44":{a:'c',f:.35},"33":{a:'c',f:.3},"22":{a:'c',f:.3},}},
+    from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},"99":{a:'3b',f:.3},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},AJs:{a:'3b',f:.2},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.3},KQs:{a:'3b',f:.2},K5s:{a:'3b',f:.2},K4s:{a:'3b',f:.2},"98s":{a:'3b',f:.3},"87s":{a:'3b',f:.2},ATs:{a:'c',f:.7},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},A6s:{a:'c',f:.3},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},K9s:{a:'c',f:.4},QJs:{a:'c',f:.5},QTs:{a:'c',f:.4},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.6},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},"65s":{a:'c',f:.3},"54s":{a:'c',f:.2},AJo:{a:'c',f:.3},KQo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.2},K8o:{a:'c',f:.2},K7o:{a:'c',f:.15},Q9o:{a:'c',f:.3},Q8o:{a:'c',f:.2},J9o:{a:'c',f:.25},T9o:{a:'c',f:.3},"98o":{a:'c',f:.25},"87o":{a:'c',f:.15},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.45},"55":{a:'c',f:.4},"44":{a:'c',f:.35},"33":{a:'c',f:.3},"22":{a:'c',f:.3},},
+    from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.6},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.4},TT:{a:'c',f:.8},"99":{a:'c',f:.7},"88":{a:'c',f:.6},AQo:{a:'c',f:.5},AJs:{a:'c',f:.6},A9s:{a:'c',f:.5},KQs:{a:'c',f:.5},"77":{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4}},
+    from_MP:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.5},"55":{a:'c',f:.4},ATs:{a:'c',f:.8},A9s:{a:'c',f:.7},AJs:{a:'c',f:.6},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},QJs:{a:'c',f:.5},JTs:{a:'c',f:.6},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},AJo:{a:'c',f:.4}},
+    from_HJ:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.5},"55":{a:'c',f:.4},ATs:{a:'c',f:.8},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},AJs:{a:'c',f:.5},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},QJs:{a:'c',f:.5},JTs:{a:'c',f:.6},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},AJo:{a:'c',f:.4}},
+    from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.5},"55":{a:'c',f:.4},ATs:{a:'c',f:.8},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.5},JTs:{a:'c',f:.6},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},AJo:{a:'c',f:.5},KQo:{a:'c',f:.4}},
+    from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},A2s:{a:'3b',f:.2},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},"44":{a:'c',f:.3},"33":{a:'c',f:.25},ATo:{a:'c',f:.6},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},KJs:{a:'c',f:.5},KTs:{a:'c',f:.5},QJs:{a:'c',f:.5},JTs:{a:'c',f:.5},T9s:{a:'c',f:.4},"98s":{a:'c',f:.4},AJo:{a:'c',f:.3},KQo:{a:'c',f:.3},QJo:{a:'c',f:.2}}
+  },
   vs_SB:{
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},"99":{a:'3b',f:.4},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.4},KJs:{a:'3b',f:.3},QJs:{a:'3b',f:.25},KQo:{a:'3b',f:.35},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},"44":{a:'c',f:.4},"33":{a:'c',f:.35},"22":{a:'c',f:.35},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KTs:{a:'c',f:.6},K9s:{a:'c',f:.5},QTs:{a:'c',f:.5},Q9s:{a:'c',f:.4},JTs:{a:'c',f:.6},J9s:{a:'c',f:.4},T9s:{a:'c',f:.5},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},AJo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.25},K8o:{a:'c',f:.2},K7o:{a:'c',f:.15},K5s:{a:'3b',f:.2},K4s:{a:'3b',f:.2},Q9o:{a:'c',f:.3},Q8o:{a:'c',f:.2},J9o:{a:'c',f:.25},T9o:{a:'c',f:.3},"98o":{a:'c',f:.25},"87o":{a:'c',f:.15},"65s":{a:'c',f:.3},"54s":{a:'c',f:.2}},
-    from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.4},KJs:{a:'3b',f:.3},KQo:{a:'3b',f:.35},"99":{a:'c',f:.85},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},ATs:{a:'c',f:.75},KTs:{a:'c',f:.6},K9s:{a:'c',f:.5},QJs:{a:'c',f:.55},QTs:{a:'c',f:.5},JTs:{a:'c',f:.65},J9s:{a:'c',f:.45},T9s:{a:'c',f:.55},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},AJo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.25},JTo:{a:'c',f:.3},T9o:{a:'c',f:.25}}
+    from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},A3s:{a:'3b',f:.4},A2s:{a:'3b',f:.4},KQs:{a:'3b',f:.4},KJs:{a:'3b',f:.3},KQo:{a:'3b',f:.35},"99":{a:'c',f:.85},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},ATs:{a:'c',f:.75},KTs:{a:'c',f:.6},K9s:{a:'c',f:.5},QJs:{a:'c',f:.55},QTs:{a:'c',f:.5},JTs:{a:'c',f:.65},J9s:{a:'c',f:.45},T9s:{a:'c',f:.55},T8s:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.4},"76s":{a:'c',f:.3},AJo:{a:'c',f:.4},KJo:{a:'c',f:.3},QJo:{a:'c',f:.25},JTo:{a:'c',f:.3},T9o:{a:'c',f:.25}},
+    from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.7},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},TT:{a:'c',f:.7},"99":{a:'c',f:.6},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4},"88":{a:'c',f:.6},"77":{a:'c',f:.5},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}},
+    from_MP:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},ATs:{a:'c',f:.7},A9s:{a:'c',f:.6},KJs:{a:'c',f:.5},KTs:{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.5},T9s:{a:'c',f:.4},"98s":{a:'c',f:.3},AJo:{a:'c',f:.3}},
+    from_HJ:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.65},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.35},A5s:{a:'3b',f:.55},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},"99":{a:'c',f:.85},"88":{a:'c',f:.75},"77":{a:'c',f:.65},"66":{a:'c',f:.55},"55":{a:'c',f:.45},ATs:{a:'c',f:.75},A9s:{a:'c',f:.65},A8s:{a:'c',f:.55},KJs:{a:'c',f:.55},KTs:{a:'c',f:.5},QJs:{a:'c',f:.45},JTs:{a:'c',f:.55},T9s:{a:'c',f:.45},"98s":{a:'c',f:.35},AJo:{a:'c',f:.35},KQo:{a:'c',f:.3}},
+    from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.65},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.4},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.45},A3s:{a:'3b',f:.35},"99":{a:'c',f:.85},"88":{a:'c',f:.75},"77":{a:'c',f:.65},"66":{a:'c',f:.55},"55":{a:'c',f:.45},"44":{a:'c',f:.4},ATs:{a:'c',f:.75},A9s:{a:'c',f:.65},A8s:{a:'c',f:.55},KJs:{a:'c',f:.6},KTs:{a:'c',f:.55},QJs:{a:'c',f:.5},QTs:{a:'c',f:.45},JTs:{a:'c',f:.6},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},AJo:{a:'c',f:.4},KQo:{a:'c',f:.3},QJo:{a:'c',f:.25}},
+    from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.95},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.7},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.85},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.55},AJs:{a:'3b',f:.4},ATs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},ATo:{a:'c',f:.6},A9s:{a:'c',f:.65},A8s:{a:'c',f:.55},KJs:{a:'c',f:.5},KTs:{a:'c',f:.45},K9s:{a:'c',f:.35},QJs:{a:'c',f:.4},QTs:{a:'c',f:.35},JTs:{a:'c',f:.5},T9s:{a:'c',f:.4},"98s":{a:'c',f:.3},AJo:{a:'c',f:.3},KQo:{a:'c',f:.25},QJo:{a:'c',f:.2}}
   }
 };
 
@@ -2985,7 +3004,7 @@ var _RIV_BLUFF={.25:.2,.33:.25,.5:.33,.66:.4,.75:.43,1:.5,1.5:.6,2:.67};
 
 // ====== 第三部分: 核心引擎 ======
 
-function _pos5(p){var m={utg1:'UTG1',utg:'UTG1',mp:'MP',mp1:'MP',hj:'MP',co:'CO',btn:'BTN',sb:'SB',bb:'BB'};return m[p]||'BTN';}
+function _pos5(p){var m={utg1:'UTG1',utg:'UTG1',mp:'MP',mp1:'MP',hj:'MP',co:'CO',btn:'BTN',sb:'SB',bb:'BB'};return m[p]||'MP';}
 
 function _bt2key(bt){
   if(!bt||bt.category==='preflop')return'0';
@@ -3456,10 +3475,8 @@ function decidePreflop(k){
     }catch(eSq){console.log('[Squeeze]异常回落3B表: '+eSq.message);}
     var raiserRole=G._raiserRole||'unknown',rP5=_pos5(raiserRole),vsKey='vs_'+rP5,fromKey='from_'+p5;
     var tb=_3B[vsKey],posTable=tb?tb[fromKey]:null;
-    // V2.9.630 FIX: 3B表无此位置/手牌组合→落到数学兜底而非return null
-    if(!tb||!posTable){console.log('[SE] 翻前3B表未覆盖 vs='+vsKey+' from='+fromKey+' → 落数学兜底');}
     var entry=posTable?posTable[k]:null;if(posTable&&!entry)return _fold(eq,'vs '+rP5+' open不在3B范围',spr);
-    if(entry!==null){ // V2.9.630: 表缺失时跳过，落到数学兜底
+    if(entry!==null){
       var act=entry.a,f=entry.f;f=_adjFreq3bet(act,f,oppType,raiserRole,p,k);
       if(act==='3b'){var adj3=_quantExploitAdjust(f,'raise',profile);f=adj3.freq>f?Math.min(1,adj3.freq):f;}
       // V2.9.615 P3闭环: vs open的3b/c频率leak收紧(掷骰前最后一道,只收紧;fold动作不受影响)
@@ -3489,7 +3506,7 @@ function decidePreflop(k){
       if(act==='3b'){var sz3=Math.round(actualBet*3);sz3=_sprSizingAdjust(spr,Math.min(sz3,stk),'3bet');var exploitR2=applyExploit(eq,'raise',oppType,{bet:actualBet,pot:pot,facing3bet:true});var weights2=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'raise',v:sz3,r:'GTO 3bet vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR2.eq,c:'h',sizing:sz3,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:exploitR2.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights2},_se:true,_seFreq:f};}
       if(act==='c'){var exploitR3=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});var weights3=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR3.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet,0),exploit:exploitR3.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights3},_se:true,_seFreq:f};}
       return _fold(eq,'vs '+rP5+' fold',spr);
-    } // end V2.9.630 guard
+    }
   }
 
   // 3: 面对3bet
@@ -3511,10 +3528,8 @@ function decidePreflop(k){
     // rev11 PRE-2: 旧死代码squeeze块已移至scene==='raise'分支(此处scene恒为reraise,旧条件scene==='raise'永假)
     var _f3bKey=p5==='MP'?'UTG1':p5;  // V3.31: MP位置用UTG1策略(5人桌早期位置)
     var f3b=_F3B[_f3bKey];
-    // V2.9.630 FIX: F3B表缺失→落到数学兜底而非return null
-    if(!f3b){console.log('[SE] 翻前F3B表未覆盖 pos='+_f3bKey+' → 落数学兜底');}
     var entry3=f3b?f3b[k]:null;if(f3b&&!entry3)return _fold(eq,k+' vs 3bet→fold',spr);
-    if(entry3!==null){ // V2.9.630: F3B表缺失时跳过，落到数学兜底
+    if(entry3!==null){
       var act3=entry3.a,f3=entry3.f;
       f3=_adjFreq4bet(act3,f3,oppType,k);  // rev11 PRE-4: 4b频率按对手类型调整(maniac×1.2/nit×0.8)
       // V2.9.615 P3闭环: vs 3bet的4b/c频率leak收紧(4b未中降级s路径保持基线不动;只收紧)
@@ -3527,7 +3542,7 @@ function decidePreflop(k){
       if(act3==='4b'){var sz4=Math.round(actualBet3*2.5);sz4=_sprSizingAdjust(spr,Math.min(sz4,stk),'4bet');G._heroDid4bet=true;var exploitR4=applyExploit(eq,'raise',oppType,{bet:actualBet3,pot:pot,facing3bet:true});var weights4=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'raise',v:sz4,r:'GTO 4bet('+Math.round(f3*100)+'%)',eq:exploitR4.eq,c:'h',sizing:sz4,scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,sz4),exploit:exploitR4.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights4},_se:true,_seFreq:f3};}
       if(act3==='c'){var exploitR5=applyExploit(eq,'call',oppType,{bet:actualBet3,pot:pot});var weights5=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call 3bet('+Math.round(f3*100)+'%)',eq:exploitR5.eq,c:eq>=50?'m':'l',scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,0),exploit:exploitR5.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights5},_se:true,_seFreq:f3};}
       return _fold(eq,'vs 3bet fold',spr);
-    } // end V2.9.630 guard
+    }
   }
 
   // 4: 面对allin
@@ -3584,46 +3599,7 @@ function decidePreflop(k){
     return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%',spr);
   }
 
-  // ====== V2.9.630 翻前数学兜底 ======
-  // 目的: 覆盖Nash未处理的超短码(对手>15BB) + 3B/F3B表缺失场景
-  if(scene==='raise'&&bet>0){
-    var _pfPotOdds=Math.round(bet/(pot+bet)*100);
-    var _pfNeed=_pfPotOdds+8;
-    // 超短码(≤8BB): 赔率够+牌力够→全下, 否则弃牌(不走投机跟注)
-    if(_myEffBB<=8){
-      if(eq>=_pfNeed&&eq>=40){
-        return{a:'raise',v:_myEffBB,r:'GTO兜底 超短码全下(eq'+Math.round(eq)+'%≥'+_pfNeed+'%,SPR'+spr.toFixed(1)+')',eq:eq,c:eq>=55?'m':'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
-      }
-      return _fold(eq,'GTO兜底 超短码弃牌(eq'+Math.round(eq)+'%<'+_pfNeed+'%或<40%)',spr);
-    }
-    // 非超短码: 赔率决策(强牌加注,中等跟注,弱牌弃牌)
-    if(eq>=_pfNeed+15){
-      var _pfR3Sz=Math.round(bet*3);_pfR3Sz=Math.min(_pfR3Sz,stk);
-      var _pfExpR=applyExploit(eq,'raise',oppType,{bet:bet,pot:pot});
-      return{a:'raise',v:_pfR3Sz,r:'GTO兜底 3bet(eq'+Math.round(eq)+'%≥'+(_pfNeed+15)+'%)',eq:_pfExpR.eq,c:'h',sizing:_pfR3Sz,scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
-    }
-    if(eq>=_pfNeed){
-      var _pfExpC=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
-      return{a:'call',r:'GTO兜底 跟注(eq'+Math.round(eq)+'%≥需'+_pfNeed+'%,赔率'+_pfPotOdds+'%)',eq:_pfExpC.eq,c:eq>=50?'m':'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
-    }
-    return _fold(eq,'GTO兜底 弃牌(eq'+Math.round(eq)+'%<需'+_pfNeed+'%)',spr);
-  }
-  if(scene==='reraise'&&bet>0){
-    var _pf3PotOdds=Math.round(bet/(pot+bet)*100);
-    var _pf3Need=_pf3PotOdds+5;
-    if(eq>=_pf3Need+20){
-      var _pf4Sz=Math.round(bet*2.5);_pf4Sz=Math.min(_pf4Sz,stk);
-      var _pfExp4=applyExploit(eq,'raise',oppType,{bet:bet,pot:pot,facing3bet:true});
-      return{a:'raise',v:_pf4Sz,r:'GTO兜底 4bet(eq'+Math.round(eq)+'%≥'+(_pf3Need+20)+'%)',eq:_pfExp4.eq,c:'h',sizing:_pf4Sz,scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
-    }
-    if(eq>=_pf3Need){
-      var _pfExpC2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
-      return{a:'call',r:'GTO兜底 call 3bet(eq'+Math.round(eq)+'%≥需'+_pf3Need+'%)',eq:_pfExpC2.eq,c:eq>=50?'m':'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
-    }
-    return _fold(eq,'GTO兜底 弃牌vs3bet(eq'+Math.round(eq)+'%<需'+_pf3Need+'%)',spr);
-  }
-
-  return null;
+    return null;
 }
 
 // ====== 翻后决策 ======
@@ -3935,37 +3911,6 @@ function decidePostflop(k){
         return{a:'raise',v:blSz,r:'GTO River诈唬('+Math.round(bluffRatio*100)+'%)',eq:exploitBL.eq,c:'l',sizing:blSz,scene:'River诈唬',spr:spr,_se:true,_seFreq:bluffRatio};
       }
     }
-  }
-
-  // ====== V2.9.630 数学兜底: 所有精细表未匹配时的赔率驱动决策 ======
-  // 目的: 减少fallthrough到旧引擎, 用基本GTO赔率逻辑覆盖剩余场景
-  if(scene==='bet'&&bet>0){
-    // 面对下注: 赔率决策
-    var _fbPotOdds=Math.round(bet/(pot+bet)*100);
-    var _fbNeed=_fbPotOdds+5; // 5%安全边际
-    if(eq>=_fbNeed){
-      var _fbExploit=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
-      var _fbConf=eq>=65?'h':eq>=45?'m':'l';
-      // 如果牌力足够强且赔率充裕, 可以考虑加注
-      if(eq>=70&&_fbPotOdds<=33){
-        var _fbRaiseSz=Math.round(Math.max(bet*2,pot*0.66));
-        _fbRaiseSz=Math.min(_fbRaiseSz,stk);
-        return{a:'raise',v:_fbRaiseSz,r:'GTO兜底 加注(eq'+Math.round(eq)+'%>70%,赔率'+_fbPotOdds+'%≤33%)',eq:_fbExploit.eq,c:'h',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
-      }
-      return{a:'call',r:'GTO兜底 跟注(eq'+Math.round(eq)+'%≥需'+_fbNeed+'%,赔率'+_fbPotOdds+'%)',eq:_fbExploit.eq,c:_fbConf,scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
-    }
-    return{a:'fold',r:'GTO兜底 弃牌(eq'+Math.round(eq)+'%<需'+_fbNeed+'%,赔率'+_fbPotOdds+'%)',eq:eq,c:'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
-  }
-  if(scene==='check'){
-    // 免费牌: eq高→bet, 否则check
-    if(eq>=55){
-      var _fbBetSz=Math.round(Math.max(pot*0.5,1));
-      _fbBetSz=Math.min(_fbBetSz,stk);
-      var _fbExploit2=applyExploit(eq,'raise',oppType,{bet:0,pot:pot});
-      var _fbConf2=eq>=70?'h':eq>=50?'m':'l';
-      return{a:'raise',v:_fbBetSz,r:'GTO兜底 价值下注(eq'+Math.round(eq)+'%≥55%)',eq:_fbExploit2.eq,c:_fbConf2,sizing:_fbBetSz,scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
-    }
-    return{a:'check',r:'GTO兜底 过牌(eq'+Math.round(eq)+'%<55%)',eq:eq,c:'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
   }
 
   return null;
@@ -5153,7 +5098,20 @@ var SeatRole={
   // 获取某个座位的角色
   getRole:function(pos){
     if(G._seatRoles&&G._seatRoles[pos])return G._seatRoles[pos];
-    return 'unknown';
+    // V2.9.632 FIX: 按钮检测失败时用hero位置+相对距离估算角色(消除unknown)
+    if(!G.pos)return 'unknown';
+    var _posMap={'btn':'BU','co':'CO','hj':'MP','mp':'MP','mp1':'MP','utg':'UTG','utg1':'UTG','sb':'SB','bb':'BB'};
+    var _hr=_posMap[G.pos];
+    if(!_hr)return 'unknown';
+    var _ro={BU:['BU','SB','BB','UTG','MP','CO'],CO:['CO','BU','SB','BB','UTG','MP'],MP:['MP','CO','BU','SB','BB','UTG'],UTG:['UTG','MP','CO','BU','SB','BB'],SB:['SB','BB','UTG','MP','CO','BU'],BB:['BB','UTG','MP','CO','BU','SB']};
+    var _cw=this.CW,_hi=_cw.indexOf('bottom-center'),_ti=_cw.indexOf(pos);
+    if(_hi<0||_ti<0)return 'unknown';
+    var _off=(_ti-_hi+6)%6,_arr=_ro[_hr]||_ro['BU'];
+    var _est=_arr[_off%_arr.length]||'unknown';
+    // 缓存估算结果供后续调用
+    if(!G._seatRoles)G._seatRoles={};
+    G._seatRoles[pos]=_est;
+    return _est;
   },
   
   // 获取hero的角色
@@ -12939,6 +12897,16 @@ function onVisionResult(data){
     }
     if(_maxBet>0){
       console.log('[Raiser检测] maxBet='+_maxBet+' raiser='+_raiserPos+' role='+G._raiserRole+' stackType='+G._raiserStackType+' 3bet='+G._facing3bet);
+    }
+    // V2.9.632 FIX: SB完成检测——SB补到1BB=完成(非加注),BB面对完成按'open'处理
+    //   根因: Vision检测到SB bet=1BB + scene='raise',但SB只是完成盲注不是raise,
+    //   BB此时已投入1BB=SB投入1BB,底池=2BB,BB可选择check(免费看牌)或raise(主动加注)
+    //   本质=无人加注的开池场景(scene='open',bet=0),SE用RFI表决策
+    if(_maxBet>0 && _maxBet<=_blindBB0 && G.pos==='bb' && G.scene==='raise'){
+      console.log('[V2.9.632 SB完成] maxBet='+_maxBet+'≤BB='+_blindBB0+' → scene raise→open, bet→0 (BB面对SB完成=无人加注)');
+      G.scene='open';
+      G.bet=0; // BB面对SB完成=无需额外跟注,可免费看牌
+      G._raiserRole='sb_complete';
     }
   }
 
