@@ -1383,7 +1383,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.629',
+  CURRENT_VERSION:'2.9.630',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2841,7 +2841,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.629';
+var APP_VERSION='2.9.630';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -9471,9 +9471,20 @@ function _decideInner(){
       }
       if(!_changed&&(result.a==='raise'||result.a==='raise_big'||result.a==='allin')){
         if(!_pCanRaise){
-          result.a=_pCanCall?'call':'fold';
+          // V2.9.630 FIX(P1, 实机日志2026-09-13 KQo flop 9dJcTc 坚果听eq79% bet=0免费牌局面,
+          //   过渡帧btn3Y=0无加注行,旧逻辑_pCanCall=false→fold=零成本白送底池/坚果听牌,正确应check)。
+          //   免费牌局面(bet=0,翻前limp/翻后check)raise类无法加注→check,禁止fold;
+          //   仅面对真实下注且无跟注按钮才fold(通常是非行动轮过渡帧幽灵决策,Kotlin零按钮拦截兜底)。
+          var _pFreePot=((!G.bet||G.bet<=0)&&G.scene!=='allin');
+          if(_pFreePot){
+            result.a='check';
+            _changed='免费牌局面无加注行→过牌(避免误弃)';
+            console.log('[物理闸] 免费牌局面无加注行→check(原将误fold,保护免费牌权)');
+          }else{
+            result.a=_pCanCall?'call':'fold';
+            _changed='raise类但屏幕无加注行→'+result.a;
+          }
           result.v=0;
-          _changed='raise类但屏幕无加注行→'+result.a;
         }else{
           // sizing钳码深: 15BB码深绝不能发30BB加注(16日志铁证: 鱼偏移补30BB>stk15BB)
           if(result.v&&G.stk>0&&result.v>G.stk){
@@ -9673,14 +9684,25 @@ function preF(k){
   else if(scene==='reraise'&&bet===0)actualBet=9;
   // V2.9.59: 翻前SPR精细化——5区策略
   var sprZonePre=SPRZone.getZone(spr);
-  if((sprZonePre==='ultra_short'||sprZonePre==='short')&&actualBet>0&&stk<=30){
-    // 极短码: eq>=55才commit, 短码: eq>=50
-    var preCommitThresh=sprZonePre==='ultra_short'?55:50;
-    if(eq>=preCommitThresh){
-      var exploitResult=applyExploit(eq,'raise',oppType,{bet:actualBet,pot:pot});
-      return{a:'raise',v:stk,r:'SPR '+sprZonePre+'('+spr.toFixed(1)+')全下',eq:exploitResult.eq,c:eq>=65?'h':'m',sizing:stk,scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,exploit:exploitResult.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
+  // V2.9.630 FIX(P0, 实机日志2026-09-13 v629 铁证):
+  //   旧规则"ultra_short eq>=55/short eq>=50 否则一律fold"完全不看底池赔率,
+  //   实证错杀: AJo co stk3 pot6 bet1(赔率门槛仅14%)eq49 被fold; ATo btn stk4 pot8 bet3(门槛27%)eq49 被fold,
+  //   同一手AJo另一帧又被对手偏移救成call——结果取决于是否走到偏移层,规则不自洽。
+  //   修复: 面对普通open/3bet(scene raise/reraise)短码,改用真实赔率门槛+10%安全边际(吸收range/多人/ICM不确定性):
+  //     便宜open jam获fold equity主动全下; 注额已≈码深则call。
+  //   关键约束: scene==='allin'(面对全压)不走本分支——L9686附近有专门赔率+MC+牌力硬闸,
+  //   旧代码未排除allin导致短码全压被粗糙固定55%闸遮蔽,本次明确分流(allin维持历史行为,留待短码全压样本验证)。
+  if((sprZonePre==='ultra_short'||sprZonePre==='short')&&actualBet>0&&stk<=30&&scene!=='allin'){
+    var _preNq=pot>0?Math.round(actualBet/(pot+actualBet)*100):50;
+    if(eq>=_preNq+10){
+      var _preCallLike=actualBet>=stk;
+      var exploitResult=applyExploit(eq,_preCallLike?'call':'raise',oppType,{bet:actualBet,pot:pot});
+      if(_preCallLike){
+        return{a:'call',r:'短码够赔率跟(门槛'+_preNq+'+10,eq'+Math.round(eq)+')',eq:exploitResult.eq,c:eq>=65?'h':'m',scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,exploit:exploitResult.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
+      }
+      return{a:'raise',v:stk,r:'SPR '+sprZonePre+'('+spr.toFixed(1)+')全下(赔率门槛'+_preNq+'%)',eq:exploitResult.eq,c:eq>=65?'h':'m',sizing:stk,scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,exploit:exploitResult.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
     }
-    return{a:'fold',r:'SPR '+sprZonePre+'('+spr.toFixed(1)+')弃牌',eq:eq,c:'l',scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
+    return{a:'fold',r:'SPR '+sprZonePre+'('+spr.toFixed(1)+')赔率不足弃(门槛'+_preNq+'+10,eq'+Math.round(eq)+')',eq:eq,c:'l',scene:sceneLabel,spr:spr,sprAdvice:sprAdvice,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
   }
   // V2.9.35: 翻前面对allin - 只需判断call或fold
   if(scene==='allin'){

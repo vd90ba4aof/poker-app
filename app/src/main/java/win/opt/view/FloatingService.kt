@@ -1906,6 +1906,14 @@ class FloatingService : Service() {
                                 action = "check"
                             }
                         }
+                        // V2.9.630 P1配套: JS物理闸免费牌局面raise无加注行直接输出check; 且上面free-check保护
+                        //   也可能把fold改成check。若此刻屏幕0按钮(跑马/非行动轮/过渡帧),check无合法点击目标,
+                        //   对称拦截取消等下帧(check零成本,真实check局面下帧仍可点,不损失任何权益)。
+                        if (action == "check" && cachedToCall == 0 && latestButtonPositions.isEmpty()) {
+                            Log.w(TAG, "★ 跑马帧硬闸: check且屏幕0按钮(非行动轮/跑马/过渡帧)→取消点击等下帧 | reason=$reason")
+                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.HIGH, "跑马帧check拦截: 0按钮,非行动轮", "cachedToCall=$cachedToCall btns=0 reason=$reason") } catch (_: Exception) {}
+                            return@post
+                        }
                         Log.d(TAG, "★ autoDecision收到决策: action=$action auto=$auto conf=$confidence reason=$reason eq=$eq% json=${jsonData.take(200)} | state=${pipelineFSM.getCurrentState()}")
 
                         // R7-fix: 必须校验转换结果——迟到/重复回调时转换非法（状态不变），不得继续点击
