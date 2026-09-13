@@ -9383,11 +9383,14 @@ function _decideInner(){
         //   v603日志实锤: 河牌两对Q4无花5人池面对4BB, SE fold(eq12.9%<赔率29%)被'5+人厚池'
         //   反转raise 25%pot——call eq不够时raise(需对手弃牌率/更高eq)数学上更亏。
         //   check动作仍可反转(免费看牌/摊牌不亏)。
-        var _oddsFold=result.r&&result.r.indexOf('fold(odds)')>=0;
+        var _oddsFold=result.r&&(result.r.indexOf('fold(odds)')>=0||/eq\d+%[^%]*[<＜]\u9700/.test(result.r));
+        // V2.9.630 FIX(P0): eq<15%硬地板——极弱eq被池驱反fold强制call是灾难性错误
+        //   v630日志实锤: 22翻后eq=9.25%面对全压102BB池被池驱反fold→call allin
+        var _eqHardFloor=(typeof result.eq==='number'&&result.eq<15);
         if(_evGuardedFold){
           console.log('[' + APP_VERSION + '] EV护栏主动fold→不反fold');
-        }else if(_oddsFold){
-          console.log('[' + APP_VERSION + '] 赔率不足fold(eq<赔率)→不反转付费动作: '+result.r);
+        }else if(_oddsFold||_eqHardFloor){
+          console.log('[' + APP_VERSION + '] 赔率不足fold(eq<赔率/eq硬地板<15%)→不反转付费动作: '+result.r+' eq='+Math.round(result.eq||0)+'%');
         }else{
           var _poolType=PoolTypeDetector.detect();
           var _holeArr=G.hole.filter(function(c){return c;});
