@@ -3423,7 +3423,7 @@ function decidePreflop(k){
     }
     sz=_sprSizingAdjust(spr,sz,_isoMode?'iso':'open');
     var exploitR=applyExploit(eq,'raise',oppType,{bet:0,pot:pot});
-    var weights=DRTA.getWeights?DRTA.getWeights(profile):{};
+    var weights=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};
     return{a:'raise',v:sz,r:p5+' GTO RFI('+Math.round(freq*100)+'%) eq'+Math.round(eq),eq:exploitR.eq,c:eq>=60?'h':eq>=50?'m':'l',sizing:sz,scene:'开池',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:adj.note||exploitR.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights},_se:true,_seFreq:freq};
   }
 
@@ -3447,7 +3447,7 @@ function decidePreflop(k){
               var _sqSz=Math.round((pot+bet*2)*3);
               _sqSz=_sprSizingAdjust(spr,Math.min(_sqSz,stk),'3bet');
               var _sqEx=applyExploit(eq,'raise',oppType,{bet:bet,pot:pot,facing3bet:true});
-              var _sqW=DRTA.getWeights?DRTA.getWeights(profile):{};
+              var _sqW=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};
               return{a:'raise',v:_sqSz,r:'Squeeze挤压 vs '+_sqOpenP5+'+冷跟('+Math.round(_sqFreq*100)+'%)',eq:_sqEx.eq,c:'h',sizing:_sqSz,scene:'Squeeze',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:_sqEx.exploit,drta:{type:profile.type,conf:profile.confidence,weights:_sqW},_se:true,_seFreq:_sqFreq};
             }
           }
@@ -3474,7 +3474,7 @@ function decidePreflop(k){
         var _isPairPF=(k.length===2&&k[0]===k[1]);
         var _twoBroadway=(!_isPairPF&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
         if((_isPairPF||_twoBroadway)&&eq>=60){
-          var exploitHF=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});var weightsHF=DRTA.getWeights?DRTA.getWeights(profile):{};
+          var exploitHF=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});var weightsHF=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};
           console.log('[SE] 频率未命中但强牌硬底: '+k+' eq='+eq+'≥60 → 不fold,降级call');
           return{a:'call',r:'GTO强牌硬底 '+k+' eq'+Math.round(eq)+'%('+Math.round(f*100)+'%频率未命中)',eq:exploitHF.eq,c:'m',sizing:0,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet||pot*2.5,0),exploit:exploitHF.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weightsHF},_se:true,_freqHardFloor:true};
         }
@@ -3483,8 +3483,8 @@ function decidePreflop(k){
       else return _fold(eq,'vs '+rP5+' fold',spr);
     }
     var actualBet=bet||pot*2.5;
-    if(act==='3b'){var sz3=Math.round(actualBet*3);sz3=_sprSizingAdjust(spr,Math.min(sz3,stk),'3bet');var exploitR2=applyExploit(eq,'raise',oppType,{bet:actualBet,pot:pot,facing3bet:true});var weights2=DRTA.getWeights?DRTA.getWeights(profile):{};return{a:'raise',v:sz3,r:'GTO 3bet vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR2.eq,c:'h',sizing:sz3,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:exploitR2.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights2},_se:true,_seFreq:f};}
-    if(act==='c'){var exploitR3=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});var weights3=DRTA.getWeights?DRTA.getWeights(profile):{};return{a:'call',r:'GTO call vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR3.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet,0),exploit:exploitR3.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights3},_se:true,_seFreq:f};}
+    if(act==='3b'){var sz3=Math.round(actualBet*3);sz3=_sprSizingAdjust(spr,Math.min(sz3,stk),'3bet');var exploitR2=applyExploit(eq,'raise',oppType,{bet:actualBet,pot:pot,facing3bet:true});var weights2=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'raise',v:sz3,r:'GTO 3bet vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR2.eq,c:'h',sizing:sz3,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:exploitR2.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights2},_se:true,_seFreq:f};}
+    if(act==='c'){var exploitR3=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});var weights3=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR3.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet,0),exploit:exploitR3.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights3},_se:true,_seFreq:f};}
     return _fold(eq,'vs '+rP5+' fold',spr);
   }
 
@@ -3516,8 +3516,8 @@ function decidePreflop(k){
     }
     if(act3==='4b'&&Math.random()>f3){if(entry3.s){act3=entry3.s.a;f3=entry3.s.f;if(Math.random()>f3)return _fold(eq,k+' vs 3bet 4b未中→'+act3+'未中→fold',spr);}else return _fold(eq,k+' vs 3bet 4b'+Math.round(f3*100)+'%未中→fold',spr);}
     var actualBet3=bet||pot*3;
-    if(act3==='4b'){var sz4=Math.round(actualBet3*2.5);sz4=_sprSizingAdjust(spr,Math.min(sz4,stk),'4bet');G._heroDid4bet=true;var exploitR4=applyExploit(eq,'raise',oppType,{bet:actualBet3,pot:pot,facing3bet:true});var weights4=DRTA.getWeights?DRTA.getWeights(profile):{};return{a:'raise',v:sz4,r:'GTO 4bet('+Math.round(f3*100)+'%)',eq:exploitR4.eq,c:'h',sizing:sz4,scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,sz4),exploit:exploitR4.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights4},_se:true,_seFreq:f3};}
-    if(act3==='c'){var exploitR5=applyExploit(eq,'call',oppType,{bet:actualBet3,pot:pot});var weights5=DRTA.getWeights?DRTA.getWeights(profile):{};return{a:'call',r:'GTO call 3bet('+Math.round(f3*100)+'%)',eq:exploitR5.eq,c:eq>=50?'m':'l',scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,0),exploit:exploitR5.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights5},_se:true,_seFreq:f3};}
+    if(act3==='4b'){var sz4=Math.round(actualBet3*2.5);sz4=_sprSizingAdjust(spr,Math.min(sz4,stk),'4bet');G._heroDid4bet=true;var exploitR4=applyExploit(eq,'raise',oppType,{bet:actualBet3,pot:pot,facing3bet:true});var weights4=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'raise',v:sz4,r:'GTO 4bet('+Math.round(f3*100)+'%)',eq:exploitR4.eq,c:'h',sizing:sz4,scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,sz4),exploit:exploitR4.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights4},_se:true,_seFreq:f3};}
+    if(act3==='c'){var exploitR5=applyExploit(eq,'call',oppType,{bet:actualBet3,pot:pot});var weights5=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call 3bet('+Math.round(f3*100)+'%)',eq:exploitR5.eq,c:eq>=50?'m':'l',scene:'面对3bet',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet3,0),exploit:exploitR5.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights5},_se:true,_seFreq:f3};}
     return _fold(eq,'vs 3bet fold',spr);
   }
 
@@ -3662,7 +3662,7 @@ function decidePostflop(k){
   var btKey=_bt2key(bTexture);
   var hcKey=_hc2key(hClass);
   var didPFR=ActionLine.didPreflopRaise();
-  var weights=DRTA.getWeights?DRTA.getWeights(profile):{};
+  var weights=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};
 
   // V3.28: 翻后面对allin — 权益阈值决策（与翻前同逻辑）
   // V2.9.582 FIX(P1, 实机日志2026-09-06 Jd6d 3BB into 279BB): 硬40%地板无视底池赔率——
