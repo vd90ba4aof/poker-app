@@ -3575,6 +3575,45 @@ function decidePreflop(k){
     return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%',spr);
   }
 
+  // ====== V2.9.630 翻前数学兜底 ======
+  // 目的: 覆盖Nash未处理的超短码(对手>15BB) + 3B/F3B表缺失场景
+  if(scene==='raise'&&bet>0){
+    var _pfPotOdds=Math.round(bet/(pot+bet)*100);
+    var _pfNeed=_pfPotOdds+8;
+    // 超短码(≤8BB): 赔率够+牌力够→全下, 否则弃牌(不走投机跟注)
+    if(_myEffBB<=8){
+      if(eq>=_pfNeed&&eq>=40){
+        return{a:'raise',v:_myEffBB,r:'GTO兜底 超短码全下(eq'+Math.round(eq)+'%≥'+_pfNeed+'%,SPR'+spr.toFixed(1)+')',eq:eq,c:eq>=55?'m':'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
+      }
+      return _fold(eq,'GTO兜底 超短码弃牌(eq'+Math.round(eq)+'%<'+_pfNeed+'%或<40%)',spr);
+    }
+    // 非超短码: 赔率决策(强牌加注,中等跟注,弱牌弃牌)
+    if(eq>=_pfNeed+15){
+      var _pfR3Sz=Math.round(bet*3);_pfR3Sz=Math.min(_pfR3Sz,stk);
+      var _pfExpR=applyExploit(eq,'raise',oppType,{bet:bet,pot:pot});
+      return{a:'raise',v:_pfR3Sz,r:'GTO兜底 3bet(eq'+Math.round(eq)+'%≥'+(_pfNeed+15)+'%)',eq:_pfExpR.eq,c:'h',sizing:_pfR3Sz,scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
+    }
+    if(eq>=_pfNeed){
+      var _pfExpC=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+      return{a:'call',r:'GTO兜底 跟注(eq'+Math.round(eq)+'%≥需'+_pfNeed+'%,赔率'+_pfPotOdds+'%)',eq:_pfExpC.eq,c:eq>=50?'m':'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
+    }
+    return _fold(eq,'GTO兜底 弃牌(eq'+Math.round(eq)+'%<需'+_pfNeed+'%)',spr);
+  }
+  if(scene==='reraise'&&bet>0){
+    var _pf3PotOdds=Math.round(bet/(pot+bet)*100);
+    var _pf3Need=_pf3PotOdds+5;
+    if(eq>=_pf3Need+20){
+      var _pf4Sz=Math.round(bet*2.5);_pf4Sz=Math.min(_pf4Sz,stk);
+      var _pfExp4=applyExploit(eq,'raise',oppType,{bet:bet,pot:pot,facing3bet:true});
+      return{a:'raise',v:_pf4Sz,r:'GTO兜底 4bet(eq'+Math.round(eq)+'%≥'+(_pf3Need+20)+'%)',eq:_pfExp4.eq,c:'h',sizing:_pf4Sz,scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
+    }
+    if(eq>=_pf3Need){
+      var _pfExpC2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+      return{a:'call',r:'GTO兜底 call 3bet(eq'+Math.round(eq)+'%≥需'+_pf3Need+'%)',eq:_pfExpC2.eq,c:eq>=50?'m':'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
+    }
+    return _fold(eq,'GTO兜底 弃牌vs3bet(eq'+Math.round(eq)+'%<需'+_pf3Need+'%)',spr);
+  }
+
   return null;
 }
 
@@ -3887,6 +3926,37 @@ function decidePostflop(k){
         return{a:'raise',v:blSz,r:'GTO River诈唬('+Math.round(bluffRatio*100)+'%)',eq:exploitBL.eq,c:'l',sizing:blSz,scene:'River诈唬',spr:spr,_se:true,_seFreq:bluffRatio};
       }
     }
+  }
+
+  // ====== V2.9.630 数学兜底: 所有精细表未匹配时的赔率驱动决策 ======
+  // 目的: 减少fallthrough到旧引擎, 用基本GTO赔率逻辑覆盖剩余场景
+  if(scene==='bet'&&bet>0){
+    // 面对下注: 赔率决策
+    var _fbPotOdds=Math.round(bet/(pot+bet)*100);
+    var _fbNeed=_fbPotOdds+5; // 5%安全边际
+    if(eq>=_fbNeed){
+      var _fbExploit=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+      var _fbConf=eq>=65?'h':eq>=45?'m':'l';
+      // 如果牌力足够强且赔率充裕, 可以考虑加注
+      if(eq>=70&&_fbPotOdds<=33){
+        var _fbRaiseSz=Math.round(Math.max(bet*2,pot*0.66));
+        _fbRaiseSz=Math.min(_fbRaiseSz,stk);
+        return{a:'raise',v:_fbRaiseSz,r:'GTO兜底 加注(eq'+Math.round(eq)+'%>70%,赔率'+_fbPotOdds+'%≤33%)',eq:_fbExploit.eq,c:'h',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
+      }
+      return{a:'call',r:'GTO兜底 跟注(eq'+Math.round(eq)+'%≥需'+_fbNeed+'%,赔率'+_fbPotOdds+'%)',eq:_fbExploit.eq,c:_fbConf,scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
+    }
+    return{a:'fold',r:'GTO兜底 弃牌(eq'+Math.round(eq)+'%<需'+_fbNeed+'%,赔率'+_fbPotOdds+'%)',eq:eq,c:'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
+  }
+  if(scene==='check'){
+    // 免费牌: eq高→bet, 否则check
+    if(eq>=55){
+      var _fbBetSz=Math.round(Math.max(pot*0.5,1));
+      _fbBetSz=Math.min(_fbBetSz,stk);
+      var _fbExploit2=applyExploit(eq,'raise',oppType,{bet:0,pot:pot});
+      var _fbConf2=eq>=70?'h':eq>=50?'m':'l';
+      return{a:'raise',v:_fbBetSz,r:'GTO兜底 价值下注(eq'+Math.round(eq)+'%≥55%)',eq:_fbExploit2.eq,c:_fbConf2,sizing:_fbBetSz,scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
+    }
+    return{a:'check',r:'GTO兜底 过牌(eq'+Math.round(eq)+'%<55%)',eq:eq,c:'l',scene:'MathFallback',spr:spr,_se:true,_seFreq:0};
   }
 
   return null;
