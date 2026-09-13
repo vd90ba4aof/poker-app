@@ -1383,7 +1383,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.626',
+  CURRENT_VERSION:'2.9.629',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2841,7 +2841,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION='2.9.626';
+var APP_VERSION='2.9.629';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -9162,11 +9162,26 @@ function _decideInner(){
     }else{
       result.a=applyOppActionShift(result.a,_eq,_oppType,_tiltInfo,_ceResult,_pulse);
     }
+    // V2.9.629 FIX(P1): 对手偏移改变action时同步更新reason,避免展示误导
+    // 实证: AhJh GTO判call→偏移改raise_big,reason仍显示"GTO call vs BTN(25%)"
+    if(result.a!==_origA){
+      var _actCN={fold:'弃牌',check:'过牌',call:'跟注',weak_call:'弱跟注',raise:'加注',raise_big:'重加注',allin:'全下'}[result.a]||result.a;
+      if(result.r&&result.r.indexOf('[对手修正→')===-1){
+        result.r='[对手修正→'+_actCN+'] '+result.r;
+      }
+    }
     if(result.a!==_origA)console.log('[对手偏移] '+_origA+'→'+result.a+' eq='+_eq+' opp='+_oppType);
     // Step2: equity底线——直接修改action(保底逻辑,防止极端错误)
     var _preGuardA=result.a;
     result.a=applyEquityGuard(result.a,_eq,_reliability);
-    if(result.a!==_preGuardA)console.log('[Equity底线] '+_preGuardA+'→'+result.a+' eq='+_eq+' rel='+_reliability);
+    // V2.9.629 FIX: equity底线改action时也同步reason,避免后续一致性检查重复标注
+    if(result.a!==_preGuardA){
+      var _guardCN={fold:'弃牌',check:'过牌',call:'跟注',weak_call:'弱跟注',raise:'加注',raise_big:'重加注',allin:'全下'}[result.a]||result.a;
+      if(result.r&&result.r.indexOf('[Equity底线')===-1&&result.r.indexOf('[EV]')===-1){
+        result.r='[Equity底线→'+_guardCN+'] '+result.r;
+      }
+      console.log('[Equity底线] '+_preGuardA+'→'+result.a+' eq='+_eq+' rel='+_reliability);
+    }
     // V2.9.186: PKO 赏金赛策略调整
     // PKO中淘汰对手有直接赏金价值 → 对短码跟注放宽，自己有大赏金时收紧
     try{
@@ -9392,7 +9407,8 @@ function _decideInner(){
         var _syncA=result.a;
         var _syncRaise=(_syncA==='raise'||_syncA==='raise_big'||_syncA==='allin');
         // 已有漂移前缀(如[EV]/[PKO]/[池驱])说明reason已同步过，不重复标注
-        var _hasDriftPrefix=/^\[(EV|PKO|池驱|纠错)\]/.test(result.r||'');
+        // V2.9.629 FIX: 也检查[对手修正→]/[Equity底线→]前缀,防止与偏移/底线修正重复标注
+        var _hasDriftPrefix=/^\[(EV|PKO|池驱|纠错|对手修正|Equity底线)\]/.test(result.r||'');
         if(!_syncRaise && _syncA!=='fold' && _syncA!=='check'){
           // call/weak_call：加注尺度必须清零（call不带sizing）
           if(result.v){console.log('[V2.9.571一致性] '+_syncA+'动作残留sizing='+result.v+'→清零');result.v=0;}
@@ -9834,6 +9850,14 @@ function preF(k){
         console.log('[V2.9.618硬底] '+k+' 小注cS外牌力不足→fold (stk='+G.stk+')');
         return{a:'fold',r:k+' 小注硬底(牌力不足)→弃',eq:eq,c:'l',scene:sceneLabel,spr:spr,drta:{type:profile.type,confidence:profile.confidence,weights:weights}};
       }
+    }
+    // V2.9.629 FIX(P1, 实机日志2026-09-13 QTo BTN冷跟4BB open→翻后全丢):
+    //   facing raise时cS范围包含被支配的offsuit牌(QTo/JTo/T9o/K9o等),
+    //   这些牌vs早期/中间位range严重被dominated,翻后极难盈利。
+    //   _3B表中这些手牌不在任何cold-call范围→应fold。
+    //   eq<48阈值: QTo(~45%vsUTG)被拦截, KQo/AJo/QJo(~50%+)保留。
+    if(_isOffsuit&&!_big3betCall&&/^[KQJT][2-9T]o$/.test(k)&&cS.indexOf(k)!==-1&&eq<48){
+      return{a:'fold',r:k+' 面对加注offsuit被支配(eq'+Math.round(eq)+'<48)→弃',eq:eq,c:'l',scene:sceneLabel,spr:spr,drta:{type:profile.type,conf:profile.confidence,weights:weights}};
     }
     if(!_big3betCall||cS.indexOf(k)!==-1||eq>=58){
       var exploitResult5=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});
