@@ -1386,7 +1386,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.633',
+  CURRENT_VERSION:'2.9.634',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2893,7 +2893,7 @@ var _3B={
   },
   vs_MP:{
     from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.4},TT:{a:'c',f:.8},"99":{a:'c',f:.7},AQo:{a:'c',f:.6},AJs:{a:'c',f:.6},KQs:{a:'c',f:.5},"88":{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4},A4s:{a:'3b',f:.3}},
-    from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},ATs:{a:'c',f:.8},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.5},JTs:{a:'c',f:.7},T9s:{a:'c',f:.7},KQs:{a:'c',f:.5}},
+    from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},"44":{a:'c',f:.4},"33":{a:'c',f:.35},"22":{a:'c',f:.3},ATs:{a:'c',f:.8},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.5},JTs:{a:'c',f:.7},T9s:{a:'c',f:.7},KQs:{a:'c',f:.5},KQo:{a:'c',f:.4},KJo:{a:'c',f:.35},QJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJo:{a:'c',f:.45},ATo:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.35},"76s":{a:'c',f:.3},"65s":{a:'c',f:.25},"54s":{a:'c',f:.2}},
     from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},KQs:{a:'3b',f:.3},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},"66":{a:'c',f:.4},"55":{a:'c',f:.3},ATo:{a:'c',f:.6},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},KTs:{a:'c',f:.5},KJs:{a:'c',f:.4},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},QJo:{a:'c',f:.3},JTs:{a:'c',f:.5},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},"87s":{a:'c',f:.3},AJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJs:{a:'c',f:.5},KQo:{a:'c',f:.3},QJs:{a:'c',f:.4}},
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},KQs:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},AJs:{a:'c',f:.7},ATs:{a:'c',f:.8},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.6},JTs:{a:'c',f:.7}},
     from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}},
@@ -3970,7 +3970,7 @@ function decidePostflop(k){
     if(scene==='check'||bet<=0){
       if(eq>=50){
         var _vbSz=Math.round(Math.min(pot*0.55,stk));
-        if(_vbSz>=2){
+        if(_vbSz>=1){
           var _exV=applyExploit(eq,'raise',oppType,{bet:0,pot:pot});
           return{a:'raise',v:_vbSz,r:'GTO收口 价值下注(eq'+Math.round(eq)+'%≥50%)',eq:_exV.eq,c:eq>=65?'h':'m',sizing:_vbSz,scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
         }
