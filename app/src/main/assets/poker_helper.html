@@ -3398,7 +3398,14 @@ function decidePreflop(k){
       var _lgF1=PreflopLeakGuard.factor(p,k);
       if(_lgF1<1){console.log('[LeakGuard] RFI开池收紧 '+p5+' '+k+' freq '+freq.toFixed(2)+'->'+(freq*_lgF1).toFixed(2)+'(x'+_lgF1+')');freq=freq*_lgF1;}
     }
-    if(freq===undefined||freq===0){if(oppType==='nit'||oppType==='tight')freq=0.05;else return _fold(eq,'不在'+p5+'RFI范围',spr);}
+    if(freq===undefined||freq===0){
+      // V2.9.628: AK硬底规则 — 翻前手牌含A和K，无人加注(只需跟注大盲)，强制跟注看牌
+      var _hasA=k.indexOf('A')>=0,_hasK=k.indexOf('K')>=0;
+      if(_hasA&&_hasK&&bet>0&&bet<=bigBlind){
+        return{a:'call',v:bet,r:'AK硬底跟注(翻前无人加注,仅付大盲)',eq:eq,c:'m',scene:'跟注',spr:spr,_se:true,_seFreq:1};
+      }
+      if(oppType==='nit'||oppType==='tight')freq=0.05;else return _fold(eq,'不在'+p5+'RFI范围',spr);
+    }
     if(Math.random()>freq)return _fold(eq,p5+' RFI '+Math.round(freq*100)+'%→弃牌',spr);
     var sz=_preflopSizing(p,pot,scene,spr);
     if(_isoMode){
@@ -3817,8 +3824,13 @@ function decidePostflop(k){
       // rev11修复POST-8: flop CBet路径旧代码_isMultiway算而不用——多人池cbet频率需大幅收紧(多人跟注惩罚空气cbet)
       var _mwAirKill=false;
       if(_isMultiway){
-        cbFreq = cbFreq*(_nActive>=4?0.35:0.6);
-        if(hcKey>=12){cbFreq=0;_mwAirKill=true;}  // AIR(15)/弱听(12)多人池不连续开火
+        // V2.9.628: NUTS(0)/STRONG(4)不受多人池惩罚——坚果牌多人池仍有巨大价值，不应被压缩
+        if(hcKey<=4){
+          // 坚果/强牌保持原频率，不惩罚
+        }else{
+          cbFreq = cbFreq*(_nActive>=4?0.35:0.6);
+          if(hcKey>=12){cbFreq=0;_mwAirKill=true;}  // AIR(15)/弱听(12)多人池不连续开火
+        }
       }
       if(ip&&scene==='check'){
         var adj=_quantExploitAdjust(cbFreq,'raise',profile,bTexture);
@@ -3826,7 +3838,7 @@ function decidePostflop(k){
       }
       // rev11 POST-8: 多人池空气归零必须在exploit调整之后——_quantExploitAdjust内Math.max(0.1,..)会把0拉回0.1
       if(_mwAirKill){cbFreq=0;console.log('[MW] flop多人池CBet收紧: 空气hc='+hcKey+' freq→0%');}
-      else if(_isMultiway){console.log('[MW] flop多人池CBet收紧: freq→'+Math.round(cbFreq*100)+'% hc='+hcKey);}
+      else if(_isMultiway&&hcKey>4){console.log('[MW] flop多人池CBet收紧: freq→'+Math.round(cbFreq*100)+'% hc='+hcKey);}
       if(Math.random()<cbFreq){
         var cbPct=_pickSizing(cb[1],bTexture,spr);
         var cbSz=Math.round(pot*cbPct);cbSz=Math.min(cbSz,stk);
@@ -4450,6 +4462,8 @@ function _applyPipeline(baseFreq,action,hcKey,oppType,street,context,sprAdj,is3b
     // 3) 多人池
     if(isMW){
       if(context==='facing'){/* FCB内部已处理 */}
+      // V2.9.628: NUTS(0)/STRONG(4)不受多人池惩罚——坚果/强牌多人池仍有巨大价值
+      else if(hcKey<=4){/* 坚果/强牌保持原频率 */}
       else{f=f*0.7;}
     }
     // 4) ExploitAdjuster

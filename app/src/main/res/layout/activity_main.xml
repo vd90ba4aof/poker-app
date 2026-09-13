@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.626 · 假全押数学降级+多人池口径统一+跟注全自动+oppSeats修复"
+        android:text="V2.9.628 · AK硬底跟注+CBet多人池NUTS豁免"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
