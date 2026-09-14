@@ -1386,7 +1386,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.635',
+  CURRENT_VERSION:'2.9.636',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2844,7 +2844,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.635';
+var APP_VERSION = '2.9.636';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -2877,7 +2877,7 @@ var _3B={
     from_MP:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.3},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.3},A5s:{a:'3b',f:.3},A4s:{a:'3b',f:.2},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}},
     from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4}},
     from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},TT:{a:'c',f:.8},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},ATs:{a:'c',f:.4},KQs:{a:'c',f:.5},KJs:{a:'c',f:.4},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4},T9s:{a:'c',f:.3}},
-    from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},"77":{a:'c',f:.4},AJs:{a:'c',f:.5},ATo:{a:'c',f:.5},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},KTs:{a:'c',f:.5},KQo:{a:'c',f:.3},QTs:{a:'c',f:.4},QJs:{a:'c',f:.4},JTs:{a:'c',f:.5},T9s:{a:'c',f:.4},"98s":{a:'c',f:.3},AJo:{a:'c',f:.3},QJo:{a:'c',f:.2}},
+    from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},"77":{a:'c',f:.4},AJs:{a:'c',f:.5},ATo:{a:'c',f:.5},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},KTs:{a:'c',f:.5},KQo:{a:'c',f:.3},QTs:{a:'c',f:.4},QJs:{a:'c',f:.4},JTs:{a:'c',f:.5},T9s:{a:'c',f:.4},"98s":{a:'c',f:.3},A7s:{a:'c',f:.25},A6s:{a:'c',f:.2},"66":{a:'c',f:.25},"55":{a:'c',f:.25},"44":{a:'c',f:.2},AJo:{a:'c',f:.3},QJo:{a:'c',f:.2}},
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},A5s:{a:'3b',f:.3},A3s:{a:'3b',f:.2},A2s:{a:'3b',f:.2},JJ:{a:'c',f:.8},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},"77":{a:'c',f:.5},"66":{a:'c',f:.4},"55":{a:'c',f:.4},"44":{a:'c',f:.35},"33":{a:'c',f:.3},"22":{a:'c',f:.25},AQs:{a:'c',f:.6},AQo:{a:'c',f:.5},AJs:{a:'c',f:.4},A9s:{a:'c',f:.5},A8s:{a:'c',f:.4},A7s:{a:'c',f:.35},A6s:{a:'c',f:.3},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3},J9s:{a:'c',f:.25},T9s:{a:'c',f:.3},T8s:{a:'c',f:.2},"98s":{a:'c',f:.3},"87s":{a:'c',f:.25},"76s":{a:'c',f:.2},"65s":{a:'c',f:.2},"54s":{a:'c',f:.15}},
     from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.3},JJ:{a:'c',f:.7},TT:{a:'c',f:.6},"99":{a:'c',f:.5},"88":{a:'c',f:.4},AQo:{a:'c',f:.4},AJs:{a:'c',f:.4},KQs:{a:'c',f:.3},QJs:{a:'c',f:.2},JTs:{a:'c',f:.2}},
     from_HJ:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.7},JJ:{a:'3b',f:.4},AKs:{a:'3b',f:.7},AKo:{a:'3b',f:.6},AQs:{a:'3b',f:.4},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}}
@@ -2894,7 +2894,7 @@ var _3B={
   vs_MP:{
     from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.4},TT:{a:'c',f:.8},"99":{a:'c',f:.7},AQo:{a:'c',f:.6},AJs:{a:'c',f:.6},KQs:{a:'c',f:.5},"88":{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4},A4s:{a:'3b',f:.3}},
     from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},"44":{a:'c',f:.4},"33":{a:'c',f:.35},"22":{a:'c',f:.3},ATs:{a:'c',f:.8},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.5},JTs:{a:'c',f:.7},T9s:{a:'c',f:.7},KQs:{a:'c',f:.5},KQo:{a:'c',f:.4},KJo:{a:'c',f:.35},QJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJo:{a:'c',f:.45},ATo:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.35},"76s":{a:'c',f:.3},"65s":{a:'c',f:.25},"54s":{a:'c',f:.2}},
-    from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},KQs:{a:'3b',f:.3},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},"66":{a:'c',f:.4},"55":{a:'c',f:.3},ATo:{a:'c',f:.6},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},KTs:{a:'c',f:.5},KJs:{a:'c',f:.4},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},QJo:{a:'c',f:.3},JTs:{a:'c',f:.5},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},"87s":{a:'c',f:.3},AJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJs:{a:'c',f:.5},KQo:{a:'c',f:.3},QJs:{a:'c',f:.4}},
+    from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},KQs:{a:'3b',f:.3},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},"66":{a:'c',f:.4},"55":{a:'c',f:.3},ATo:{a:'c',f:.6},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},KTs:{a:'c',f:.5},KJs:{a:'c',f:.4},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},QJo:{a:'c',f:.3},JTs:{a:'c',f:.5},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},"87s":{a:'c',f:.3},AJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJs:{a:'c',f:.5},ATs:{a:'c',f:.4},A6s:{a:'c',f:.25},"44":{a:'c',f:.25},"33":{a:'c',f:.2},"22":{a:'c',f:.2},KQo:{a:'c',f:.3},QJs:{a:'c',f:.4}},
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},AJs:{a:'3b',f:.2},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},A2s:{a:'3b',f:.2},KQs:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},"44":{a:'c',f:.35},"33":{a:'c',f:.3},"22":{a:'c',f:.25},ATs:{a:'c',f:.8},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.45},A6s:{a:'c',f:.35},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},K9s:{a:'c',f:.4},QJs:{a:'c',f:.6},Q9s:{a:'c',f:.3},JTs:{a:'c',f:.7},J9s:{a:'c',f:.4},T9s:{a:'c',f:.5},T8s:{a:'c',f:.3},"98s":{a:'c',f:.4},"87s":{a:'c',f:.3},"76s":{a:'c',f:.25},"65s":{a:'c',f:.2},"54s":{a:'c',f:.15},AJo:{a:'c',f:.35},KQo:{a:'c',f:.3},KJo:{a:'c',f:.25},QJo:{a:'c',f:.2}},
     from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}},
     from_HJ:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.6},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},TT:{a:'c',f:.8},"99":{a:'c',f:.7},"88":{a:'c',f:.6},AQo:{a:'c',f:.5},AJs:{a:'c',f:.6},KQs:{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4}}
@@ -3715,12 +3715,27 @@ function decidePostflop(k){
   // MEDIUM/DRAW额外x0.9, AIR额外x0.8(弱牌高估幅度远大于强牌)。下游枚举器preEq与纹理表共享此eq
   if(_isMultiway&&typeof eq==='number'&&eq>0){
     try{
-      var _eqMwRaw=multiPlayerEquity(eq,_nActive);
       var _hnMw=(hClass&&hClass.name)?hClass.name:'MEDIUM';
-      if(_hnMw==='MEDIUM'||_hnMw==='DRAW')_eqMwRaw=_eqMwRaw*0.9;
-      else if(_hnMw==='AIR')_eqMwRaw=_eqMwRaw*0.8;
-      eq=Math.round(Math.max(0,Math.min(100,_eqMwRaw))*10)/10;
-      console.log('[MW] 多人池权益折扣 n='+_nActive+' '+_hnMw+' -> eq='+eq);
+      // V2.9.636 FIX(P0, 实机日志2026-09-14 AhTs on Th2s3hTd turn三条=NUTS):
+      //   翻后eq由mcVsRange(...,_nActive-1)/riverExactEquity(...,_nActive-1)多对手模拟产出——
+      //   已真实抽取n-1个对手、取最大牌力、我方须领先全部才计胜。旧multiPlayerEquity衰减(6way×0.38)是
+      //   mcVsRange尚未多对手化时代(rev10注释)的单挑抽样补偿,多对手模拟接入后未删除=双重折扣。铁证:NUTS
+      //   三条raw~68%被打到25.9%,收口语义eq<需43%fold;池驱反fold(L9430)故意放行赔率型fold、V2.9.127
+      //   顶级保护只管翻前,下游无一能拦→绝对坚果被弃。根修只在此处,避免下游兜底互相打架。
+      //   NUTS多人MC已客观反映被一家反超分摊,绝不二次衰减;STRONG对手范围偏宽略乐观,mild×0.85安全缓冲;
+      //   MEDIUM/DRAW/AIR维持旧分级折扣(本就该在多人池收紧跟注,改动仅限强牌,不放大松跟回归)。
+      if(_hnMw==='NUTS'){
+        console.log('[MW] 翻后NUTS跳过多人池二次折扣(多对手MC已客观分摊) n='+_nActive+' eq='+eq);
+      }else if(_hnMw==='STRONG'){
+        eq=Math.round(Math.max(0,Math.min(100,eq*0.85))*10)/10;
+        console.log('[MW] 翻后STRONG mild折扣 n='+_nActive+' -> eq='+eq);
+      }else{
+        var _eqMwRaw=multiPlayerEquity(eq,_nActive);
+        if(_hnMw==='MEDIUM'||_hnMw==='DRAW')_eqMwRaw=_eqMwRaw*0.9;
+        else if(_hnMw==='AIR')_eqMwRaw=_eqMwRaw*0.8;
+        eq=Math.round(Math.max(0,Math.min(100,_eqMwRaw))*10)/10;
+        console.log('[MW] 多人池权益折扣 n='+_nActive+' '+_hnMw+' -> eq='+eq);
+      }
     }catch(eMw){}
   }
 
