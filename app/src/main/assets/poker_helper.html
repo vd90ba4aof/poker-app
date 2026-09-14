@@ -3613,6 +3613,34 @@ function decidePreflop(k){
     return null;
 }
 
+// ====== V2.9.637 perf: 翻后公共口径(go预算与SE决策共用,禁止复制分歧) ======
+// (1) 含我方在内的活跃人数统计——与SE POST-4完全同源
+function postflopActiveCount(){
+  var n=0;
+  try{
+    var pl=G._lastPlayers&&G._lastPlayers.length>0?G._lastPlayers:(G.players||[]);
+    for(var i=0;i<pl.length;i++){
+      var pp=pl[i];if(!pp)continue;
+      var folded=pp.folded===true;
+      var active=pp.active===true||pp.active===1||(!folded&&pp.chips>0);
+      if(active&&!folded)n++;
+    }
+  }catch(e){n=0;}
+  return n<2?2:n;
+}
+// (2) 翻后场景归一——bet→raise,且 bet>=码深85%强制allin(与SE V2.9.632/V2.9.610完全同源)
+//   入参rawScene=G.scene, bet/stk为BB归一化; 返回归一后场景(check/raise/allin)
+function postflopSceneNorm(rawScene,bet,stk){
+  var sc=rawScene||'check';
+  if(sc==='bet')sc='raise';
+  // V2.9.637 perf: stk缺失统一视为深码(与SE默认G.stk||100000同源),禁止go(||0)与SE(||100000)默认分歧→85%硬闸口径不一
+  var effStk=(typeof stk==='number'&&stk>0)?stk:100000;
+  try{
+    if(sc!=='allin'&&bet>0&&bet>=effStk*0.85)sc='allin';
+  }catch(e){}
+  return sc;
+}
+
 // ====== V2.9.637 perf: 翻后权益计算参数【唯一真相源】 ======
 // go()(多对手Worker异步预算)与StrategyEngine.decidePostflop(兜底自算)共用,
 // 杜绝"go()按单挑cbet范围Worker算一遍 + SE按行动线多对手范围UI主线程同步重算一遍"的口径分裂与卡顿。
@@ -3641,7 +3669,7 @@ function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive){
   }
 }
 // V2.9.637 perf: 暴露到全局供go()(IIFE外)共用同一口径;函数内仅引用全局getOppRange/boardTexture,无IIFE私有依赖
-if(typeof window!=='undefined')window.postflopEqSpec=postflopEqSpec;else if(typeof globalThis!=='undefined')globalThis.postflopEqSpec=postflopEqSpec;
+(function(g){try{g.postflopEqSpec=postflopEqSpec;g.postflopActiveCount=postflopActiveCount;g.postflopSceneNorm=postflopSceneNorm;}catch(e){}})(typeof window!=='undefined'?window:globalThis);
 
 // ====== 翻后决策 ======
 function decidePostflop(k,_pfInj){
@@ -3662,33 +3690,17 @@ function decidePostflop(k,_pfInj){
   //   归一: 翻后bet(面对下注)统一映射为SE内部raise语义。
   //   注: check-raise(我方cbet被加)vision无法识别(ActionLine每街仅一条+FrameDiff不追踪hero),
   //       G._crDetected是从未赋值的死flag; 故CR场景暂按面对下注处理,不做无证据的reraise推断。
-  if(scene==='bet'){scene='raise';console.log('[V2.9.632场景归一] 翻后bet→raise(面对下注)');}
-  // V2.9.610 FIX(P0): 翻后同款全押数学硬闸——bet>=码深85%实质面对全押,
-  //   不依赖按钮识别(短码局"全下"按钮可能被误识为加注行致scene误判bet/raise)。
-  try{
-    if(scene!=='allin' && bet>0 && stk>0 && bet>=stk*0.85){
-      console.log('[全押数学硬闸-翻后] bet='+bet+'BB >= 码深'+stk+'BB*85% → scene '+scene+'→allin');
-      scene='allin';
-    }
-  }catch(_aiGuardE2){console.log('[全押数学硬闸-翻后]异常:'+_aiGuardE2.message);}
+  // V2.9.637 perf: bet→raise + bet>=码深85%→allin,统一走postflopSceneNorm(go()预算同口径)
+  var _sceneRaw=scene;
+  scene=postflopSceneNorm(scene,bet,stk);
+  if(scene!==_sceneRaw)console.log('[翻后场景归一] '+_sceneRaw+'→'+scene+(scene==='allin'?'(bet='+bet+'≥码深'+stk+'*85%)':'(面对下注)'));
   var bTexture=boardTexture(bc);
   var hClass=handClassify(hole,comm);
   var oppType=G.opp||'unknown';
   var profile=DRTA.getProfile();
   var eq;
   // POST-4: 提前计算 _nActive 用于多对手互斥抽样
-  var _nActive=0;
-  try{
-    var _pl=G._lastPlayers&&G._lastPlayers.length>0?G._lastPlayers:(G.players||[]);
-    for(var _pi=0;_pi<_pl.length;_pi++){
-      var _pp=_pl[_pi];
-      if(!_pp)continue;
-      var _isFolded=_pp.folded===true;
-      var _isActive=_pp.active===true||_pp.active===1||(!_isFolded&&_pp.chips>0);
-      if(_isActive&&!_isFolded)_nActive++;
-    }
-  }catch(e){_nActive=0;}
-  if(_nActive<2)_nActive=2;
+  var _nActive=postflopActiveCount(); // V2.9.637 perf: 与go()共用唯一计数,禁止复制分歧
 
   // rev11 POST-6: 对手范围按行动线收窄——我们是PFR且面对bet=对手donk/raise(极化);对手是PFR连开barrel按街收窄
   var _oppLinePF;if(scene==='check'){_oppLinePF='cbet';}// V2.9.600 精度债#2: 场景语义修正——对手check过牌=范围弱/未击中,用宽cbet基线;// 旧: scene==='check'错用barrel_river/barrel_turn(连开三枪/两枪强范围)→对手过牌反算强范围→我方价值eq低估、诈唬高估。// 面对bet场景: flop对手cbet用cbet宽范围, turn对手连开两枪barrel_turn, river连开三枪barrel_river(极化强范围)。else{_oppLinePF=bc.length===5?'barrel_river':bc.length===4?'barrel_turn':'cbet';}
@@ -9991,6 +10003,8 @@ function go(){
   // V2.9.503: go()入口诊断——确认go被调用时的状态
   console.log('[go诊断] go()被调用 hand='+JSON.stringify((G.hole||[]).map(function(c){return c?c.rank+c.suit:'null'}))+' comm='+JSON.stringify((G.comm||[]).filter(function(c){return c}).map(function(c){return c.rank+c.suit}))+' phase='+G.phase+' scene='+G.scene+' pot='+G.pot+' bet='+G.bet);
   var resEl=document.getElementById('res');if(resEl)resEl.innerHTML='<div style="color:#4fc3f7;font-size:14px;text-align:center;padding:8px">⏳</div>';setTimeout(function(){
+  // V2.9.637 perf: 每帧入口先清空注入槽,杜绝上一帧Worker异常/跨街/翻前残留eq被本帧误用(消费即清空+入口双保险)
+  if(typeof _setPfEqInj==='function')_setPfEqInj(null);
   // V2.9.30: 自动采集对手动作(在decide之前)
   // V2.9.568: 删除phase修正（原V2.9.73）——street完全由公共牌数量决定（street保险），不再二次纠正
   // V2.9.588 FIX(B2-1): 翻后街名原写死'postflop'，而record()按'flop'/'turn'/'river'计数→
@@ -10005,9 +10019,9 @@ function go(){
       var bc=comm;
       var bTexture=boardTexture(bc);
       // V2.9.637 perf: 翻后权益参数与SE同源(postflopEqSpec),go()只算一次(Worker多对手/河牌精确枚举),注入SE免主线程重算
-      var _goScene=(G.scene==='bet')?'raise':(G.scene||'check');
-      var _goNA=2;
-      try{var _goPl=G._lastPlayers&&G._lastPlayers.length>0?G._lastPlayers:(G.players||[]);var _goN=0;for(var _gi=0;_gi<_goPl.length;_gi++){var _gp=_goPl[_gi];if(!_gp)continue;if(!(_gp.folded===true)&&(_gp.active===true||_gp.active===1||_gp.chips>0))_goN++;}_goN=Math.max(2,_goN);_goNA=_goN;}catch(eGo){_goNA=2;}
+      // V2.9.637 perf: scene归一(含bet→raise/85%全押硬闸)与活跃人数均与SE共用公共函数,口径零分歧
+      var _goScene=postflopSceneNorm(G.scene,G.bet||0,G.stk||0);
+      var _goNA=postflopActiveCount();
       var _goSpec=postflopEqSpec(hole,bc,_goScene,G.bet||0,G.pot||1,bTexture,_goNA);
       var oppRange=_goSpec.range;
       var betPotRatio=G.bet>0?G.bet/(G.pot+G.bet):0;
@@ -10047,19 +10061,33 @@ function go(){
       // 翻牌/转牌: 走Worker异步MC
       // V2.9.637 perf: 迭代数与范围取spec(与SE同口径);多对手nOpp透传Worker(Worker已注入多对手mcVsRange)
       var mcIter=_goSpec.iter;
+      // V2.9.637 perf: 跨帧签名——Worker异步返回需数十~数百ms,期间若onVisionResult更新了手牌/公牌(换街/新手牌),
+      //   then回调里decide()读的是【新G牌面】而sim.eq是按【旧牌面】算的→错配。记录发起时签名,回调时比对当前G,不符即丢弃(新帧自理)。
+      var _goSig=(function(){var hh=hole.map(function(c){return c.rank+c.suit;}).sort().join(',');var bb=bc.map(function(c){return c.rank+c.suit;}).join(',');return hh+'|'+bb;})();
       mcVsRangeAsync(hole,comm,_goSpec.range,mcIter,_goSpec.nOpp).then(function(sim){
+        var _curSig=(function(){var hh=(G.hole||[]).filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).sort().join(',');var bb=(G.comm||[]).filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join(',');return hh+'|'+bb;})();
+        if(_curSig!==_goSig){
+          console.log('[V2.9.637perf] Worker结果跨帧过期(牌面已变 '+_goSig+' → '+_curSig+')→丢弃旧eq,本帧由新go()链处理,杜绝eq/牌面错配');
+          return;
+        }
         // rev11 POST-10: Worker超时/错误→静态粗估,禁止eq=null/0进入真钱决策
         if(sim&&sim.timeout){
           try{
-            var _nAct=2;
-            try{var _plFb=G._lastPlayers&&G._lastPlayers.length>0?G._lastPlayers:(G.players||[]);for(var _piF=0;_piF<_plFb.length;_piF++){var _ppF=_plFb[_piF];if(_ppF&&!(_ppF.folded===true)&&(_ppF.active===true||_ppF.active===1||_ppF.chips>0))_nAct++;}}catch(eF){}
+            var _nAct=postflopActiveCount(); // V2.9.637 perf: 统一计数
             var _fbEq=_mcFallbackEq(hole,comm,_nAct-1);
             sim={eq:_fbEq,win:_fbEq,tie:0,timeout:true,_lowReliability:true};
             console.log('[go诊断] MC超时·静态粗估兜底 eq='+_fbEq+' (低可靠)');
           }catch(eFb){sim={eq:25,win:25,tie:0,timeout:true,_lowReliability:true};}
         }
         _mcSimCache=sim;
-        if(typeof _setPfEqInj==='function'&&sim&&typeof sim.eq==='number')_setPfEqInj(sim.eq);  // V2.9.637 perf 注入SE
+        // V2.9.637 perf: 仅Worker真实MC成功才注入复用;超时帧sim.eq是按手牌类别的经验粗估(非真实模拟,
+        //   多人还乘0.92衰减),与SE多对手精确口径不一致→禁止注入,留空让SE按正确范围主线程自算(降级帧,安全优先)
+        if(typeof _setPfEqInj==='function'&&sim&&typeof sim.eq==='number'&&!sim.timeout&&!sim._lowReliability){
+          _setPfEqInj(sim.eq);
+        }else{
+          if(typeof _setPfEqInj==='function')_setPfEqInj(null);
+          console.log('[V2.9.637perf] Worker超时/低可靠→不注入,SE按正确范围自算(避免经验粗估冒充真实MC)');
+        }
         try{
           console.log('[go诊断] 翻后Worker异步完成');
           var r=decide();
