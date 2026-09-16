@@ -424,8 +424,11 @@ static unsigned long g_lastDisconnect   = 0;
 static unsigned long g_lastConnectTime  = 0;
 
 // BLE命令队列（回调中接收，loop中处理，避免在回调中做耗时操作）
+// V2.9.638 fix: String堆分配+跨任务无锁访问→竞态致命令丢失/堆损坏。
+//   改为固定大小char数组+portMUX spinlock(BLE回调与loop()跨任务安全)。
 static volatile bool g_hasNewCmd = false;
-static String g_pendingCmd = "";
+static char g_pendingCmd[128] = {0};
+static portMUX_TYPE g_cmdMux = portMUX_INITIALIZER_UNLOCKED;
 
 // --- BLE Server Callbacks ---
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -457,12 +460,19 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pChar) override {
         std::string val = pChar->getValue();
         if (val.length() > 0) {
-            String cmd = String(val.c_str());
-            cmd.trim();
-            // v1.0.36: 每次收到命令时记录完整命令内容（含长度和原始值摘要）
-            qlogf("[BLE] CMD received: len=%d raw='%s'", cmd.length(), cmd.c_str());
-            g_pendingCmd = cmd;
+            // V2.9.638 fix: 用strncpy+spinlock替代String赋值,防跨任务堆竞态
+            char buf[128];
+            size_t len = val.length();
+            if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+            memcpy(buf, val.c_str(), len);
+            buf[len] = '\0';
+            // trim trailing whitespace
+            while (len > 0 && (buf[len-1] == ' ' || buf[len-1] == '\r' || buf[len-1] == '\n')) { buf[--len] = '\0'; }
+            qlogf("[BLE] CMD received: len=%d raw='%s'", (int)len, buf);
+            portENTER_CRITICAL(&g_cmdMux);
+            memcpy(g_pendingCmd, buf, len + 1);
             g_hasNewCmd = true;
+            portEXIT_CRITICAL(&g_cmdMux);
         }
     }
 };
@@ -769,11 +779,15 @@ void setup() {
 // ============================================================================
 void loop() {
     // 处理BLE收到的命令
+    // V2.9.638 fix: 用spinlock安全拷贝char数组,替代String拷贝(防堆竞态)
     if (g_hasNewCmd) {
+        char cmd[128];
+        portENTER_CRITICAL(&g_cmdMux);
         g_hasNewCmd = false;
-        String cmd = g_pendingCmd;
-        g_pendingCmd = "";
-        processCommand(cmd);
+        memcpy(cmd, g_pendingCmd, sizeof(cmd));
+        g_pendingCmd[0] = '\0';
+        portEXIT_CRITICAL(&g_cmdMux);
+        processCommand(String(cmd));
     }
 
     // USB状态变化监控

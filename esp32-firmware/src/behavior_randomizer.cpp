@@ -128,7 +128,16 @@ const RandomizerConfig& BehaviorRandomizer::getConfig() const
 
 void BehaviorRandomizer::setConfig(const RandomizerConfig& config)
 {
-    _config = config;
+    // V2.9.638 fix: 配置值边界校验——防止错误配置导致随机化异常
+    RandomizerConfig cfg = config;
+    if (cfg.coordOffsetMin > cfg.coordOffsetMax) {
+        int32_t t = cfg.coordOffsetMin; cfg.coordOffsetMin = cfg.coordOffsetMax; cfg.coordOffsetMax = t;
+    }
+    if (cfg.durationJitterMin > cfg.durationJitterMax) {
+        int32_t t = cfg.durationJitterMin; cfg.durationJitterMin = cfg.durationJitterMax; cfg.durationJitterMax = t;
+    }
+    if (cfg.coordOffsetSigma < 0) cfg.coordOffsetSigma = 0;
+    _config = cfg;
     Serial.printf("[RAND] Config updated: enabled=%d, sigma=%.1f\n",
                   _config.enabled, _config.coordOffsetSigma);
 }
@@ -147,7 +156,9 @@ void BehaviorRandomizer::setEnabled(bool enabled)
 float BehaviorRandomizer::_gaussianRandom(float mean, float sigma)
 {
     // 生成两个 [0,1) 均匀分布随机数
+    // V2.9.638 fix: clamp u1防log(0)→NaN(当前random(1,10000)保证>=0.0001,但防御性clamp更安全)
     float u1 = (float)random(1, 10000) / 10000.0f;
+    if (u1 < 1e-6f) u1 = 1e-6f;
     float u2 = (float)random(1, 10000) / 10000.0f;
 
     // Box-Muller 变换

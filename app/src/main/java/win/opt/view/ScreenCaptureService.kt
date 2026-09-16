@@ -10,10 +10,12 @@ object ScreenCaptureService {
 
     @Volatile var isRunning = false
     @Volatile var latestScreenshot: ByteArray? = null
-    var captureCount: Int = 0
+    // V2.9.638 fix: @Volatile缺失——captureCount由ScreenOptService(回调线程)写、HttpServerService(主线程)读
+    @Volatile var captureCount: Int = 0
     @Volatile var lastCaptureTime: Long = 0
     @Volatile var lastError: String = ""
-    var lastChipStatus: String = ""
-    var screenshotWidth: Int = 0
-    var screenshotHeight: Int = 0
+    // V2.9.638 fix: @Volatile缺失——screenshotWidth/Height由分析线程写、其他线程读，无@Volatile可能读到陈旧值
+    @Volatile var lastChipStatus: String = ""
+    @Volatile var screenshotWidth: Int = 0
+    @Volatile var screenshotHeight: Int = 0
 }
