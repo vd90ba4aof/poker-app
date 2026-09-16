@@ -190,11 +190,11 @@ class ScreenOptService : AccessibilityService() {
                                 val softwareBitmap = hardwareBitmap?.copy(Bitmap.Config.ARGB_8888, false)
 
                                 if (softwareBitmap != null) {
-                                    // PERF-OPT: JPEG质量从95降至85——VLM禁用后仅本地CV使用，
-                                    // 本地CV基于模板匹配和颜色分析，85质量完全足够且压缩更快
-                                    // 95→85可节省约30-40%压缩时间，文件体积减少约50%
+                                    // PERF-FIX: JPEG质量从85调回95——本地CV基于模板匹配/像素分析，
+                                    // 低质量压缩可能导致边缘模糊影响识别率，节省的几毫秒不值得冒准确率下降风险
+                                    // 后台线程压缩优化保留（主线程不阻塞）
                                     val stream = ByteArrayOutputStream()
-                                    softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+                                    softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
                                     val jpegBytes = stream.toByteArray()
                                     softwareBitmap.recycle()
 
