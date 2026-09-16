@@ -2928,7 +2928,7 @@ class FloatingService : Service() {
                             tvRecDetail?.visibility = View.VISIBLE
                         }
                         scheduleNextAutoCapture()
-                        return@Thread
+                        return@execute
                     }
                     // V2.9.111: NO_TABLE检测——优先看isPokerTable，其次3信号联合判断
                     val modelSaysNoTable = !result.isPokerTable
