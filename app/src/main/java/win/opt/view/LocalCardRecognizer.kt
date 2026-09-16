@@ -274,6 +274,22 @@ class LocalCardRecognizer private constructor(private val context: Context) {
         return r < 90 && g < 90 && b < 90
     }
 
+    /**
+     * V2.9.641: 黑牌软边缘二值化（仅手牌mask使用）。
+     * 根因: 模板用gray<128=内容, 查询用isBlack(r<90)=内容,
+     *   抗锯齿边缘(灰度90-127)模板算内容但查询算背景→查询mask偏瘦→IoU偏低→rankUncertain误触发。
+     *   红牌isRed天然含边缘(R>110边缘红分量仍高)→红牌IoU不受影响。
+     *   实证: Ad红牌c=0.93正常, Ac黑牌c=0.68+rankUncertain→黑牌边缘丢失是主因。
+     * 阈值100: 灰度90-99的边缘像素纳入内容, 仍远低于中灰128, 不会引入背景噪声。
+     * 仅用于手牌mask创建, 颜色判定(detectColor)仍用严格isBlack保证颜色分类准确。
+     */
+    private fun isBlackSoft(pixel: Int): Boolean {
+        val r = pixel shr 16 and 0xFF
+        val g = pixel shr 8 and 0xFF
+        val b = pixel and 0xFF
+        return r < 100 && g < 100 && b < 100
+    }
+
     private fun isWhite(pixel: Int): Boolean {
         val r = pixel shr 16 and 0xFF
         val g = pixel shr 8 and 0xFF
@@ -798,6 +814,19 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             suitConf = sm.score.toDouble()
             suitUnc = sm.uncertain
 
+            // V2.9.641: 黑牌suit plateau交叉验证——IoU不确定时, 用plateau几何分类独立验证。
+            //   两种独立方法(IoU模板匹配 + plateau宽度比)一致→清除uncertain; 不一致保留uncertain。
+            //   根因: 黑牌suit IoU仅2个候选(c/s), 分差天然小, uncertain误判率高于多候选rank。
+            //   plateau是几何不变量(梅花三瓣等宽vs黑桃尖顶圆肚), 与IoU正交, 交叉验证有效。
+            if (suitUnc && isBlack && bestSuit != null && suitTrimmed != null) {
+                val ratio = computePlateauRatio(suitTrimmed.first, suitTrimmed.second, suitTrimmed.third)
+                val plateauSuit = if (ratio > 0.30) "c" else "s"
+                if (plateauSuit == bestSuit) {
+                    suitUnc = false
+                    Log.d(TAG, "H${handIndex} suit交叉验证通过: IoU=$bestSuit(%.2f) + plateau=$plateauSuit(ratio=%.2f) → 清除uncertain".format(suitConf, ratio))
+                }
+            }
+
             // 兜底：仅黑牌且IoU完全给不出label(空trim/无前景)时，退回plateau几何分类给个标签，
             //   仍保守标记uncertain（plateau无IoU分差可验）——避免match_fail丢整张卡，下游门禁不采信
             if (bestSuit == null && isBlack && suitTrimmed != null) {
@@ -1070,10 +1099,13 @@ class LocalCardRecognizer private constructor(private val context: Context) {
             }
             Pair(false, mask) // 红牌
         } else {
-            // 固定阈值mask(与v582 extractMask同构): 亮牌帧rank/suit分数原样零回归
+            // 固定阈值mask: 亮牌帧rank/suit
+            // V2.9.641: 黑牌用isBlackSoft(阈值100)替代isBlack(阈值90)——补回抗锯齿边缘像素,
+            //   使查询mask形状更接近模板(gray<128=内容), 提升黑牌IoU、降低rankUncertain误判。
+            //   颜色判定(fixedBlack)仍用严格isBlack保证分类准确。
             for (y in 0 until rh) for (x in 0 until rw) {
                 val p = getPixel(pixels, stride, x1 + x, y1 + y)
-                val content = if (fixedBlack) isBlack(p) else isRed(p)
+                val content = if (fixedBlack) isBlackSoft(p) else isRed(p)
                 mask[y * rw + x] = !content
             }
             Pair(fixedBlack, mask)
