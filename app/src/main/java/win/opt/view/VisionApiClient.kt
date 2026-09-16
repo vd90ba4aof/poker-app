@@ -1251,6 +1251,17 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
         val rawResponse: String
     )
 
+    // PERF-OPT: 本地CV并行化——动作识别任务返回结果
+    private data class LocalActionCVResult(
+        val isMyTurn: Boolean,
+        val dButtonSeat: Int,
+        val potValue: Long,
+        val potOk: Boolean,
+        val chipsValue: Int,
+        val amountDiag: String,
+        val oppChipsMap: HashMap<Int, Int>
+    )
+
     /**
      * 并发区域识别 V2 — 核心方法
      * 2路并发：牌面（缓存优化）+ 操作区（每帧必识别）
@@ -1307,6 +1318,80 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 //   confidence=min(rankScore,suitScore)，双过硬置信度必>=0.50(=localHandOk阈值)，
                 //   不双过硬的帧localHoleCards已置null，lowFallback条件恒false为死代码
                 val AMOUNT_CONFIDENCE_THRESHOLD = 0.60f
+
+                // PERF-OPT: 本地CV并行化——动作识别(isMyTurn+D按钮+金额识别)在后台并发执行，与牌面识别并行
+                val actionCVDeferred = kotlinx.coroutines.GlobalScope.async(Dispatchers.IO) {
+                    val larInstance = LocalActionRecognizer.getInstance(context)
+                    // 1. 行动轮检测
+                    val myTurn = try { larInstance.isMyTurn(screenshotBmp) } catch (_: Exception) { true }
+                    // 2. D按钮识别
+                    var dSeat = -1
+                    try {
+                        val tDB = System.currentTimeMillis()
+                        val dbRes = larInstance.recognizeDButton(screenshotBmp)
+                        if (dbRes.seat >= 0 && dbRes.confidence >= 0.3f) {
+                            dSeat = dbRes.seat
+                            Log.d(TAG, "🎲 D按钮本地CV: seat=${dbRes.seat} conf=%.2f %dms".format(dbRes.confidence, System.currentTimeMillis() - tDB))
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "D按钮本地CV失败: ${e.message}")
+                    }
+                    // 3. 金额识别（底池+筹码+对手筹码）
+                    var potVal = 0L
+                    var potOk = false
+                    var chipsVal = 0
+                    var amtDiag = "skipped"
+                    val oppChips = HashMap<Int, Int>()
+                    try {
+                        val tAmt = System.currentTimeMillis()
+                        val potBmpLocal = RegionCropper.cropPotAmount(screenshotBmp)
+                        val chipsBmp = RegionCropper.cropMyChips(screenshotBmp)
+                        if (potBmpLocal != null) {
+                            val potRes = larInstance.recognizeAmount(potBmpLocal, isPot = true)
+                            if (potRes != null && potRes.value > 0 && potRes.confidence >= AMOUNT_CONFIDENCE_THRESHOLD) {
+                                potVal = potRes.value
+                                potOk = true
+                                RegionCropper.updatePotCache(potBmpLocal, potRes.value)
+                                Log.d(TAG, "💰 本地CV底池: ${System.currentTimeMillis() - tAmt}ms | pot=${potRes.value} conf=%.2f %s".format(potRes.confidence, potRes.diag))
+                            } else {
+                                amtDiag = "pot:${potRes?.diag ?: "null"}"
+                                Log.w(TAG, "💰 本地CV底池失败(conf=%.2f<%s) %s".format(potRes?.confidence ?: 0f, AMOUNT_CONFIDENCE_THRESHOLD, potRes?.diag))
+                            }
+                        }
+                        if (chipsBmp != null) {
+                            val chipsRes = larInstance.recognizeAmount(chipsBmp, isPot = false)
+                            if (chipsRes != null && chipsRes.value > 0 && chipsRes.confidence >= AMOUNT_CONFIDENCE_THRESHOLD) {
+                                chipsVal = chipsRes.value.toInt()
+                                amtDiag += ";chips=${chipsRes.value}(c=%.2f)".format(chipsRes.confidence)
+                                Log.d(TAG, "🪙 本地CV筹码: chips=${chipsRes.value} conf=%.2f %s".format(chipsRes.confidence, chipsRes.diag))
+                            } else {
+                                amtDiag += ";chips_fail:${chipsRes?.diag ?: "null"}"
+                                Log.w(TAG, "🪙 本地CV筹码失败(conf=%.2f<%.2f) %s".format(chipsRes?.confidence ?: 0f, AMOUNT_CONFIDENCE_THRESHOLD, chipsRes?.diag))
+                            }
+                        }
+                        RegionCropper.recycleBitmaps(potBmpLocal, chipsBmp)
+                        // 对手筹码
+                        val tOC = System.currentTimeMillis()
+                        val oppSeatIds = listOf(0, 1, 2, 3, 5)
+                        for ((idx, seatId) in oppSeatIds.withIndex()) {
+                            val oppBmp = RegionCropper.cropOpponentChips(screenshotBmp, idx)
+                            if (oppBmp != null) {
+                                val oppRes = larInstance.recognizeAmount(oppBmp, isPot = false)
+                                if (oppRes != null && oppRes.value > 0 && oppRes.confidence >= AMOUNT_CONFIDENCE_THRESHOLD) {
+                                    oppChips[seatId] = oppRes.value.toInt()
+                                }
+                                oppBmp.recycle()
+                            }
+                        }
+                        if (oppChips.isNotEmpty()) {
+                            Log.d(TAG, "👥 对手筹码: ${oppChips.size}/5 %dms".format(System.currentTimeMillis() - tOC))
+                        }
+                    } catch (e: Exception) {
+                        amtDiag = "exception:${e.message}"
+                        Log.w(TAG, "本地CV底池/筹码失败，VLM兜底: ${e.message}")
+                    }
+                    LocalActionCVResult(myTurn, dSeat, potVal, potOk, chipsVal, amtDiag, oppChips)
+                }
 
                 try {
                     val tLocal = System.currentTimeMillis()
@@ -1410,85 +1495,22 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // V2.9.569: 公共牌独立判断——手牌HIGH且公共牌置信度OK时才信任本地结果
                 val localCommOk = localHandOk && localCommConfOk
 
+                // PERF-OPT: 本地CV并行化——获取并行动作识别结果（牌面识别期间已在后台执行，此处通常立即可得）
+                val actionCVResult = runBlocking { actionCVDeferred.await() }
                 // V2.9.526: 本地CV底池/筹码金额识别（毫秒级，成功则不调VLM底池API）
-                var localPotValue: Long = 0L
-                var localPotOk = false
-                var localChipsValue: Int = 0
-                var amountDiag = "skipped"
+                var localPotValue: Long = actionCVResult.potValue
+                var localPotOk = actionCVResult.potOk
+                var localChipsValue: Int = actionCVResult.chipsValue
+                var amountDiag = actionCVResult.amountDiag
                 // v612: 本地CV盲注OCR已删除(牌桌小字不可读, GCD筹码推断为唯一来源)
                 // V2.9.526: 检测是否轮到我行动（绿色进度条）
-                val isMyTurn = try {
-                    LocalActionRecognizer.getInstance(context).isMyTurn(screenshotBmp)
-                } catch (_: Exception) { true }
+                val isMyTurn = actionCVResult.isMyTurn
                 // V2.9.527: D按钮(庄位)本地CV识别（<0.5ms，6个小区域像素扫描）
-                var dButtonSeatLocal = -1
-                try {
-                    val tDB = System.currentTimeMillis()
-                    val dbRes = LocalActionRecognizer.getInstance(context).recognizeDButton(screenshotBmp)
-                    if (dbRes.seat >= 0 && dbRes.confidence >= 0.3f) {
-                        dButtonSeatLocal = dbRes.seat
-                        Log.d(TAG, "🎲 D按钮本地CV: seat=${dbRes.seat} conf=%.2f %dms".format(dbRes.confidence, System.currentTimeMillis() - tDB))
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "D按钮本地CV失败: ${e.message}")
-                }
-                try {
-                    val tAmt = System.currentTimeMillis()
-                    val larInstance = LocalActionRecognizer.getInstance(context)
-                    val potBmpLocal = RegionCropper.cropPotAmount(screenshotBmp)
-                    val chipsBmp = RegionCropper.cropMyChips(screenshotBmp)
-                    if (potBmpLocal != null) {
-                        val potRes = larInstance.recognizeAmount(potBmpLocal, isPot = true)
-                        if (potRes != null && potRes.value > 0 && potRes.confidence >= AMOUNT_CONFIDENCE_THRESHOLD) {
-                            localPotValue = potRes.value
-                            localPotOk = true
-                            RegionCropper.updatePotCache(potBmpLocal, potRes.value)
-                            Log.d(TAG, "💰 本地CV底池: ${System.currentTimeMillis() - tAmt}ms | pot=${potRes.value} conf=%.2f %s".format(potRes.confidence, potRes.diag))
-                        } else {
-                            amountDiag = "pot:${potRes?.diag ?: "null"}"
-                            Log.w(TAG, "💰 本地CV底池失败(conf=%.2f<%s) %s".format(potRes?.confidence ?: 0f, AMOUNT_CONFIDENCE_THRESHOLD, potRes?.diag))
-                        }
-                    }
-                    if (chipsBmp != null) {
-                        val chipsRes = larInstance.recognizeAmount(chipsBmp, isPot = false)
-                        if (chipsRes != null && chipsRes.value > 0 && chipsRes.confidence >= AMOUNT_CONFIDENCE_THRESHOLD) {
-                            localChipsValue = chipsRes.value.toInt()
-                            amountDiag += ";chips=${chipsRes.value}(c=%.2f)".format(chipsRes.confidence)
-                            Log.d(TAG, "🪙 本地CV筹码: chips=${chipsRes.value} conf=%.2f %s".format(chipsRes.confidence, chipsRes.diag))
-                        } else {
-                            amountDiag += ";chips_fail:${chipsRes?.diag ?: "null"}"
-                            Log.w(TAG, "🪙 本地CV筹码失败(conf=%.2f<%.2f) %s".format(chipsRes?.confidence ?: 0f, AMOUNT_CONFIDENCE_THRESHOLD, chipsRes?.diag))
-                        }
-                    }
-                    RegionCropper.recycleBitmaps(potBmpLocal, chipsBmp)
-                } catch (e: Exception) {
-                    amountDiag = "exception:${e.message}"
-                    Log.w(TAG, "本地CV底池/筹码失败，VLM兜底: ${e.message}")
-                }
+                var dButtonSeatLocal = actionCVResult.dButtonSeat
 
                 // V2.9.539: 对手筹码本地CV识别（5个座位，纯像素模板匹配，~5ms）
                 // seatIndex 0-4 对应 dZones seat 0,1,2,3,5（跳过seat4=Hero）
-                val oppChipsMap = HashMap<Int, Int>()
-                try {
-                    val tOC = System.currentTimeMillis()
-                    val larInstance = LocalActionRecognizer.getInstance(context)
-                    val oppSeatIds = listOf(0, 1, 2, 3, 5)
-                    for ((idx, seatId) in oppSeatIds.withIndex()) {
-                        val oppBmp = RegionCropper.cropOpponentChips(screenshotBmp, idx)
-                        if (oppBmp != null) {
-                            val oppRes = larInstance.recognizeAmount(oppBmp, isPot = false)
-                            if (oppRes != null && oppRes.value > 0 && oppRes.confidence >= AMOUNT_CONFIDENCE_THRESHOLD) {
-                                oppChipsMap[seatId] = oppRes.value.toInt()
-                            }
-                            oppBmp.recycle()
-                        }
-                    }
-                    if (oppChipsMap.isNotEmpty()) {
-                        Log.d(TAG, "👥 对手筹码: ${oppChipsMap.size}/5 %dms".format(System.currentTimeMillis() - tOC))
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "对手筹码识别失败: ${e.message}")
-                }
+                val oppChipsMap = actionCVResult.oppChipsMap
 
                 // V2.9.607: 座位状态本地CV检测（纯像素扫描，~3ms，不占主链路）
                 //   有牌背=本手仍持牌参与（弃牌/空座/留座离桌全押均无牌背）；黑面板=就座在座。
@@ -1521,7 +1543,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
 
                 // 2. 裁剪操作区（每帧必识别）
                 val actionBmp = RegionCropper.cropActionArea(screenshotBmp)
-                val actionBase64 = actionBmp?.let { bitmapToBase64(it, quality = 80) }
+                // PERF-OPT: CLOUD_VLM_ENABLED=false时跳过base64编码，编译器常量折叠后零开销
+                val actionBase64 = if (CLOUD_VLM_ENABLED) actionBmp?.let { bitmapToBase64(it, quality = 80) } else null
 
                 // V2.9.519: 本地CV操作区识别（毫秒级，成功则跳过VLM操作区API）
                 var localAction: ActionAreaResult? = null
@@ -1716,7 +1739,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val boardApiBitmap = if (boardParts.size > 1) {
                     stitchBitmapsVertically(boardParts, gap = 8)
                 } else boardParts.firstOrNull()
-                val boardBase64 = boardApiBitmap?.let { bitmapToBase64(it, quality = 75) }
+                // PERF-OPT: CLOUD_VLM_ENABLED=false时跳过base64编码，编译器常量折叠后零开销
+                val boardBase64 = if (CLOUD_VLM_ENABLED) boardApiBitmap?.let { bitmapToBase64(it, quality = 75) } else null
 
                 val t2 = System.currentTimeMillis()
                 Log.d(TAG, "⏱ 缓存+编码: ${t2 - t1}ms (本地CV hand=$localHandOk comm=$localCommOk, 手API=$needHandApiFinal, 新公共牌=${newCommIndices.size}张, 底池API=$needPotApi)")

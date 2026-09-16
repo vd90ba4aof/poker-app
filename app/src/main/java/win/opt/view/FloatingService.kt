@@ -414,7 +414,8 @@ class FloatingService : Service() {
                             if (pipelineFSM.getCurrentState() == PipelineStateMachine.PipelineState.EXECUTING) {
                                 Log.d(TAG, "★ ESP32 ACK收到→BLE_EXEC_OK")
                                 pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
-                                handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+                                // PERF-OPT: 冷却从1500ms→800ms——本地CV毫秒级识别，点击后800ms足以让牌桌动画稳定
+                                handler.postDelayed({ endCooldownAndScheduleNext() }, 800)
                             }
                         }
                         // 格式化status显示
@@ -757,10 +758,12 @@ class FloatingService : Service() {
             }
         }
         handler.postDelayed(_screenshotTimeoutRunnable!!, 7000)
-        handler.postDelayed({ScreenOptService.captureScreen()}, 100)  // V2.9.192: 延迟100ms等View渲染
+        handler.postDelayed({ScreenOptService.captureScreen()}, 30)  // PERF-OPT: 延迟由100ms降至30ms，无障碍截图从SurfaceFlinger获取，下一帧即可
     }
 // V2.9.190: 截屏前隐藏悬浮层，避免日志面板遮挡扑克桌面
     private fun hideOverlay() {
+        // PERF-OPT: 隐身模式下悬浮窗本来就是1x1透明像素，无需隐藏/显示（节省View重绘）
+        if (isStealthMode) return
         try {
             floatingView?.visibility = android.view.View.GONE
             floatingBall?.visibility = android.view.View.GONE
@@ -768,6 +771,8 @@ class FloatingService : Service() {
     }
     
     private fun showOverlay() {
+        // PERF-OPT: 隐身模式下悬浮窗本来就是1x1透明像素，无需隐藏/显示（节省View重绘）
+        if (isStealthMode) return
         try {
             floatingView?.visibility = android.view.View.VISIBLE
             floatingBall?.visibility = android.view.View.VISIBLE
@@ -1049,7 +1054,8 @@ class FloatingService : Service() {
                             Log.i(TAG, "★ Pipeline: 截图→ESP32点击=${_pipelineEsp32TapTimeMs}ms ACK=OK")
                             cancelBleAckTimeout()
                             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
-                            handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+                            // PERF-OPT: 冷却从1500ms→800ms——本地CV毫秒级识别，点击后800ms足以让牌桌动画稳定
+                            handler.postDelayed({ endCooldownAndScheduleNext() }, 800)
                         } else {
                             Log.w(TAG, "★ Pipeline: ESP32 tap ACK失败")
                             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
@@ -1235,7 +1241,8 @@ class FloatingService : Service() {
                 if (tapOk) {
                     cancelBleAckTimeout()
                     pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
-                    handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+                    // PERF-OPT: 冷却从1500ms→800ms——本地CV毫秒级识别，点击后800ms足以让牌桌动画稳定
+                    handler.postDelayed({ endCooldownAndScheduleNext() }, 800)
                 } else {
                     pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
                     if (autoCaptureEnabled) scheduleNextAutoCapture()
@@ -1373,9 +1380,10 @@ class FloatingService : Service() {
         // P0-fix #6: 第一拍截屏超时兜底
         _screenshotTimeoutRunnable=Runnable{if(pipelineFSM.getCurrentState()==PipelineStateMachine.PipelineState.CAPTURING){Log.w(TAG,"★ P0-fix#6: 多帧截屏超时7s");_screenshotGate.set(false);ScreenOptService.setScreenshotCallback(null);showOverlay();pipelineFSM.transition(PipelineStateMachine.PipelineEvent.SCREENSHOT_FAIL);autoConsecutiveErrors++;checkAutoErrors();if(autoCaptureEnabled)scheduleNextAutoCapture()}}
         handler.postDelayed(_screenshotTimeoutRunnable!!, 7000)
-        handler.postDelayed({ScreenOptService.captureScreen()}, 100)  // V2.9.192: 延迟100ms等View渲染
+        handler.postDelayed({ScreenOptService.captureScreen()}, 30)  // PERF-OPT: 延迟由100ms降至30ms，无障碍截图从SurfaceFlinger获取，下一帧即可
     }
-    fun setAutoCaptureSpeed(ms:Long){autoCaptureInterval=ms.coerceIn(1500L,10000L);if(autoCaptureEnabled)scheduleNextAutoCapture()}
+    // PERF-OPT: 最小间隔从1500ms→800ms——本地CV毫秒级，更快的轮询提高及时率
+    fun setAutoCaptureSpeed(ms:Long){autoCaptureInterval=ms.coerceIn(800L,10000L);if(autoCaptureEnabled)scheduleNextAutoCapture()}
 
 /**
      * V2.9.38: 触发截屏（通知栏按钮调用）
@@ -1449,7 +1457,7 @@ class FloatingService : Service() {
                 }
             }
             handler.postDelayed(_screenshotTimeoutRunnable!!, 7000)
-            handler.postDelayed({ScreenOptService.captureScreen()}, 100)  // V2.9.192: 延迟100ms等View渲染
+            handler.postDelayed({ScreenOptService.captureScreen()}, 30)  // PERF-OPT: 延迟由100ms降至30ms，无障碍截图从SurfaceFlinger获取，下一帧即可
         } else {
             Log.e(TAG, "★ 无障碍服务未运行！")
             tvStatus?.text = "⚠️ 请先开启无障碍服务！"
@@ -1892,14 +1900,35 @@ class FloatingService : Service() {
             fun autoDecision(jsonData: String) {
                 // R8-fix: 在调用线程捕获当前策略代次（@JavascriptInterface在Binder线程，主线程post前取快照）
                 val gen = _strategyGeneration
+                // PERF-OPT: 在binder线程预先解析JSON，减少主线程负担——本地CV毫秒级，JSON解析移至binder线程节省主线程数毫秒
+                var parsedAction = "fold"
+                var parsedAuto = false
+                var parsedConfidence = "medium"
+                var parsedReason = ""
+                var parsedEq = 0
+                var parsedToCall = -1
+                var parsedData: org.json.JSONObject? = null
+                try {
+                    val data = org.json.JSONObject(jsonData)
+                    parsedAction = data.optString("action", "fold")
+                    parsedAuto = data.optBoolean("auto", false)
+                    parsedConfidence = data.optString("confidence", "medium")
+                    parsedReason = data.optString("reason", "")
+                    parsedEq = data.optInt("eq", 0)
+                    parsedToCall = data.optInt("toCall", -1)
+                    parsedData = data
+                } catch (e: Exception) {
+                    Log.e(TAG, "autoDecision JSON parse error", e)
+                }
                 handler.post {
                     try {
-                        val data = org.json.JSONObject(jsonData)
-                        var action = data.optString("action", "fold")
-                        val auto = data.optBoolean("auto", false)
-                        val confidence = data.optString("confidence", "medium")
-                        val reason = data.optString("reason", "")
-                        val eq = data.optInt("eq", 0)
+                        val data = parsedData ?: return@post
+                        var action = parsedAction
+                        val auto = parsedAuto
+                        val confidence = parsedConfidence
+                        val reason = parsedReason
+                        val eq = parsedEq
+                        val toCallJs = parsedToCall
                         // V2.9.553-rev9-fix-v3: free check局面fold→check（豪哥规则）。
                         //   无需跟注(toCall=0)时弃牌=白白放弃底池，是策略错误；且GG左按钮在check局面文字就是"让牌/弃牌"
                         //   点下去实际执行check，系统却记成fold造成状态错乱。任何"free+fold"一律改为check过牌。
@@ -1907,7 +1936,6 @@ class FloatingService : Service() {
                         //   （v570实机铁证：跟注100帧toCallJs=0→fold改check→中间按钮点中"跟注 100"白输钱×2）。
                         //   屏幕真相优先：按钮文字含"跟注X"=面对真下注，绝不是free check；cachedToCall(Kotlin
                         //   原始chips值，不经BB归一化)>0同理。三者都确认无跟注时才允许fold→check。
-                        val toCallJs = data.optInt("toCall", -1)
                         if (action == "fold" && (toCallJs == 0 || (toCallJs < 0 && cachedToCall == 0))) {
                             val screenCallBtn = latestButtonPositions.any { bp ->
                                 val t = bp.text ?: ""
@@ -3041,7 +3069,8 @@ class FloatingService : Service() {
                                         if (tapOk) {
                                             cancelBleAckTimeout()
                                             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_OK)
-                                            handler.postDelayed({ endCooldownAndScheduleNext() }, 1500)
+                                            // PERF-OPT: 冷却从1500ms→800ms——本地CV毫秒级识别，点击后800ms足以让牌桌动画稳定
+                                            handler.postDelayed({ endCooldownAndScheduleNext() }, 800)
                                         } else {
                                             pipelineFSM.transition(PipelineStateMachine.PipelineEvent.BLE_EXEC_FAIL)
                                             if (autoCaptureEnabled) scheduleNextAutoCapture()
@@ -3152,9 +3181,8 @@ class FloatingService : Service() {
                             Log.w(TAG, "HudLearner桥接失败", e)
                         }
                         // V3.0-fix: 同步级别到JS策略引擎（_getBaseline依赖G.ggLevel）
-                        executeJs("if(typeof StrategyEngine!=='undefined')StrategyEngine.setGGLevel('"+ggLevel+"');")
-                                                // V2.9.113: 先检测WebView是否就绪，再调onVisionResult
-                        executeJs("(function(){try{if(typeof onVisionResult==='function'){onVisionResult($taggedJson);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.confirmVisionReceived){AndroidBridge.confirmVisionReceived()}}else{console.log('[V2.9.125] onVisionResult不存在,尝试重载HTML');if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:策略引擎未加载');}setTimeout(function(){location.reload();},1000);}}catch(e){console.log('[V2.9.125] onVisionResult异常:'+e.message);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:JS异常:'+e.message.substring(0,30));}}})()")
+                        // PERF-OPT: 合并连续executeJs调用——setGGLevel+onVisionResult合为一次，减少JS桥接开销
+                        executeJs("if(typeof StrategyEngine!=='undefined')StrategyEngine.setGGLevel('"+ggLevel+"');(function(){try{if(typeof onVisionResult==='function'){onVisionResult($taggedJson);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.confirmVisionReceived){AndroidBridge.confirmVisionReceived()}}else{console.log('[V2.9.125] onVisionResult不存在,尝试重载HTML');if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:策略引擎未加载');}setTimeout(function(){location.reload();},1000);}}catch(e){console.log('[V2.9.125] onVisionResult异常:'+e.message);if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('COLOR:FOLD|SIGNAL:ERROR|REASON:JS异常:'+e.message.substring(0,30));}}})()")
                         tvAction?.alpha = 1.0f
                         Log.d(TAG, "★ onVisionResult已调用")
                         // V3.50: 结果已发给JS → 进入策略计算状态

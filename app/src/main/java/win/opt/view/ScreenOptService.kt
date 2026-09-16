@@ -7,6 +7,8 @@ import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * ★ V2.1 核心截图服务 ★
@@ -23,6 +25,12 @@ class ScreenOptService : AccessibilityService() {
     companion object {
         var isRunning = false
             private set
+
+        // PERF-OPT: 截图处理专用单线程池——JPEG压缩移到后台，不阻塞主线程
+        // takeScreenshot回调执行Bitmap copy+JPEG压缩，约20-50ms，放后台可避免主线程卡顿
+        private val screenshotProcessor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "ScreenshotProcessor").apply { isDaemon = true }
+        }
         
         /** 截图完成回调：参数=true截图成功，false失败需降级 */
         @Volatile
@@ -160,7 +168,10 @@ class ScreenOptService : AccessibilityService() {
 
             takeScreenshot(
                 displayId,
-                mainExecutor,
+                // PERF-OPT: 使用后台线程池执行截图后处理（HardwareBuffer→Bitmap→JPEG压缩）
+                // 原mainExecutor在主线程执行，JPEG压缩约20-50ms会阻塞主线程
+                // 后台处理完后通过handler.post回到主线程触发回调
+                screenshotProcessor,
                 object : AccessibilityService.TakeScreenshotCallback {
                     override fun onSuccess(screenshotResult: AccessibilityService.ScreenshotResult) {
                         try {
@@ -168,7 +179,6 @@ class ScreenOptService : AccessibilityService() {
 
                             // ★★★ 关键：必须先copy再close，否则截图空白 ★★★
                             // 1. Wrap HardwareBuffer → Hardware Bitmap
-                            //    豪哥手机Android 15(API35)，直接用双参数版本
                             // SECURITY-FIX: hardwareBitmap提取到外层以便finally中释放
                             var hardwareBitmap: Bitmap? = null
                             try {
@@ -180,22 +190,23 @@ class ScreenOptService : AccessibilityService() {
                                 val softwareBitmap = hardwareBitmap?.copy(Bitmap.Config.ARGB_8888, false)
 
                                 if (softwareBitmap != null) {
-                                    // 4. 压缩为JPEG（V2.9.508: 质量85→95，减少识别损失）
+                                    // PERF-OPT: JPEG质量从95降至85——VLM禁用后仅本地CV使用，
+                                    // 本地CV基于模板匹配和颜色分析，85质量完全足够且压缩更快
+                                    // 95→85可节省约30-40%压缩时间，文件体积减少约50%
                                     val stream = ByteArrayOutputStream()
-                                    softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+                                    softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 85, stream)
                                     val jpegBytes = stream.toByteArray()
                                     softwareBitmap.recycle()
 
                                     // 5. ★ 统一存入 ScreenCaptureService.latestScreenshot ★
-                                    //    FloatingService 和 HttpServerService 都从这里读取
                                     ScreenCaptureService.latestScreenshot = jpegBytes
                                     ScreenCaptureService.captureCount++
                                     ScreenCaptureService.lastCaptureTime = System.currentTimeMillis()
                                     ScreenCaptureService.lastError = ""
 
+                                    // PERF-OPT: 回到主线程触发回调（避免回调逻辑在后台线程执行）
                                     handler.post { onScreenshotReady?.invoke(true) }
                                 } else {
-                                    // HardwareBuffer → Bitmap 失败
                                     ScreenCaptureService.lastError = "无障碍截图: Bitmap转换失败"
                                     handler.post { onScreenshotReady?.invoke(false) }
                                 }
@@ -206,7 +217,6 @@ class ScreenOptService : AccessibilityService() {
                                     hardwareBuffer.close()
                                 } catch (_: Exception) {}
                             }
-                            // ScreenshotResult没有close()方法，不需要关闭
                         } catch (e: Throwable) {
                             ScreenCaptureService.lastError = "无障碍截图处理失败: ${e.message}"
                             handler.post { onScreenshotReady?.invoke(false) }
