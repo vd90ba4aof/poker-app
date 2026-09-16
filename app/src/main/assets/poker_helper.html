@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.644',
+  CURRENT_VERSION:'2.9.645',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.644';
+var APP_VERSION = '2.9.645';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3394,8 +3394,24 @@ function decidePreflop(k){
   if(scene==='check'||scene==='call'||scene==='open'){  // V3.26: 'open'=Straddle局开池场景
     var rfi=_RFI[p5];
     // V3.29b: BB check option — 无人加注时BB免费看牌
-    if(p5==='BB'&&(scene==='check'||scene==='call'||scene==='open')&&bet===0){
-      return{a:'check',r:'BB check option(无人加注免费看牌)',eq:eq,c:'m',scene:'看牌',spr:spr,_se:true,_seFreq:1};
+    // V2.9.645 FIX(P0): 所有位置免费过牌(bet=0)都应check而非fold
+    //   旧逻辑只保护BB,导致MP/CO/BTN等位置toCall=0时不在RFI范围就直接fold=白白放弃免费看牌
+    if((scene==='check'||scene==='call'||scene==='open')&&bet===0){
+      if(p5==='BB'){
+        return{a:'check',r:'BB check option(无人加注免费看牌)',eq:eq,c:'m',scene:'看牌',spr:spr,_se:true,_seFreq:1};
+      }
+      // 非BB位置免费过牌: 不在RFI范围→check(免费看牌总比fold好)
+      // 在RFI范围→继续往下走raise逻辑(由下方统一处理频率/掷骰/sizing,避免双重掷骰)
+      var rfiCheck=_RFI[p5];
+      if(!rfiCheck){
+        return{a:'check',r:p5+' free check(无RFI表,免费看牌)',eq:eq,c:'l',scene:'看牌',spr:spr,_se:true,_seFreq:1};
+      }
+      var freqCheck=rfiCheck[k];
+      if(freqCheck===undefined||freqCheck===0){
+        // 不在开池范围: 免费过牌,绝不fold
+        return{a:'check',r:p5+' free check(不在RFI范围,免费看牌)',eq:eq,c:'l',scene:'看牌',spr:spr,_se:true,_seFreq:1};
+      }
+      // 在RFI范围: 不提前return,让下方代码统一处理limper调整/剥削调整/掷骰/sizing
     }
     // V2.9.632 FIX(迁移根因): BB面对limp需补盲(bet>0)——BB无RFI表(_RFI顶层无BB键),
     //   旧代码直接落 L3391 return null→逃逸旧preF的scene='call' limp池赔率决策。
@@ -3447,9 +3463,15 @@ function decidePreflop(k){
       if(_hasA&&_hasK&&bet>0&&bet<=bigBlind){
         return{a:'call',v:bet,r:'AK硬底跟注(翻前无人加注,仅付大盲)',eq:eq,c:'m',scene:'跟注',spr:spr,_se:true,_seFreq:1};
       }
+      // V2.9.645: bet=0免费过牌场景→check,绝不fold
+      if(bet===0){return{a:'check',r:p5+' free check(RFI freq=0,免费看牌)',eq:eq,c:'l',scene:'看牌',spr:spr,_se:true,_seFreq:1};}
       if(oppType==='nit'||oppType==='tight')freq=0.05;else return _fold(eq,'不在'+p5+'RFI范围',spr);
     }
-    if(Math.random()>freq)return _fold(eq,p5+' RFI '+Math.round(freq*100)+'%→弃牌',spr);
+    // V2.9.645: bet=0免费过牌场景频率未命中→check而非fold
+    if(Math.random()>freq){
+      if(bet===0)return{a:'check',r:p5+' RFI '+Math.round(freq*100)+'%→check(免费看牌)',eq:eq,c:'m',scene:'看牌',spr:spr,_se:true,_seFreq:freq};
+      return _fold(eq,p5+' RFI '+Math.round(freq*100)+'%→弃牌',spr);
+    }
     var sz=_preflopSizing(p,pot,scene,spr);
     if(_isoMode){
       // rev11 PRE-3: iso尺度 4BB+1BB/limper(≈pot的1.1~1.5倍随limper数递增);fish/calling_station再×Multiway.isoRaiseAdj(1.3~1.5)
@@ -3500,11 +3522,38 @@ function decidePreflop(k){
     // V2.9.640 FIX(P0): posTable为undefined时(如raiserRole='unknown'→rP5='MP'→vs_MP.from_MP不存在)
     //   原代码仅处理posTable存在但entry不存在的情况，posTable本身undefined时静默穿透→返回null→eq=0→脏帧拦截
     //   修复: posTable不存在时，安全fold(无法查表=对手位置未知=保守弃牌)
+    // V2.9.645 FIX(P1): 小金额limp兜底——面对<=2BB的小额下注(大概率是limp/平跟),
+    //   不在3bet范围也用eq+赔率判断是否跟注,避免翻前过紧(同花/连张/投机牌全部弃掉)
+    var _betBB=(pot>0&&pot<=3)?bet/(pot/1.5):bet;  // 开池前底池≈1.5BB,估算下注额BB数
+    var _isLimp=(_betBB>0&&_betBB<=2.5);  // <=2.5BB视为limp/平跟场景
     if(!posTable){
       console.log('[SE] vs_'+rP5+' from_'+p5+' 无3B表(raiser='+raiserRole+')→安全fold '+k);
+      if(_isLimp){
+        // limp场景: 用eq+赔率兜底判断是否跟注
+        var _limpPo=bet/Math.max(pot+bet*2,1)*100;
+        var _limpTh=30+Multiway.callThresholdAdj();
+        if(eq>=_limpTh&&eq>=_limpPo){
+          var _exLimp=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+          return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_limpPo)+'%('+rP5+'无表)',eq:_exLimp.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLimp.exploit,_se:true,_seFreq:1,_limpFallback:true};
+        }
+      }
       return _fold(eq,'vs '+rP5+' from_'+p5+' 无3B表(raiser未知)',spr);
     }
-    if(!entry)return _fold(eq,'vs '+rP5+' open不在3B范围',spr);
+    if(!entry){
+      // V2.9.645: limp场景兜底——小金额下注不在3B范围也可跟注
+      if(_isLimp){
+        var _limpPo2=bet/Math.max(pot+bet*2,1)*100;
+        var _limpTh2=30+Multiway.callThresholdAdj();
+        // 后位(btn/co/sb)和多人池放宽门槛,鼓励投机牌入池
+        if(['BTN','CO','SB'].indexOf(p5)>=0)_limpTh2-=5;
+        if(G.act>=4)_limpTh2-=3;  // 4人以上底池放宽
+        if(eq>=_limpTh2&&eq>=_limpPo2){
+          var _exLimp2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+          return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_limpPo2)+'%('+rP5+'不在3B)',eq:_exLimp2.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLimp2.exploit,_se:true,_seFreq:1,_limpFallback:true};
+        }
+      }
+      return _fold(eq,'vs '+rP5+' open不在3B范围',spr);
+    }
     if(entry!==null){
       var act=entry.a,f=entry.f;f=_adjFreq3bet(act,f,oppType,raiserRole,p,k);
       if(act==='3b'){var adj3=_quantExploitAdjust(f,'raise',profile);f=adj3.freq>f?Math.min(1,adj3.freq):f;}
