@@ -102,7 +102,7 @@ OTAResult OTAUpdater::handleUpdate(const uint8_t* data, size_t dataLen,
         Serial.printf("[OTA] Error: write failed (expected %u, wrote %u): %s\n",
                       dataLen, written, Update.errorString());
         Update.abort();
-        _updating = false;
+        _resetState();
         return OTAResult::ERROR_WRITE_FAILED;
     }
 
@@ -125,7 +125,7 @@ OTAResult OTAUpdater::handleUpdate(const uint8_t* data, size_t dataLen,
                 Serial.printf("[OTA] MD5 mismatch! Expected: %s, Got: %s\n",
                               _expectedMd5.c_str(), actualMd5.c_str());
                 Update.abort();
-                _updating = false;
+                _resetState();
                 return OTAResult::ERROR_MD5_MISMATCH;
             }
             Serial.printf("[OTA] MD5 verified: %s\n", actualMd5.c_str());
@@ -135,11 +135,12 @@ OTAResult OTAUpdater::handleUpdate(const uint8_t* data, size_t dataLen,
         if (!Update.end(true)) {  // true = 设置新分区为启动分区
             Serial.printf("[OTA] Error: Update.end() failed: %s\n",
                           Update.errorString());
-            _updating = false;
+            Update.abort();
+            _resetState();
             return OTAResult::ERROR_WRITE_FAILED;
         }
 
-        _updating = false;
+        _resetState();
         Serial.println("[OTA] Update complete! Restarting...");
 
         // 延迟后重启
@@ -157,9 +158,20 @@ void OTAUpdater::abort()
 {
     if (_updating) {
         Update.abort();
-        _updating = false;
-        Serial.println("[OTA] Update aborted");
     }
+    _resetState();
+    Serial.println("[OTA] Update aborted");
+}
+
+// ============================================================================
+// 重置全部OTA状态
+// ============================================================================
+void OTAUpdater::_resetState()
+{
+    _updating = false;
+    _totalReceived = 0;
+    _totalSize = 0;
+    _expectedMd5 = "";
 }
 
 // ============================================================================

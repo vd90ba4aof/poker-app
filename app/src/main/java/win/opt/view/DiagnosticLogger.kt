@@ -591,8 +591,10 @@ object DiagnosticLogger {
     }
     
     fun resetChipTracking() {
-        lastChips = 0
-        lastPot = 0
+        synchronized(chipTrackLock) {
+            lastChips = 0
+            lastPot = 0
+        }
     }
     
     // ===== 导出功能 V2.9.215 =====

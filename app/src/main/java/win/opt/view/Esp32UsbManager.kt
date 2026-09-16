@@ -286,6 +286,7 @@ class Esp32UsbManager(private val context: Context) {
             // 发送status命令验证bulk通道（在后台线程，避免ANR）
             Thread {
                 try { Thread.sleep(200) } catch (_: Exception) {}
+                if (!running.get()) return@Thread  // V2.9.639 fix: stop()后不再访问已释放的连接
                 val status = sendCommandWaitAck("status", 2000L)
                 if (status != null) {
                     onCommandResult?.invoke(status)

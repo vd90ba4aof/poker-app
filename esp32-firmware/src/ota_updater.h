@@ -112,6 +112,11 @@ private:
      * 计算进度百分比并调用回调
      */
     void _reportProgress();
+
+    /**
+     * 重置全部OTA状态（错误路径和abort时调用）
+     */
+    void _resetState();
 };
 
 #endif // OTA_UPDATER_H

@@ -457,6 +457,7 @@ class FloatingService : Service() {
         // R1-fix: 重初始化时撤销所有在途延迟点击/策略回调，旧管线对象全部作废
         cancelPendingTap()
         _strategyGeneration++
+        pipelineFSM.reset()  // V2.9.639 fix: 重置FSM到IDLE，防止服务重启后残留非IDLE状态
         _shotClockRunnable?.let { handler.removeCallbacks(it) }
         _shotClockRunnable = null
         _strategyTimeoutRunnable?.let { handler.removeCallbacks(it) }
@@ -842,6 +843,8 @@ class FloatingService : Service() {
                 executeAutoTapFallback("fold")
                 pipelineFSM.transition(PipelineStateMachine.PipelineEvent.RESET)  // V3.50: 完成→IDLE
                 handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }
+                _strategyTimeoutRunnable?.let { handler.removeCallbacks(it) }
+                _strategyTimeoutRunnable = null
                 lastDecisionTime = now
                 updateAdviceNotification("⏰ Shot Clock", "超时强制弃牌")
                 updateBallAdvice("COLOR:FOLD|SIGNAL:TIMEOUT|REASON:Shot Clock超时")

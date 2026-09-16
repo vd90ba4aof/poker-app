@@ -723,9 +723,8 @@ void setup() {
           ((bool)USB) ? "true" : "false",
           touchpad.ready() ? "true" : "false");
 
-    disableCore0WDT();
-    disableCore1WDT();
-    qlog("[TWDT] Dual-core Task WDT disabled");
+    // V3.2.3 fix: 保留WDT作为安全网——loop()内delay(100)会让出CPU给idle task喂狗
+    // qlog("[TWDT] Dual-core Task WDT disabled");
 
     // V1.0.28: USB mount wait - (bool)USB = _started && tinyusb_device_mounted（真正被主机枚举）
     qlog("[USB] Waiting for USB mount (30s max)...");

@@ -444,7 +444,7 @@ var _pi=null,_ms='h';
 // Fix: 安全AndroidBridge调用辅助——统一封装，防typeof检查不充分导致ReferenceError
 function _safeBridgeCall(methodName, defaultVal){
   if(typeof AndroidBridge==='undefined')return defaultVal;
-  if(typeof AndroidBridge[methodName]!=='function')return defaultVal;
+  if(typeof AndroidBridge[methodName]!=='function'){console.log('[bridge] '+methodName+' is not a function');return defaultVal;}
   try{return AndroidBridge[methodName]();}catch(e){console.log('[bridge] '+methodName+' err: '+e.message);return defaultVal;}
 }
 // V2.9.630: 引擎路由统计——记录新旧引擎使用分布,指导渐进式迁移优先级
@@ -11248,7 +11248,7 @@ function onVisionResult(data){
   }
   // V2.9.604: 同手判据升级rank+suit全牌key(rank-only是v603跨手锁死根因)
   var _isSameHand = (_prevLockKey !== '' && _newHandKey === _prevLockKey && !_newHandSignal);
-  var _isNewHand = (_prevLockKey !== '' && (_newHandKey !== _prevLockKey || _newHandSignal));
+  var _isNewHand = (_prevLockKey !== '' && (_newHandKey !== '' && _newHandKey !== _prevLockKey || _newHandSignal));
   // 同手但花色分歧=单帧花色抖动(v603起同手suit以Kotlin锁为准, 分歧帧大概率误识别):
   //   保守保旧牌+触发多帧复核, 不让分歧帧覆盖锁
   var _suitConflictSameRank = (_handLocked && _prevRankKey !== '' && _newRankKey === _prevRankKey
@@ -11307,6 +11307,7 @@ function onVisionResult(data){
     if(correctStreet && street!==correctStreet && street!=='pre'){
       console.log('[street保险] Vision报'+street+'但公共牌'+commCount+'张→纠正为'+correctStreet);
       street=correctStreet;
+      data.street=correctStreet;  // V2.9.639 fix: 回写data.street，确保后续逻辑读到纠正后的值
     }
     var activeP=parseInt(data.active_players)||2;
     if(street==='preflop'||street==='pre'){

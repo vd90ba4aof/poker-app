@@ -452,9 +452,8 @@ void setup() {
     touchpad.begin();
     USB.begin();
 
-    disableCore0WDT();
-    disableCore1WDT();
-
+    // V3.2.3 fix: 保留WDT作为安全网——loop()内delay(10)会让出CPU给idle task喂狗，
+    // processCommand最长路径(selftest)约150ms，远低于5s WDT超时。若设备挂起WDT可自动重启。
     // 初始化命令/响应缓冲区为idle状态
     memset((void*)cmdBuf, 0, sizeof(cmdBuf));
     memset((void*)respBuf, 0, sizeof(respBuf));
