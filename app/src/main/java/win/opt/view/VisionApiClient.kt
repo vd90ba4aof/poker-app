@@ -602,6 +602,7 @@ ${streetHint}${rankHint}识别:"""
         var lastException: Exception? = null
         // V2.9.184: 网络波动重试1次，间隔500ms
         // R6-fix: 仅重试5xx服务端错误，4xx不重试；增加响应大小限制
+        // V2.9.638 fix: 固定500ms改为指数退避+抖动——避免多客户端同步重试风暴
         repeat(2) { attempt ->
             try {
                 val body = requestJson.toRequestBody("application/json".toMediaType())
@@ -625,9 +626,10 @@ ${streetHint}${rankHint}识别:"""
                     val errBody = response.body?.string() ?: ""
                     Log.e(TAG, "sendRequest: HTTP错误, code=${response.code}, 耗时=${elapsed}ms, body=${errBody.take(200)}")
                     if (attempt == 0 && response.code >= 500) {
-                        Log.w(TAG, "HTTP ${response.code}, retrying in 500ms...")
+                        val _delay = 500L * (1L shl attempt) + (Math.random() * 200).toLong()
+                        Log.w(TAG, "HTTP ${response.code}, retrying in ${_delay}ms (exp backoff)...")
                         lastException = Exception("HTTP ${response.code}: $errBody")
-                        Thread.sleep(500)
+                        Thread.sleep(_delay)
                         return@repeat
                     }
                     throw Exception("HTTP ${response.code}: $errBody")
@@ -636,8 +638,9 @@ ${streetHint}${rankHint}识别:"""
                 lastException = e
                 val errTime = System.currentTimeMillis()
                 if (attempt == 0) {
-                    Log.w(TAG, "sendRequest: 第${attempt + 1}次失败 (${errTime - reqTime}ms): ${e.message}")
-                    Thread.sleep(500)
+                    val _delay = 500L * (1L shl attempt) + (Math.random() * 200).toLong()
+                    Log.w(TAG, "sendRequest: 第${attempt + 1}次失败 (${errTime - reqTime}ms): ${e.message}, retry in ${_delay}ms")
+                    Thread.sleep(_delay)
                 } else {
                     Log.e(TAG, "sendRequest: 全部重试失败 (${errTime - reqTime}ms): ${e.message}", e)
                 }

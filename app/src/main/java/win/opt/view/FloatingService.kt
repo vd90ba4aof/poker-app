@@ -40,6 +40,8 @@ import android.text.Spanned
 import android.text.style.RelativeSizeSpan
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class FloatingService : Service() {
 
@@ -62,6 +64,10 @@ class FloatingService : Service() {
     private var windowManager: WindowManager? = null
     private var floatingView: View? = null
     private var webView: WebView? = null
+    // V2.9.638 perf: 复用单线程池替代每次new Thread()——避免高频自动截屏(3.5s间隔)产生大量短生命周期线程对象
+    private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "poker-analysis").apply { isDaemon = true }
+    }
     private var tvStatus: TextView? = null
     private var tvRecResult: TextView? = null
     private var tvRecDetail: TextView? = null  // V2.9.43: 识别详情（底池/跟注/盲注）
@@ -535,6 +541,8 @@ class FloatingService : Service() {
         try {
             floatingView?.let { windowManager?.removeView(it) }
         } catch (_: Exception) {}
+        // V2.9.638 perf: 关闭分析线程池，防止Service销毁后线程继续运行
+        try { analysisExecutor.shutdownNow() } catch (_: Exception) {}
         super.onDestroy()
     }
 
@@ -2867,7 +2875,8 @@ class FloatingService : Service() {
             scheduleNextAutoCapture()
             return
         }
-        Thread {
+        // V2.9.638 perf: 使用复用的单线程池替代每次new Thread()
+        analysisExecutor.execute {
             try {
                 // V2.9.541: 使用并发区域识别方案（本地CV多区域并行）
                 val result = VisionApiClient.analyzeScreenshotConcurrent(
@@ -3226,7 +3235,7 @@ class FloatingService : Service() {
                     if (autoCaptureEnabled) scheduleNextAutoCapture()
                 }
             }
-        }.start()
+        }  // V2.9.638: analysisExecutor.execute block end (was Thread{}.start())
     }
 
     private fun toggleExpand() {

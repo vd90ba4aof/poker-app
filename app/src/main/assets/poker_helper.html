@@ -10003,12 +10003,17 @@ function go(){
     return;
   }
   // V2.9.139: 防双触发——200ms内重复调用跳过(避免HandHistory重复记录)
+  // V2.9.638 fix: 纯时间锁会丢弃200ms内到达的真实新帧(换手/新公牌)。
+  //   改为签名+时间双闸：200ms内且签名相同→跳过(真重复)；签名变化→放行(新帧)。
   var _now=Date.now();
-  if(window._goLastTime && (_now-window._goLastTime)<200){
-    console.log('[go] 防双触发: 距上次'+(_now-window._goLastTime)+'ms→跳过');
+  var _goSig=(G.hole||[]).map(function(c){return c?c.rank+c.suit:'n';}).join('')+'|'+
+    (G.comm||[]).map(function(c){return c?c.rank+c.suit:'';}).join('')+'|'+G.scene+'|'+G.phase;
+  if(window._goLastTime && (_now-window._goLastTime)<200 && window._goLastSig===_goSig){
+    console.log('[go] 防双触发: 距上次'+(_now-window._goLastTime)+'ms,签名相同→跳过');
     return;
   }
   window._goLastTime=_now;
+  window._goLastSig=_goSig;
   window._goStartTime=_now;
   // V2.9.503: go()入口诊断——确认go被调用时的状态
   console.log('[go诊断] go()被调用 hand='+JSON.stringify((G.hole||[]).map(function(c){return c?c.rank+c.suit:'null'}))+' comm='+JSON.stringify((G.comm||[]).filter(function(c){return c}).map(function(c){return c.rank+c.suit}))+' phase='+G.phase+' scene='+G.scene+' pot='+G.pot+' bet='+G.bet);
@@ -11665,7 +11670,7 @@ function onVisionResult(data){
   // 规则: 翻前pot=3BB(1limper),4BB(2limpers),5+BB(多人/加注); 翻后沿用翻前值
   if(G.phase==='pre'){
     var _rawPot=parseInt(data.pot_size)||0;
-    var _potBB=_rawPot>0&&bbValue>0?Math.round(_rawPot/bbValue):0;
+    var _potBB=_rawPot>0&&bbValue>0?Math.round((_rawPot/bbValue)*2)/2:0;
     if(_potBB<=2){
       G._inPotPlayers=2; // 只有SB+BB
     }else if(_potBB<=4){
@@ -12051,8 +12056,11 @@ function onVisionResult(data){
     var _rawPot=parseInt(data.pot_size)||0;
     var _rawChips=parseInt(data.my_chips)||0;
     var _rawBet=parseInt(data.to_call)||0;
-    if(_rawPot>0){ G.pot=Math.round(_rawPot/bbValue); }
-    if(_rawChips>0){ G.stk=Math.round(_rawChips/bbValue); }
+    // V2.9.638 fix: Math.round(x)丢失半BB精度(如5chips/2BB=2.5BB被round为3)。
+    //   改为Math.round(x*2)/2保留0.5BB精度——扑克最小有意义单位。
+    //   安全性：下游无取模/位运算，SPR/赔率/下注尺寸均兼容浮点。
+    if(_rawPot>0){ G.pot=Math.round((_rawPot/bbValue)*2)/2; }
+    if(_rawChips>0){ G.stk=Math.round((_rawChips/bbValue)*2)/2; }
     // V2.9.566 FIX(P0): to_call=0时必须显式清零G.bet——旧逻辑仅在_rawBet>0时赋值，
     // 0值帧保留上一手残留（v565日志铁证：Qc3c全下4682chips=23BB残留到下一手8hQh，
     // 空按钮帧经"按钮为空但G.bet>0→bet场景"误判面对下注，且toCall=23绕开Kotlin free-check保护致盲fold）

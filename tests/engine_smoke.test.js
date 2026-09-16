@@ -127,8 +127,9 @@ function feedAndSnap(label, data) {
   suppressedCount = 0;
   global.G.stk = 100; global.G.pot = 10; global.G.bet = 0;  // 重置为输入框默认值
   try { global.onVisionResult(data); } catch (e) { /* mock不全的无关报错忽略 */ }
-  const expStk = Math.round(data.my_chips / data.blind_bb);
-  const expPot = Math.round(data.pot_size / data.blind_bb);
+  // V2.9.638: 与生产代码poker_helper.html的半BB精度一致(Math.round(x*2)/2)
+  const expStk = Math.round(data.my_chips / data.blind_bb * 2) / 2;
+  const expPot = Math.round(data.pot_size / data.blind_bb * 2) / 2;
   console.log('\n【' + label + '】 chips=' + data.my_chips + ' pot=' + data.pot_size + ' BB=' + data.blind_bb
     + ' → 决策时刻 stk=' + (goSnapshot ? goSnapshot.stk : 'go未触发') + ' pot=' + (goSnapshot ? goSnapshot.pot : '?')
     + ' (入库期提前go被抑制' + suppressedCount + '次)');
