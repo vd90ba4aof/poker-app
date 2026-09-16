@@ -104,7 +104,9 @@ class MainActivity : AppCompatActivity() {
 
             // V2.9.320: 固定硅基流动，不再显示供应商选择
             spinnerProvider.visibility = android.view.View.GONE
-            val savedKey = prefs?.getString(KEY_APIKEY, "sk-xonndqonqkxttcxnfjinrcnchnxlntvdaqyxhxenlelekndf") ?: "sk-xonndqonqkxttcxnfjinrcnchnxlntvdaqyxhxenlelekndf"
+            // SECURITY-FIX: 移除硬编码默认API密钥，避免APK反编译泄露
+            // 用户首次使用需手动输入自己的API Key
+            val savedKey = prefs?.getString(KEY_APIKEY, "") ?: ""
             if (savedKey.isNotEmpty()) {
                 etApiKey.setText(savedKey)
                 VisionApiClient.updateConfig("siliconflow", savedKey)

@@ -175,6 +175,17 @@ class PipelineStateMachine {
     var onStateChanged: ((oldState: PipelineState, event: PipelineEvent, newState: PipelineState) -> Unit)? = null
 
     /**
+     * SECURITY-FIX: 状态转换守卫——用于验证异常路径转换的合理性
+     * 返回true表示允许转换，false表示拒绝（保持当前状态）
+     */
+    var transitionGuard: ((oldState: PipelineState, event: PipelineEvent, targetState: PipelineState) -> Boolean)? = null
+
+    /**
+     * SECURITY-FIX: 转换前回调——用于清理脏状态（如从COOLDOWN/ERROR_RECOVERY跳CAPTURING前重置数据）
+     */
+    var onBeforeTransition: ((oldState: PipelineState, event: PipelineEvent, targetState: PipelineState) -> Unit)? = null
+
+    /**
      * 获取当前状态
      */
     fun getCurrentState(): PipelineState = currentState
@@ -230,6 +241,14 @@ class PipelineStateMachine {
                 Log.d(TAG, "状态保持: $oldState + $event → $globalTarget (已是目标状态)")
                 return globalTarget
             }
+            // SECURITY-FIX: 转换守卫检查——全局转换也需通过守卫验证
+            val guardGlobal = transitionGuard
+            if (guardGlobal != null && !guardGlobal.invoke(oldState, event, globalTarget)) {
+                Log.w(TAG, "⚠️ 全局转换被守卫拒绝: $oldState + $event → $globalTarget (守卫不通过)")
+                return oldState
+            }
+            // SECURITY-FIX: 转换前回调——清理脏状态
+            onBeforeTransition?.invoke(oldState, event, globalTarget)
             currentState = globalTarget
             Log.d(TAG, "★ 全局转换: $oldState + $event → $globalTarget")
             onStateChanged?.invoke(oldState, event, globalTarget)
@@ -239,6 +258,14 @@ class PipelineStateMachine {
         // 普通转换表查找
         val newState = transitionTable[oldState to event]
         if (newState != null) {
+            // SECURITY-FIX: 转换守卫检查——异常路径转换需通过守卫验证
+            val guard = transitionGuard
+            if (guard != null && !guard.invoke(oldState, event, newState)) {
+                Log.w(TAG, "⚠️ 转换被守卫拒绝: $oldState + $event → $newState (守卫不通过)")
+                return oldState
+            }
+            // SECURITY-FIX: 转换前回调——清理脏状态
+            onBeforeTransition?.invoke(oldState, event, newState)
             currentState = newState
             Log.d(TAG, "状态转换: $oldState + $event → $newState")
             onStateChanged?.invoke(oldState, event, newState)

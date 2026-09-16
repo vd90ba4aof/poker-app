@@ -45,6 +45,9 @@ object HudLearner {
     private var giteeToken: String? = null
     private var giteeSha: String? = null
     private var currentLevel: String = "micro_nl2"
+    // SECURITY-FIX: 云同步默认关闭，需用户显式开启
+    @Volatile
+    private var cloudSyncEnabled: Boolean = false
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -82,11 +85,27 @@ object HudLearner {
         prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         giteeToken = token
 
-        // 启动时后台自动从云端拉取
+        // SECURITY-FIX: 云同步改为显式opt-in，init时不再自动启动
+        Log.i(TAG, "HudLearner初始化: ${if (token != null) "令牌已配置(云同步待开启)" else "本地模式"}")
+    }
+
+    // SECURITY-FIX: 显式开启云同步
+    @Synchronized
+    fun enableCloudSync() {
         if (giteeToken != null) {
+            cloudSyncEnabled = true
             Thread({ downloadAndMerge() }, "hud-sync-download").start()
+            Log.i(TAG, "云同步已开启")
+        } else {
+            Log.w(TAG, "云同步开启失败：未配置令牌")
         }
-        Log.i(TAG, "HudLearner初始化: ${if (token != null) "云端模式" else "本地模式"}")
+    }
+
+    // SECURITY-FIX: 显式关闭云同步
+    @Synchronized
+    fun disableCloudSync() {
+        cloudSyncEnabled = false
+        Log.i(TAG, "云同步已关闭")
     }
 
     fun setToken(token: String) {
@@ -116,9 +135,9 @@ object HudLearner {
             )
             appendRecord(level, record)
 
-            // 每50手自动上传
+            // SECURITY-FIX: 云同步需显式开启后才自动上传
             val count = getHandCount(level)
-            if (count % SYNC_INTERVAL_HANDS == 0 && giteeToken != null) {
+            if (count % SYNC_INTERVAL_HANDS == 0 && giteeToken != null && cloudSyncEnabled) {
                 Thread({ uploadToCloud() }, "hud-sync-upload").start()
             }
         } catch (e: Exception) {
@@ -140,13 +159,16 @@ object HudLearner {
             val winsKey = KEY_PREFIX + level + "_wins"
             val lossesKey = KEY_PREFIX + level + "_losses"
             val profitKey = KEY_PREFIX + level + "_profit"
+            // SECURITY-FIX: 合并为一次editor操作，避免中间状态不一致
+            val editor = p.edit()
             if (won) {
-                p.edit().putInt(winsKey, p.getInt(winsKey, 0) + 1).apply()
-                p.edit().putLong(profitKey, p.getLong(profitKey, 0) + potSize).apply()
+                editor.putInt(winsKey, p.getInt(winsKey, 0) + 1)
+                editor.putLong(profitKey, p.getLong(profitKey, 0) + potSize)
             } else {
-                p.edit().putInt(lossesKey, p.getInt(lossesKey, 0) + 1).apply()
-                p.edit().putLong(profitKey, p.getLong(profitKey, 0) - potSize).apply()
+                editor.putInt(lossesKey, p.getInt(lossesKey, 0) + 1)
+                editor.putLong(profitKey, p.getLong(profitKey, 0) - potSize)
             }
+            editor.apply()
             val wins = p.getInt(winsKey, 0)
             val losses = p.getInt(lossesKey, 0)
             val profit = p.getLong(profitKey, 0)
@@ -190,6 +212,11 @@ object HudLearner {
 
     /** 手动触发一次完整同步 */
     fun sync() {
+        // SECURITY-FIX: 云同步需显式开启
+        if (!cloudSyncEnabled) {
+            Log.w(TAG, "云同步未开启，跳过同步")
+            return
+        }
         Thread({
             downloadAndMerge()
             uploadToCloud()
@@ -293,9 +320,9 @@ object HudLearner {
         return total
     }
 
+    // SECURITY-FIX: 移除deviceId上传，避免设备标识泄露
     private fun buildCloudPayload(): JSONObject {
         val root = JSONObject()
-        root.put("deviceId", getDeviceId())
         root.put("lastSync", System.currentTimeMillis() / 1000)
 
         val levels = JSONObject()
@@ -327,18 +354,6 @@ object HudLearner {
         }
         root.put("levels", levels)
         return root
-    }
-
-    private fun getDeviceId(): String {
-        val ctx = appContext ?: return "unknown"
-        return try {
-            android.provider.Settings.Secure.getString(
-                ctx.contentResolver,
-                android.provider.Settings.Secure.ANDROID_ID
-            ) ?: "unknown"
-        } catch (e: Exception) {
-            "unknown"
-        }
     }
 
     // ============ 本地存储 ============

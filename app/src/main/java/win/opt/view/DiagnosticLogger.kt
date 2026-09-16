@@ -91,8 +91,10 @@ object DiagnosticLogger {
     private val errorEntries = mutableListOf<ErrorEntry>()
     
     // 手牌复盘追踪 V2.9.215
+    // SECURITY-FIX: 手牌追踪数据并发访问锁（logDecision在分析线程调用，clear/export在主线程调用）
     private val currentHandDecisions = mutableListOf<DecisionLog>()
     private var currentHandId: String = ""
+    private val currentHandLock = Any()
     
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
@@ -206,13 +208,16 @@ object DiagnosticLogger {
         }
         
         // 追踪当前手牌的决策链
-        // 检测新牌局：手牌变化或street回到preflop
-        val handKey = holeCards + "_" + (if (street == "preflop") now.toString() else currentHandId)
-        if (currentHandId.isEmpty() || (street == "preflop" && currentHandDecisions.any { it.holeCards != holeCards })) {
-            currentHandId = holeCards + "_" + now
-            currentHandDecisions.clear()
+        // SECURITY-FIX: 用currentHandLock保护currentHandId和currentHandDecisions
+        synchronized(currentHandLock) {
+            // 检测新牌局：手牌变化或street回到preflop
+            val handKey = holeCards + "_" + (if (street == "preflop") now.toString() else currentHandId)
+            if (currentHandId.isEmpty() || (street == "preflop" && currentHandDecisions.any { it.holeCards != holeCards })) {
+                currentHandId = holeCards + "_" + now
+                currentHandDecisions.clear()
+            }
+            currentHandDecisions.add(log)
         }
-        currentHandDecisions.add(log)
         
         // 持久化
         autoFlushDecisionToFile(log)
@@ -960,8 +965,11 @@ object DiagnosticLogger {
         synchronized(recognitionLogs) { recognitionLogs.clear() }
         synchronized(decisionLogs) { decisionLogs.clear() }
         synchronized(errorEntries) { errorEntries.clear() }
-        currentHandDecisions.clear()
-        currentHandId = ""
+        // SECURITY-FIX: 手牌追踪数据加锁清除
+        synchronized(currentHandLock) {
+            currentHandDecisions.clear()
+            currentHandId = ""
+        }
         resetChipTracking()
     }
     

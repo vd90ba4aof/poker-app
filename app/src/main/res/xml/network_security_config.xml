@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SECURITY-FIX: 网络安全配置
+     - 默认禁用所有明文HTTP流量（usesCleartextTraffic=false）
+     - 仅允许127.0.0.1（本地HTTP服务）和10.0.2.2（模拟器本地映射）使用明文
+     - 所有外部网络通信强制使用HTTPS
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

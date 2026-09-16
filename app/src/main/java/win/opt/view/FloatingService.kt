@@ -1659,13 +1659,29 @@ class FloatingService : Service() {
         container.addView(resizeHandleBottom, bottomHandleParams)
 
         // WebView settings
+        // SECURITY-FIX: 加固WebView安全配置
         wv.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            allowFileAccess = true
-            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            // SECURITY-FIX: 禁用文件访问——防止JS通过file://协议读取本地敏感文件
+            allowFileAccess = false
+            // SECURITY-FIX: 禁用内容访问——防止JS访问content provider
+            @Suppress("DEPRECATION")
+            allowContentAccess = false
+            // SECURITY-FIX: 禁用混合内容——只允许HTTPS加载资源
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             setSupportZoom(false)
             builtInZoomControls = false
+            // SECURITY-FIX: 禁用文件访问Universal——防止file:// URL同源绕过
+            allowFileAccessFromFileURLs = false
+            allowUniversalAccessFromFileURLs = false
+            // SECURITY-FIX: 禁用密码保存和表单数据保存
+            @Suppress("DEPRECATION")
+            savePassword = false
+            @Suppress("DEPRECATION")
+            saveFormData = false
+            // SECURITY-FIX: 禁用地理定位
+            setGeolocationEnabled(false)
         }
 
         // V2.9.114: WebViewAssetLoader——Google官方推荐方案，无竞态、JS完整保留

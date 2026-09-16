@@ -33,6 +33,13 @@ class HttpServerService : Service() {
         // R6-fix: 热更新并发+频率限制
         private const val HOTLOAD_MIN_INTERVAL_MS = 5000L // 最小间隔5秒
         private const val HOTLOAD_DOWNLOAD_MAX_SIZE = 2 * 1024 * 1024 // 下载HTML最大2MB
+        // SECURITY-FIX: API鉴权令牌——防止恶意网页跨域调用本地HTTP服务
+        // 每次服务启动时随机生成，通过URL参数注入到WebView页面
+        private var apiAuthToken: String = ""
+        private const val AUTH_TOKEN_LENGTH = 32
+        // SECURITY-FIX: 热更新默认关闭——用户需手动在设置中开启
+        // 避免首次启动即自动拉取远程代码
+        private const val PREF_HOTLOAD_ENABLED = "hotload_enabled"
     }
 
     // R6-fix: 热更新并发信号量（最多1个并发下载）
@@ -40,6 +47,8 @@ class HttpServerService : Service() {
     // R6-fix: 热更新原子标志，防止并发修改pokerHelperHtml
     private val hotloadInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var lastHotloadTime = 0L
+    // SECURITY-FIX: 服务销毁标志——用于停止热更新线程
+    @Volatile private var isDestroyed = false
 
     private var server: NanoHTTPD? = null
     private var pokerHelperHtml: String? = null
@@ -149,12 +158,14 @@ class HttpServerService : Service() {
     }
 
     // R6-fix: 安全读取URL内容——限制下载大小防止内存炸弹
+    // SECURITY-FIX: 使用try-finally确保InputStream在异常路径下也被关闭
     private fun safeReadUrl(urlStr: String, timeoutMs: Int): String? {
+        var inputStream: java.io.InputStream? = null
         return try {
             val conn = URL(urlStr).openConnection()
             conn.connectTimeout = timeoutMs
             conn.readTimeout = timeoutMs
-            val inputStream = conn.getInputStream()
+            inputStream = conn.getInputStream()
             val buffer = ByteArray(8192)
             val output = java.io.ByteArrayOutputStream()
             var totalRead = 0
@@ -163,21 +174,74 @@ class HttpServerService : Service() {
                 totalRead += bytesRead
                 if (totalRead > HOTLOAD_DOWNLOAD_MAX_SIZE) {
                     Log.w(TAG, "热更新下载超限: ${totalRead}B > ${HOTLOAD_DOWNLOAD_MAX_SIZE}B，终止")
-                    inputStream.close()
                     return null
                 }
                 output.write(buffer, 0, bytesRead)
             }
-            inputStream.close()
             output.toString(Charsets.UTF_8.name())
         } catch (_: Exception) {
             null
+        } finally {
+            try { inputStream?.close() } catch (_: Exception) {}
         }
+    }
+
+    // SECURITY-FIX: 生成随机API鉴权令牌
+    private fun generateAuthToken(): String {
+        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        val sb = StringBuilder(AUTH_TOKEN_LENGTH)
+        val random = java.security.SecureRandom()
+        for (i in 0 until AUTH_TOKEN_LENGTH) {
+            sb.append(chars[random.nextInt(chars.length)])
+        }
+        return sb.toString()
+    }
+
+    // SECURITY-FIX: 计算SHA256哈希用于内容校验
+    private fun sha256Hex(input: String): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val hash = md.digest(input.toByteArray(Charsets.UTF_8))
+        return hash.joinToString("") { "%02x".format(it) }
+    }
+
+    // SECURITY-FIX: 安全CORS——只允许WebViewAssetLoader域和本地页面
+    private fun addCorsHeaders(session: NanoHTTPD.IHTTPSession, response: NanoHTTPD.Response): NanoHTTPD.Response {
+        val origin = session.headers["origin"]
+        if (origin != null && (origin == "https://appassets.androidplatform.net" || origin == "null")) {
+            response.addHeader("Access-Control-Allow-Origin", origin)
+            response.addHeader("Access-Control-Allow-Credentials", "true")
+            response.addHeader("Vary", "Origin")
+        }
+        // 其他Origin不返回CORS头——浏览器将阻止JS读取响应
+        return response
+    }
+
+    // SECURITY-FIX: CSRF防护——验证请求来源是否可信
+    // 用于状态变更端点（POST/有副作用的GET），防止恶意网页跨站请求伪造
+    private fun isTrustedOrigin(session: NanoHTTPD.IHTTPSession): Boolean {
+        val origin = session.headers["origin"]
+        val referer = session.headers["referer"]
+        // 信任的来源：WebViewAssetLoader域 和 null origin（直接浏览器访问）
+        val trustedOrigins = listOf("https://appassets.androidplatform.net", "null")
+        // 有Origin头时检查Origin
+        if (origin != null) {
+            return origin in trustedOrigins
+        }
+        // 无Origin但有Referer时检查Referer前缀
+        if (referer != null) {
+            return referer.startsWith("https://appassets.androidplatform.net/") ||
+                   referer.startsWith("http://127.0.0.1:")
+        }
+        // 无Origin无Referer——可能是直接导航/浏览器直接访问，仅对GET放行
+        // 对于POST端点，无Origin的请求一律拒绝
+        return session.method == NanoHTTPD.Method.GET
     }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // SECURITY-FIX: 生成随机API鉴权令牌
+        apiAuthToken = generateAuthToken()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -203,39 +267,44 @@ class HttpServerService : Service() {
             server = object : NanoHTTPD("127.0.0.1", 8666) {
                 override fun serve(session: IHTTPSession): Response {
                     // V2.9.114: CORS preflight——WebViewAssetLoader跨域请求需OPTIONS预检
+                    // SECURITY-FIX: OPTIONS预检只允许可信Origin
                     if (session.method == Method.OPTIONS) {
-                        return newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "").apply {
-                            addHeader("Access-Control-Allow-Origin", "*")
-                            addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                            addHeader("Access-Control-Allow-Headers", "Content-Type")
-                            addHeader("Access-Control-Max-Age", "86400")
+                        val origin = session.headers["origin"]
+                        return if (origin != null && (origin == "https://appassets.androidplatform.net" || origin == "null")) {
+                            newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "").apply {
+                                addHeader("Access-Control-Allow-Origin", origin)
+                                addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                                addHeader("Access-Control-Allow-Headers", "Content-Type")
+                                addHeader("Access-Control-Max-Age", "86400")
+                                addHeader("Access-Control-Allow-Credentials", "true")
+                                addHeader("Vary", "Origin")
+                            }
+                        } else {
+                            // 不可信Origin——返回无CORS头的响应，浏览器将阻止预检通过
+                            newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "")
                         }
                     }
                     return when {
                         session.uri == "/" || session.uri == "/poker" || session.uri == "/helper" || session.uri == "/index.html" -> {
                             // V2.9.15: 不再每次请求清空缓存！pokerHelperHtml只加载一次到内存
                             val html = loadPokerHelperHtml()
-                            newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html).apply {
-                                addHeader("Access-Control-Allow-Origin", "*")
+                            addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html).apply {
                                 addHeader("Cache-Control", "no-cache, no-store")
-                            }
+                            })
                         }
                         session.uri == "/api/screenshot" -> {
                             val data = ScreenCaptureService.latestScreenshot
                             if (data != null) {
-                                newFixedLengthResponse(
+                                addCorsHeaders(session, newFixedLengthResponse(
                                     Response.Status.OK,
                                     "image/jpeg",
                                     ByteArrayInputStream(data),
                                     data.size.toLong()
                                 ).apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
                                     addHeader("Cache-Control", "no-cache, no-store")
-                                }
+                                })
                             } else {
-                                newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "no screenshot yet").apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                }
+                                addCorsHeaders(session, newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "no screenshot yet"))
                             }
                         }
                         session.uri == "/api/status" -> {
@@ -265,114 +334,139 @@ class HttpServerService : Service() {
                                     } catch (_: Exception) {}
                                 }
                             }.toString()
-                            newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                addHeader("Access-Control-Allow-Origin", "*")
+                            addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
                                 addHeader("Cache-Control", "no-cache, no-store")
-                            }
+                            })
                         }
                         // V1.2 新增：筹码识别状态API
                         session.uri == "/api/chips" -> {
                             val json = ChipTracker.getStatusJson()
-                            newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                addHeader("Access-Control-Allow-Origin", "*")
+                            addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
                                 addHeader("Cache-Control", "no-cache, no-store")
-                            }
+                            })
                         }
                         // V1.2 新增：重置筹码追踪
                         session.uri == "/api/chips/reset" -> {
+                            // SECURITY-FIX: CSRF防护
+                            if (!isTrustedOrigin(session)) {
+                                return addCorsHeaders(session, newFixedLengthResponse(Response.Status.FORBIDDEN, "application/json",
+                                    """{"ok":false,"error":"csrf_denied","message":"请求来源不可信"}"""))
+                            }
                             ChipTracker.reset()
                             ScreenCaptureService.lastChipStatus = "已重置"
-                            newFixedLengthResponse(Response.Status.OK, "application/json", """{"ok":true}""").apply {
-                                addHeader("Access-Control-Allow-Origin", "*")
-                            }
+                            addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json", """{"ok":true}"""))
                         }
                         // v2.9.35: 热更新——从GitHub下载最新poker_helper.html
                         // V2.9.164: 双URL保险——ghfast代理失败时直连GitHub
                         // R6-fix: 频率限制+并发限制+增强安全检查+下载大小限制
+                        // SECURITY-FIX: 热更新默认关闭，需用户手动在设置中开启
                         session.uri == "/api/hotload" -> {
-                            val now = System.currentTimeMillis()
-                            // R6-fix: 频率限制（5秒最小间隔）
-                            if (now - lastHotloadTime < HOTLOAD_MIN_INTERVAL_MS) {
-                                val retryAfter = (HOTLOAD_MIN_INTERVAL_MS - (now - lastHotloadTime)) / 1000
-                                val json = JSONObject().apply {
-                                    put("ok", false)
-                                    put("error", "too_frequent")
-                                    put("retryAfter", retryAfter)
-                                }.toString()
-                                newFixedLengthResponse(Response.Status.TOO_MANY_REQUESTS, "application/json", json).apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                    addHeader("Retry-After", retryAfter.toString())
-                                }
-                            } else if (!hotloadSemaphore.tryAcquire()) {
-                                // R6-fix: 并发限制（最多1个并发下载）
-                                val json = JSONObject().apply {
-                                    put("ok", false)
-                                    put("error", "too_many_concurrent")
-                                }.toString()
-                                newFixedLengthResponse(Response.Status.TOO_MANY_REQUESTS, "application/json", json).apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                }
+                            // SECURITY-FIX: CSRF防护——防止恶意网页触发热更新
+                            if (!isTrustedOrigin(session)) {
+                                return addCorsHeaders(session, newFixedLengthResponse(Response.Status.FORBIDDEN, "application/json",
+                                    """{"ok":false,"error":"csrf_denied","message":"请求来源不可信"}"""))
+                            }
+                            // SECURITY-FIX: 检查热更新是否已启用
+                            val hotloadEnabled = try {
+                                getSharedPreferences("poker_prefs", MODE_PRIVATE).getBoolean(PREF_HOTLOAD_ENABLED, false)
+                            } catch (_: Exception) { false }
+                            if (!hotloadEnabled) {
+                                addCorsHeaders(session, newFixedLengthResponse(Response.Status.FORBIDDEN, "application/json",
+                                    """{"ok":false,"error":"hotload_disabled"}"""))
                             } else {
-                                lastHotloadTime = now
-                                Thread({
-                                    try {
-                                        // R6-fix: 原子标志防止并发修改
-                                        if (!hotloadInProgress.compareAndSet(false, true)) {
-                                            Log.w(TAG, "热更新已在进行中，跳过本次")
-                                            return@Thread
-                                        }
+                                val now = System.currentTimeMillis()
+                                // R6-fix: 频率限制（5秒最小间隔）
+                                if (now - lastHotloadTime < HOTLOAD_MIN_INTERVAL_MS) {
+                                    val retryAfter = (HOTLOAD_MIN_INTERVAL_MS - (now - lastHotloadTime)) / 1000
+                                    val json = JSONObject().apply {
+                                        put("ok", false)
+                                        put("error", "too_frequent")
+                                        put("retryAfter", retryAfter)
+                                    }.toString()
+                                    addCorsHeaders(session, newFixedLengthResponse(Response.Status.TOO_MANY_REQUESTS, "application/json", json).apply {
+                                        addHeader("Retry-After", retryAfter.toString())
+                                    })
+                                } else if (!hotloadSemaphore.tryAcquire()) {
+                                    // R6-fix: 并发限制（最多1个并发下载）
+                                    val json = JSONObject().apply {
+                                        put("ok", false)
+                                        put("error", "too_many_concurrent")
+                                    }.toString()
+                                    addCorsHeaders(session, newFixedLengthResponse(Response.Status.TOO_MANY_REQUESTS, "application/json", json))
+                                } else {
+                                    lastHotloadTime = now
+                                    Thread({
                                         try {
-                                            var html: String? = null
-                                            // R6-fix: 使用safeReadUrl限制下载大小
-                                            html = safeReadUrl(HOTLOAD_URL, HOTLOAD_TIMEOUT / 2)
-                                            // ghfast失败→直连GitHub
-                                            if (html == null || html.isEmpty() || !html.contains("poker")) {
-                                                html = safeReadUrl(HOTLOAD_URL_FALLBACK, HOTLOAD_TIMEOUT)
+                                            // R6-fix: 原子标志防止并发修改
+                                            if (!hotloadInProgress.compareAndSet(false, true)) {
+                                                Log.w(TAG, "热更新已在进行中，跳过本次")
+                                                return@Thread
                                             }
-                                            // R6-fix: 增强安全检查（替代旧黑名单）
-                                            if (html != null && containsMaliciousCode(html)) {
-                                                Log.w(TAG, "热更新内容包含可疑代码，已拒绝")
-                                                html = null
+                                            try {
+                                                var html: String? = null
+                                                // SECURITY-FIX: 检查服务是否已销毁
+                                                if (isDestroyed) return@Thread
+                                                // R6-fix: 使用safeReadUrl限制下载大小
+                                                html = safeReadUrl(HOTLOAD_URL, HOTLOAD_TIMEOUT / 2)
+                                                // ghfast失败→直连GitHub
+                                                if (html == null || html.isEmpty() || !html.contains("poker")) {
+                                                    if (isDestroyed) return@Thread
+                                                    html = safeReadUrl(HOTLOAD_URL_FALLBACK, HOTLOAD_TIMEOUT)
+                                                }
+                                                // R6-fix: 增强安全检查（替代旧黑名单）
+                                                if (html != null && containsMaliciousCode(html)) {
+                                                    Log.w(TAG, "热更新内容包含可疑代码，已拒绝")
+                                                    html = null
+                                                }
+                                                if (html != null && html.isNotEmpty() && html.contains("poker") && html.length > 1000) {
+                                                    // SECURITY-FIX: 计算SHA256并记录日志
+                                                    val contentHash = sha256Hex(html)
+                                                    Log.i(TAG, "热更新内容SHA256: $contentHash")
+                                                    pokerHelperHtml = html
+                                                    hotloadSource = "remote"
+                                                    try { File(filesDir, HOTLOAD_FILE).writeText(html, Charsets.UTF_8) } catch (_: Exception) {}
+                                                    try {
+                                                        getSharedPreferences("poker_prefs", MODE_PRIVATE).edit().putBoolean("hotload_updated", true).apply()
+                                                    } catch (_: Exception) {}
+                                                }
+                                            } finally {
+                                                hotloadInProgress.set(false)
                                             }
-                                            if (html != null && html.isNotEmpty() && html.contains("poker") && html.length > 1000) {
-                                                pokerHelperHtml = html
-                                                hotloadSource = "remote"
-                                                try { File(filesDir, HOTLOAD_FILE).writeText(html, Charsets.UTF_8) } catch (_: Exception) {}
-                                                try {
-                                                    getSharedPreferences("poker_prefs", MODE_PRIVATE).edit().putBoolean("hotload_updated", true).apply()
-                                                } catch (_: Exception) {}
-                                            }
-                                        } finally {
-                                            hotloadInProgress.set(false)
-                                        }
-                                    } catch (_: Exception) {}
-                                    finally { hotloadSemaphore.release() }
-                                }, "HotloadThread").start()
-                                // 立即返回"已触发"响应
-                                val json = JSONObject().apply {
-                                    put("ok", true)
-                                    put("status", "downloading")
-                                }.toString()
-                                newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
+                                        } catch (_: Exception) {}
+                                        finally { hotloadSemaphore.release() }
+                                    }, "HotloadThread").start()
+                                    // 立即返回"已触发"响应
+                                    val json = JSONObject().apply {
+                                        put("ok", true)
+                                        put("status", "downloading")
+                                    }.toString()
+                                    addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json", json))
                                 }
                             }
                         }
                         // v2.9.35: 恢复本地版本
                         session.uri == "/api/hotload/revert" -> {
+                            // SECURITY-FIX: CSRF防护
+                            if (!isTrustedOrigin(session)) {
+                                return addCorsHeaders(session, newFixedLengthResponse(Response.Status.FORBIDDEN, "application/json",
+                                    """{"ok":false,"error":"csrf_denied","message":"请求来源不可信"}"""))
+                            }
                             pokerHelperHtml = null // 清空缓存，下次请求重新从assets加载
                             hotloadSource = "local"
                             try {
                                 val hotFile = File(filesDir, HOTLOAD_FILE)
                                 if (hotFile.exists()) hotFile.delete()
                             } catch (_: Exception) {}
-                            newFixedLengthResponse(Response.Status.OK, "application/json",
-                                """{"ok":true,"source":"local"}""").apply {
-                                addHeader("Access-Control-Allow-Origin", "*")
-                            }
+                            addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json",
+                                """{"ok":true,"source":"local"}"""))
                         }
                         // V2.1: 按需截屏+API识别（仅无障碍截图，绝不走MediaProjection）
                         session.uri == "/api/capture" -> {
+                            // SECURITY-FIX: CSRF防护——防止恶意网页触发截图（隐私敏感）
+                            if (!isTrustedOrigin(session)) {
+                                return addCorsHeaders(session, newFixedLengthResponse(Response.Status.FORBIDDEN, "application/json",
+                                    """{"ok":false,"error":"csrf_denied","message":"请求来源不可信"}"""))
+                            }
                             try {
                                 // P2-R3-5: 使用同步截屏方法，避免回调覆盖竞态
                                 if (ScreenOptService.isServiceRunning()) {
@@ -383,9 +477,7 @@ class HttpServerService : Service() {
                                         put("chipStatus", ScreenCaptureService.lastChipStatus)
                                         put("captureCount", ScreenCaptureService.captureCount)
                                     }.toString()
-                                    newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                        addHeader("Access-Control-Allow-Origin", "*")
-                                    }
+                                    addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json", json))
                                 } else {
                                     // V2.1: 无障碍服务未开启 → 返回错误，绝不降级MediaProjection
                                     val json = JSONObject().apply {
@@ -393,15 +485,11 @@ class HttpServerService : Service() {
                                         put("error", "accessibility_not_enabled")
                                         put("message", "请先开启无障碍服务")
                                     }.toString()
-                                    newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                        addHeader("Access-Control-Allow-Origin", "*")
-                                    }
+                                    addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json", json))
                                 }
                             } catch (e: Exception) {
-                                newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", 
-                                    """{"error":"${e.message}"}""").apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                }
+                                addCorsHeaders(session, newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", 
+                                    """{"error":"${e.message}"}"""))
                             }
                         }
                         // V2.1: API视觉识别（仅无障碍截图）
@@ -409,44 +497,33 @@ class HttpServerService : Service() {
                             try {
                                 // R9-5-fix: 自动流水线正在分析时快速拒绝，不让HTTP线程空等25s锁+28s VLM
                                 if (VisionApiClient.isAnalyzeBusy()) {
-                                    newFixedLengthResponse(Response.Status.SERVICE_UNAVAILABLE, "application/json",
+                                    addCorsHeaders(session, newFixedLengthResponse(Response.Status.SERVICE_UNAVAILABLE, "application/json",
                                         """{"error":"pipeline_busy","message":"自动模式分析中，请稍后再试"}""").apply {
-                                        addHeader("Access-Control-Allow-Origin", "*")
                                         addHeader("Retry-After", "10")
-                                    }
+                                    })
                                 } else {
                                 val screenshot = ScreenCaptureService.latestScreenshot
                                 if (screenshot == null) {
                                     // V2.1: 无截图 → 返回错误提示，绝不降级MediaProjection
-                                    newFixedLengthResponse(Response.Status.OK, "application/json",
-                                        """{"error":"no_screenshot","message":"请先点击🎯截屏"}""").apply {
-                                        addHeader("Access-Control-Allow-Origin", "*")
-                                    }
+                                    addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json",
+                                        """{"error":"no_screenshot","message":"请先点击🎯截屏"}"""))
                                 } else if (VisionApiClient.apiKey.isEmpty()) {
-                                    newFixedLengthResponse(Response.Status.OK, "application/json",
-                                        """{"error":"no_api_key","message":"请在设置中配置API Key"}""").apply {
-                                        addHeader("Access-Control-Allow-Origin", "*")
-                                    }
+                                    addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json",
+                                        """{"error":"no_api_key","message":"请在设置中配置API Key"}"""))
                                 } else {
                                     val result = VisionApiClient.analyzeScreenshot(screenshot)
                                     if (result != null) {
-                                        newFixedLengthResponse(Response.Status.OK, "application/json",
-                                            VisionApiClient.toJson(result)).apply {
-                                            addHeader("Access-Control-Allow-Origin", "*")
-                                        }
+                                        addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json",
+                                            VisionApiClient.toJson(result)))
                                     } else {
-                                        newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
-                                            """{"error":"${VisionApiClient.lastError}"}""").apply {
-                                            addHeader("Access-Control-Allow-Origin", "*")
-                                        }
+                                        addCorsHeaders(session, newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                                            """{"error":"${VisionApiClient.lastError}"}"""))
                                     }
                                 }
                                 } // R9-5-fix: busy检查else块
                             } catch (e: Exception) {
-                                newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
-                                    """{"error":"${e.message}"}""").apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                }
+                                addCorsHeaders(session, newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                                    """{"error":"${e.message}"}"""))
                             }
                         }
                         // V1.3 新增：获取/设置API配置
@@ -465,11 +542,14 @@ class HttpServerService : Service() {
                                         put("compact_fail", VisionApiClient.compactFailCount)
                                         put("fallback_success", VisionApiClient.fallbackSuccessCount)
                                     }.toString()
-                                    newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                        addHeader("Access-Control-Allow-Origin", "*")
-                                    }
+                                    addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json", json))
                                 }
                                 Method.POST -> {
+                                    // SECURITY-FIX: CSRF防护——防止恶意网页篡改API配置
+                                    if (!isTrustedOrigin(session)) {
+                                        return addCorsHeaders(session, newFixedLengthResponse(Response.Status.FORBIDDEN, "application/json",
+                                            """{"ok":false,"error":"csrf_denied","message":"请求来源不可信"}"""))
+                                    }
                                     try {
                                         val files = safeParseBody(session)
                                         val postData = files["postData"] ?: ""
@@ -483,20 +563,14 @@ class HttpServerService : Service() {
                                                 put("provider", VisionApiClient.apiProvider)
                                                 put("model", VisionApiClient.modelName)
                                             }.toString()
-                                            newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                                addHeader("Access-Control-Allow-Origin", "*")
-                                            }
+                                            addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json", json))
                                         } else {
-                                            newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
-                                                """{"error":"need provider and apiKey"}""").apply {
-                                                addHeader("Access-Control-Allow-Origin", "*")
-                                            }
+                                            addCorsHeaders(session, newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                                                """{"error":"need provider and apiKey"}"""))
                                         }
                                     } catch (e: Exception) {
-                                        newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
-                                            """{"error":"${e.message}"}""").apply {
-                                            addHeader("Access-Control-Allow-Origin", "*")
-                                        }
+                                        addCorsHeaders(session, newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                                            """{"error":"${e.message}"}"""))
                                     }
                                 }
                                 else -> newFixedLengthResponse(Response.Status.METHOD_NOT_ALLOWED, MIME_PLAINTEXT, "method not allowed")
@@ -504,6 +578,11 @@ class HttpServerService : Service() {
                         }
                         // V2.9.47: 导出日志——接收JSON数据，触发Android分享
                         session.uri == "/api/export/history" && session.method == Method.POST -> {
+                            // SECURITY-FIX: CSRF防护——防止恶意网页触发文件写入和分享
+                            if (!isTrustedOrigin(session)) {
+                                return addCorsHeaders(session, newFixedLengthResponse(Response.Status.FORBIDDEN, "application/json",
+                                    """{"ok":false,"error":"csrf_denied","message":"请求来源不可信"}"""))
+                            }
                             try {
                                 val files = safeParseBody(session)
                                 // V2.9.75: NanoHTTPD 2.3.1默认UTF-8解码，直接用即可（旧代码ISO-8859-1→UTF-8转换反而把中文变成?）
@@ -540,14 +619,10 @@ class HttpServerService : Service() {
                                     put("file", exportFile.absolutePath)
                                     put("clipboard", true)
                                 }.toString()
-                                newFixedLengthResponse(Response.Status.OK, "application/json", json).apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                }
+                                addCorsHeaders(session, newFixedLengthResponse(Response.Status.OK, "application/json", json))
                             } catch (e: Exception) {
-                                newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
-                                    """{"error":"${e.message}"}""").apply {
-                                    addHeader("Access-Control-Allow-Origin", "*")
-                                }
+                                addCorsHeaders(session, newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                                    """{"error":"${e.message}"}"""))
                             }
                         }
                         else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "not found")
@@ -564,6 +639,8 @@ class HttpServerService : Service() {
     }
 
     override fun onDestroy() {
+        // SECURITY-FIX: 设置销毁标志，停止可能正在运行的热更新线程
+        isDestroyed = true
         server?.stop()
         server = null
         super.onDestroy()

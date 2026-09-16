@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- SECURITY-FIX: 收窄无障碍事件类型为最小必要集
+     原typeAllMask监听所有事件（含其他APP的所有UI变化），属于过度授权
+     本服务仅用于takeScreenshot截图，实际不需要监听任何无障碍事件
+     但为保证服务在某些ROM上的稳定性，保留最基础的windowStateChanged事件
+     （takeScreenshot本身不依赖事件监听，但某些系统在完全无事件类型时可能异常）
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:notificationTimeout="100"
     android:canTakeScreenshot="true"

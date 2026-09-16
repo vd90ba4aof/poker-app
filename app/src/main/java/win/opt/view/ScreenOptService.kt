@@ -130,7 +130,8 @@ class ScreenOptService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        onScreenshotReady = null  // P2-fix: 清除回调防止泄漏和悬空引用
+        // SECURITY-FIX: 使用setScreenshotCallback清除回调，推进代次防止迟到帧误触发
+        setScreenshotCallback(null)
         instance = null
         isRunning = false
     }
@@ -168,38 +169,44 @@ class ScreenOptService : AccessibilityService() {
                             // ★★★ 关键：必须先copy再close，否则截图空白 ★★★
                             // 1. Wrap HardwareBuffer → Hardware Bitmap
                             //    豪哥手机Android 15(API35)，直接用双参数版本
-                            val hardwareBitmap = Bitmap.wrapHardwareBuffer(
-                                hardwareBuffer, screenshotResult.colorSpace
-                            )
+                            // SECURITY-FIX: hardwareBitmap提取到外层以便finally中释放
+                            var hardwareBitmap: Bitmap? = null
+                            try {
+                                hardwareBitmap = Bitmap.wrapHardwareBuffer(
+                                    hardwareBuffer, screenshotResult.colorSpace
+                                )
 
-                            // 2. 复制为 ARGB_8888 软件Bitmap（独立于HardwareBuffer）
-                            val softwareBitmap = hardwareBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+                                // 2. 复制为 ARGB_8888 软件Bitmap（独立于HardwareBuffer）
+                                val softwareBitmap = hardwareBitmap?.copy(Bitmap.Config.ARGB_8888, false)
 
-                            // 3. ★ 安全关闭硬件资源（copy之后才能close）★
-                            hardwareBitmap?.recycle()
-                            hardwareBuffer.close()
-                            // ScreenshotResult没有close()方法，不需要关闭
+                                if (softwareBitmap != null) {
+                                    // 4. 压缩为JPEG（V2.9.508: 质量85→95，减少识别损失）
+                                    val stream = ByteArrayOutputStream()
+                                    softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+                                    val jpegBytes = stream.toByteArray()
+                                    softwareBitmap.recycle()
 
-                            if (softwareBitmap != null) {
-                                // 4. 压缩为JPEG（V2.9.508: 质量85→95，减少识别损失）
-                                val stream = ByteArrayOutputStream()
-                                softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
-                                val jpegBytes = stream.toByteArray()
-                                softwareBitmap.recycle()
+                                    // 5. ★ 统一存入 ScreenCaptureService.latestScreenshot ★
+                                    //    FloatingService 和 HttpServerService 都从这里读取
+                                    ScreenCaptureService.latestScreenshot = jpegBytes
+                                    ScreenCaptureService.captureCount++
+                                    ScreenCaptureService.lastCaptureTime = System.currentTimeMillis()
+                                    ScreenCaptureService.lastError = ""
 
-                                // 5. ★ 统一存入 ScreenCaptureService.latestScreenshot ★
-                                //    FloatingService 和 HttpServerService 都从这里读取
-                                ScreenCaptureService.latestScreenshot = jpegBytes
-                                ScreenCaptureService.captureCount++
-                                ScreenCaptureService.lastCaptureTime = System.currentTimeMillis()
-                                ScreenCaptureService.lastError = ""
-
-                                handler.post { onScreenshotReady?.invoke(true) }
-                            } else {
-                                // HardwareBuffer → Bitmap 失败
-                                ScreenCaptureService.lastError = "无障碍截图: Bitmap转换失败"
-                                handler.post { onScreenshotReady?.invoke(false) }
+                                    handler.post { onScreenshotReady?.invoke(true) }
+                                } else {
+                                    // HardwareBuffer → Bitmap 失败
+                                    ScreenCaptureService.lastError = "无障碍截图: Bitmap转换失败"
+                                    handler.post { onScreenshotReady?.invoke(false) }
+                                }
+                            } finally {
+                                // SECURITY-FIX: 确保硬件资源在任何情况下都被释放
+                                hardwareBitmap?.recycle()
+                                try {
+                                    hardwareBuffer.close()
+                                } catch (_: Exception) {}
                             }
+                            // ScreenshotResult没有close()方法，不需要关闭
                         } catch (e: Throwable) {
                             ScreenCaptureService.lastError = "无障碍截图处理失败: ${e.message}"
                             handler.post { onScreenshotReady?.invoke(false) }
