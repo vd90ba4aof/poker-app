@@ -1296,6 +1296,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // ===== V2.9.518: 本地CV牌面识别（毫秒级）=====
                 val localRecognizer = LocalCardRecognizer.getInstance(context)
                 var localHoleCards: List<CardInfo>? = null
+                var localHoleCardsLowConf: List<CardInfo>? = null  // V2.9.641: 低置信度本地CV手牌兜底
                 var localCommCards: List<CardInfo>? = null
                 var localMinConfidence = 0f  // V2.9.528: 本地CV手牌最低置信度
                 var localCommConfOk = true   // V2.9.569: 公共牌置信度独立标志
@@ -1372,7 +1373,13 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         localCommCards = emptyList()
                     } else {
                         // 手牌不可信——丢弃手牌（公共牌也不可靠）
-                        Log.w(TAG, "🔍 手牌不可信(bad=${handBad.map { "${it.rank}${it.suit}@H${it.slot}(r=%.2f%s,s=%.2f%s)".format(it.rankScore, if (it.rankUncertain) "U" else "", it.suitScore, if (it.suitUncertain) "U" else "") }})，丢弃，VLM兜底")
+                        // V2.9.641 FIX(P0): 保留低置信度本地CV手牌作为最后兜底。
+                        //   根因日志2026-09-16 21:53:59: localCV检测到Ad,Ac(c=0.93/0.68,rU)
+                        //   但Ac rankUncertain→localHoleCards置null→VLM回空→lock已被fold清除
+                        //   →"本帧无手牌"→对A不自动点击。
+                        //   修复: 不置null, 保留为localHoleCardsLowConf, fusion层VLM也失败时作为最后兜底
+                        Log.w(TAG, "🔍 手牌不可信(bad=${handBad.map { "${it.rank}${it.suit}@H${it.slot}(r=%.2f%s,s=%.2f%s)".format(it.rankScore, if (it.rankUncertain) "U" else "", it.suitScore, if (it.suitUncertain) "U" else "") }})，保留低置信度兜底，VLM兜底")
+                        localHoleCardsLowConf = localHoleCards  // 保留低置信度手牌
                         localHoleCards = null
                         localCommCards = emptyList()
                         // V2.9.587 FIX: 连续手牌null计数——≥3帧清缓存强制重截图
@@ -1526,11 +1533,15 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 //   →门控漏网→云VLM 3~24s+垃圾数据上游。物理判据：两行按钮区黄像素均<300
                 //   (真按钮帧实测最小681，2倍余量；free-check帧btn3Y=1262/1583天然放行，不重演v566误杀)。
                 var localNoActionWindow = false
+                // V2.9.641 FIX(P0) BUG-E: 保存本地CV操作区结果用于低置信度兜底。
+                //   根因: localCV检测到按钮(conf=0.56<0.60阈值)→useLocal=false→VLM回空→无按钮→0按钮帧拦截→对A不自动点击
+                var larSaved: LocalActionRecognizer.ActionResult? = null
                 // V2.9.567: 移除v566过渡帧标志——本地CV无法区分过渡帧和free-check，判据误杀free-check让牌按钮
                 try {
                     val tLA = System.currentTimeMillis()
                     val larInstance = LocalActionRecognizer.getInstance(context)
                     val lar = larInstance.recognizeAction(screenshotBmp)
+                    larSaved = lar  // V2.9.641: 保存用于fusion兜底
                     actionDiag = larInstance.lastDiag
                     if (lar != null) {
                         localPresets = lar.presets
@@ -1788,6 +1799,17 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         emptyList<CardInfo>()
                     }
                     board != null -> board.handCards                        // VLM有部分结果（空/1张）
+                    // V2.9.641 FIX(P0): 本地CV低置信度兜底——当localHandOk=false(uncertain)且VLM回空
+                    //   且lock已被清除(如fold后)时, 用localCV检测到的手牌作为最后兜底。
+                    //   根因: Ad,Ac被localCV检测到(c=0.93/0.68,rU), 但rankUncertain导致丢弃,
+                    //   VLM回空, lock已被fold清除 → "本帧无手牌" → 对A不自动点击
+                    localHoleCardsLowConf != null && localHoleCardsLowConf!!.size == 2 -> {
+                        // V2.9.641: 不标记fallback_lock——这些牌是本帧localCV实读(非旧锁),
+                        //   rankUncertain只是匹配算法不确定,不是旧手牌跨手风险。
+                        //   标记fallback_lock会导致JS限制为fold/check,对A被强制fold=损失极大。
+                        Log.w(TAG, "🔍 VLM回空+lock失效, 本地CV低置信度手牌兜底(按fresh处理): ${localHoleCardsLowConf!!.map{"${it.rank}${it.suit}"}}")
+                        localHoleCardsLowConf!!
+                    }
                     else -> emptyList()
                 }
                 val finalCommCards = when {
@@ -1830,7 +1852,43 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 }
 
                 // 12. 构建结果（本地CV操作区优先）
-                val action = localAction ?: actionResult
+                // V2.9.641 FIX(P0) BUG-E: 本地CV低置信度按钮兜底
+                //   根因: localCV检测到按钮(conf=0.56<0.60阈值)→useLocal=false→VLM回空→无按钮→0按钮帧拦截→对A不自动点击
+                //   修复: VLM也回空/无按钮时, 用localCV物理信号有效(btn2/btn3黄像素>=300)的结果构造按钮
+                //   安全性: 物理信号(黄像素)是屏幕真相, OCR置信度低只影响金额读取精度, 不影响按钮存在性判断
+                val action = localAction
+                    ?: (if (actionResult != null && actionResult.buttons.isNotEmpty()) actionResult else null)
+                    ?: run {
+                        val lar = larSaved ?: return@run null
+                        // 物理闸: 按钮行黄像素>=300表示按钮真实存在(与useLocal物理闸同源)
+                        val hasBtn2 = lar.btn2Yellow >= LocalActionRecognizer.BTN_PHYSICAL_THRESHOLD
+                        val hasBtn3 = lar.btn3Yellow >= LocalActionRecognizer.BTN_PHYSICAL_THRESHOLD
+                        if (!hasBtn2 && !hasBtn3) return@run null
+                        val buttons = mutableListOf<String>()
+                        buttons.add("弃牌")
+                        if (lar.facingBet) {
+                            // 面对下注——跟注按钮(callAmount可能因低conf为null, 但按钮物理存在)
+                            val callAmt = lar.callAmount ?: 0
+                            buttons.add("跟注 $callAmt")
+                        } else {
+                            buttons.add("让牌")
+                        }
+                        if (hasBtn3 && lar.minRaise != null) {
+                            buttons.add("加注 ${lar.minRaise}")
+                        }
+                        val positions = mapButtonsToPositions(buttons)
+                        Log.w(TAG, "🔍 BUG-E兜底: VLM回空+localCV低conf(%.2f<0.60), 物理信号有效(btn2Y=${lar.btn2Yellow},btn3Y=${lar.btn3Yellow})→构造按钮${buttons.size}个".format(lar.confidence))
+                        ActionAreaResult(
+                            buttons = buttons,
+                            buttonPositions = positions,
+                            toCall = lar.callAmount ?: 0,
+                            myChips = localChipsValue,
+                            dButtonSeat = dButtonSeatLocal,
+                            activePlayers = oppChipsMap.size + 1,
+                            isInsurance = false,
+                            rawResponse = "fallback_local: fb=${lar.facingBet} call=${lar.callAmount} mr=${lar.minRaise} btns=${buttons.size} c=%.2f btn2Y=${lar.btn2Yellow} btn3Y=${lar.btn3Yellow}".format(lar.confidence)
+                        )
+                    }
                 val finalToCall = action?.toCall ?: 0
                 val finalMinRaise = action?.let { a ->
                     a.buttons.firstOrNull { it.contains("加注") }
