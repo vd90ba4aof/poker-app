@@ -2861,14 +2861,6 @@ class FloatingService : Service() {
         Log.d(TAG, "截图成功: ${screenshot.size / 1024}KB, apiKey=${if(VisionApiClient.apiKey.isNotEmpty()) "已配置" else "空"}")
         updateAdviceNotification("2/4 截图OK", "${screenshot.size / 1024}KB, 本地CV识别中...")
 
-        if (VisionApiClient.apiKey.isEmpty()) {
-            executeJs("if(typeof onActionCapture==='function'){onActionCapture()};document.body.classList.add('speed-mode');document.body.classList.remove('api-processing')")
-            tvAction?.alpha = 1.0f
-            tvStatus?.text = ScreenCaptureService.lastChipStatus.ifEmpty { "🎯 已更新(无API)" }
-            updateAdviceNotification("已更新(无API)", ScreenCaptureService.lastChipStatus)
-            return
-        }
-
         // V3.42: 提取截图真实尺寸（供executeAutoTapFallback使用）
         try {
             val opts = android.graphics.BitmapFactory.Options()
