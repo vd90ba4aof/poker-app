@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.642',
+  CURRENT_VERSION:'2.9.643',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.642';
+var APP_VERSION = '2.9.643';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3088,11 +3088,15 @@ function _quantExploitAdjust(freq, act, oppProfile, boardTexture){
     adj.note = 'vs激进(VPIP/PFR'+oppProfile.vpip+'/'+oppProfile.pfr+')→小尺寸';
   }
 
-  var ftCBDev = _oppDev('foldToCBetFlop', oppProfile.foldToCBetFlop, gto.foldToCBetFlop, sd.foldToCBetFlop);
+  // V2.9.642 FIX(S4): 字段名归一——DRTA.getProfile()返回fold_cbet(非foldToCBetFlop),
+  //   旧代码用oppProfile.foldToCBetFlop取值恒undefined→_oppDev返回0→f2CB剥削死代码。
+  //   根因: profile对象在L5460定义的字段名是fold_cbet, 但这里用camelCase引用, 命名不一致。
+  var _ftcbVal = oppProfile.fold_cbet;  // DRTA字段名归一
+  var ftCBDev = _oppDev('foldToCBetFlop', _ftcbVal!=null?_ftcbVal/100:0, gto.foldToCBetFlop, sd.foldToCBetFlop);
   if(ftCBDev>1 && act==='raise'){
     adj.freq = Math.min(0.95, freq*1.2);
     adj.sizingMult = Math.max(0.45, adj.sizingMult*0.7);
-    adj.note = 'f2CB'+oppProfile.foldToCBetFlop+'→高频小尺寸';
+    adj.note = 'f2CB'+_ftcbVal+'%→高频小尺寸';
   }
 
   return adj;
@@ -5358,8 +5362,12 @@ var DRTA={
       agg=2;t.bet_count++;
       if(street==='preflop'&&(action==='raise'||action==='reraise'))t.pfr++;
       // V2.9.58: 3bet追踪
+      // V2.9.642 FIX(S3): 移除action='raise'的_threebet_opp++——open raise不是3bet机会。
+      //   根因: inferOpponentAction把scene='raise'映射为action='raise',
+      //   这代表对手开池(open)而非面对加注后的再加注(3bet)。
+      //   真正的3bet在scene='reraise'→action='reraise'时捕获(L5361)。
+      //   open raise计入_threebet_opp→分母膨胀→threebet%系统性偏低→LAG被误分类为TAG。
       if(street==='preflop'&&action==='reraise'){t._threebet++;t._threebet_opp++;}
-      else if(street==='preflop'&&action==='raise'){t._threebet_opp++;}
       // V2.9.58: cbet追踪(flop作为PFR下注)
       if(street==='flop'&&t._was_pfr){t._cbet++;t._cbet_opp++;}
       // V2.9.58: steal追踪(CO/BTN/SB位开池)
@@ -5368,13 +5376,24 @@ var DRTA={
       agg=0.5;t.call_count++;
       // V2.9.58: 面对3bet跟注→3bet_opp
       if(street==='preflop')t._threebet_opp++;
+      // V2.9.642 FIX(S2): 非PFR在flop面对bet→_face_cbet++(面对cbet机会)
+      if(street==='flop'&&!t._was_pfr&&isFacingBet){t._face_cbet++;}
     }else if(action==='fold'){
       t.fold_count++;if(isFacingBet)t._fold_to_bet++;
       // V2.9.58: 面对3bet弃牌
       if(street==='preflop')t._threebet_opp++;
+      // V2.9.642 FIX(S1+S2): 偷盲位preflop fold→_steal_opp++(有偷盲机会但没偷)
+      //   非PFR在flop面对bet fold→_face_cbet++&_fold_cbet++(面对cbet弃牌)
+      if(street==='preflop'&&this._isStealPos()){t._steal_opp++;}
+      if(street==='flop'&&!t._was_pfr&&isFacingBet){t._face_cbet++;t._fold_cbet++;}
     }else if(action==='check'){
       agg=-0.5;t.check_count++;
-      // V2.9.58: 面对cbet弃牌(用fold替代, check只是没行动)
+      // V2.9.642 FIX(S1): PFR在flop check→_cbet_opp++(有cbet机会但没cbet)
+      //   根因: 旧代码只在bet/raise分支递增_cbet_opp, check分支不递增
+      //   →_cbet_opp恒等于_cbet → cbet%恒等于100% → 对手被误判为高频cbet
+      if(street==='flop'&&t._was_pfr){t._cbet_opp++;}
+      // V2.9.642 FIX(S2): 非PFR在flop面对bet check→_face_cbet++(面对cbet过牌而非弃)
+      if(street==='flop'&&!t._was_pfr&&isFacingBet){t._face_cbet++;}
     }
     // V2.9.58: 记录PFR状态(下一手flop判断cbet)
     if(street==='preflop')t._was_pfr=(action==='raise'||action==='reraise');
