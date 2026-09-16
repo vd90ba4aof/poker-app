@@ -1856,8 +1856,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 //   根因: localCV检测到按钮(conf=0.56<0.60阈值)→useLocal=false→VLM回空→无按钮→0按钮帧拦截→对A不自动点击
                 //   修复: VLM也回空/无按钮时, 用localCV物理信号有效(btn2/btn3黄像素>=300)的结果构造按钮
                 //   安全性: 物理信号(黄像素)是屏幕真相, OCR置信度低只影响金额读取精度, 不影响按钮存在性判断
+                val vlmAction = actionResult  // V2.9.641: val副本避免smart cast问题
                 val action = localAction
-                    ?: (if (actionResult != null && actionResult.buttons.isNotEmpty()) actionResult else null)
+                    ?: (if (vlmAction != null && vlmAction.buttons.isNotEmpty()) vlmAction else null)
                     ?: run {
                         val lar = larSaved ?: return@run null
                         // 物理闸: 按钮行黄像素>=300表示按钮真实存在(与useLocal物理闸同源)
