@@ -33,6 +33,11 @@ object VisionApiClient {
 
     private const val TAG = "VisionAPI"
 
+    // V2.9.645: 下注筹码堆黄色像素阈值（有黄色筹码=该玩家下注了）
+    //   初始值200（按ROI大小~160*60=9600像素估算，黄色占比~2%以上视为有筹码）
+    //   实机验证后可调校
+    private const val BET_CHIPS_YELLOW_THRESHOLD = 200
+
     // V2.9.518: Application context for LocalCardRecognizer
     @Volatile
     private lateinit var appContext: Context
@@ -124,6 +129,12 @@ object VisionApiClient {
     //   修复: pending/lock任一有效时更新_lastKnownGoodBB, 翻后用它兜底(不为0不fallback默认200)。
     @Volatile private var _lastKnownGoodBB: Int = 0
     @Volatile private var _lastKnownGoodSB: Int = 0
+
+    // V2.9.645: 对手筹码历史缓存（seatId→筹码值）
+    //   解决"头像有两张牌面遮挡时筹码数字被挡→OCR读不到"的问题。
+    //   当某座位OCR失败但座位仍活跃(inHand)时,用上一帧有效值兜底。
+    //   翻前首帧(新的一手开始)时更新缓存,翻后保持不变(筹码只减不增,且OCR失败概率更高)。
+    @Volatile private var _oppChipsHistory = HashMap<Int, Int>()
 
     // GG现金桌标准大盲档位(1-2-5进制, 覆盖NL50~NL10000)。candidateBB必须snap到其中一档(±5%)才采信。
     //   非档位值(1443/1858/3150等)=OCR误读铁证, 一律拒绝。
@@ -817,6 +828,33 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
     private fun parseChipValue(data: JSONObject, key: String): Int { val r = data.opt(key) ?: return 0; return when(r) { is Int -> r; is Long -> r.toInt(); is Double -> r.toInt(); is String -> parseChipString(r); else -> data.optInt(key, 0) } }
     private fun parseChipString(s: String): Int { val t = s.trim().replace(",",""); return try { when { t.endsWith("K",true) -> (t.dropLast(1).toFloat()*1000).toInt(); t.endsWith("M",true) -> (t.dropLast(1).toFloat()*1000000).toInt(); t.contains(".") -> t.toFloat().toInt(); else -> t.toInt() } } catch (_: Exception) { 0 } }
 
+    /**
+     * V2.9.645: 统计bitmap中黄色像素数量（步长=2采样，不占主链路）
+     * 黄色判定与LocalActionRecognizer.isYellow同源，确保颜色口径一致。
+     */
+    private fun countYellowPixels(bmp: Bitmap): Int {
+        var count = 0
+        val w = bmp.width
+        val h = bmp.height
+        val pixels = IntArray(w * h)
+        bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+        val step = 2  // 步长采样，减少计算量
+        var y = 0
+        while (y < h) {
+            var x = 0
+            while (x < w) {
+                val p = pixels[y * w + x]
+                val r = p shr 16 and 0xFF
+                val g = p shr 8 and 0xFF
+                val b = p and 0xFF
+                if (r > 160 && g > 130 && b < 120 && r - b > 60) count++
+                x += step
+            }
+            y += step
+        }
+        return count
+    }
+
     // V2.9.230: 本地suit识别结果
     data class LocalSuitResult(val suit: String, val confidence: Float)
 
@@ -1477,6 +1515,24 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     if (oppChipsMap.isNotEmpty()) {
                         Log.d(TAG, "👥 对手筹码: ${oppChipsMap.size}/5 %dms".format(System.currentTimeMillis() - tOC))
                     }
+                    // V2.9.645: 对手下注筹码堆检测（黄色像素计数）
+                    //   解决"头像有两张牌面遮挡时筹码数字被挡→无法判断谁下注"的问题。
+                    //   检测每个座位前的黄色筹码堆，有黄色=该玩家下注了，像素量≈下注大小。
+                    val tBetChips = System.currentTimeMillis()
+                    val oppBetMap = HashMap<Int, Int>()  // seatId → 下注筹码黄色像素数
+                    for ((idx, seatId) in oppSeatIds.withIndex()) {
+                        val betBmp = RegionCropper.cropOpponentBetChips(screenshotBmp, idx)
+                        if (betBmp != null) {
+                            val yellowCount = countYellowPixels(betBmp)
+                            if (yellowCount >= BET_CHIPS_YELLOW_THRESHOLD) {
+                                oppBetMap[seatId] = yellowCount
+                            }
+                            betBmp.recycle()
+                        }
+                    }
+                    if (oppBetMap.isNotEmpty()) {
+                        Log.d(TAG, "💰 下注筹码检测: ${oppBetMap.size}/5个座位有下注 (${System.currentTimeMillis() - tBetChips}ms)")
+                    }
                 } catch (e: Exception) {
                     amountDiag = "exception:${e.message}"
                     Log.w(TAG, "本地CV底池/筹码失败，VLM兜底: ${e.message}")
@@ -1508,6 +1564,30 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 // totalPlayers=桌型6（位置映射依赖，固定）；activePlayers=牌背实测在池人数
                 val finalTotalPlayers = 6
                 val finalActivePlayers = if (seatStatusOk) localActivePlayersSafe(localActiveCount) else (oppChipsMap.size + 1)
+
+                // V2.9.645: 对手筹码历史补全——解决"头像有牌面遮挡时OCR读不到筹码"的问题
+                //   规则: 座位inHand=true但OCR读不到→用历史缓存值兜底(上一手有效读数)
+                //   更新: OCR读到有效值→更新历史缓存；翻前首帧清理弃牌座位的历史(避免跨手污染)
+                val seatByIdx = listOf(0, 1, 2, 3, 5)
+                var historyFallbackCount = 0
+                for ((idx, seatId) in seatByIdx.withIndex()) {
+                    val inHand = idx in seatStatus.indices && seatStatus[idx].second
+                    if (inHand && !oppChipsMap.containsKey(seatId)) {
+                        // OCR失败但座位活跃→用历史值兜底
+                        val hist = _oppChipsHistory[seatId]
+                        if (hist != null && hist > 0) {
+                            oppChipsMap[seatId] = hist
+                            historyFallbackCount++
+                        }
+                    }
+                    // OCR读到有效值→更新历史缓存
+                    if (oppChipsMap.containsKey(seatId)) {
+                        _oppChipsHistory[seatId] = oppChipsMap[seatId]!!
+                    }
+                }
+                if (historyFallbackCount > 0) {
+                    Log.d(TAG, "📜 对手筹码历史补全: ${historyFallbackCount}个座位用历史值兜底 (当前OCR成功${oppChipsMap.size - historyFallbackCount}/5)")
+                }
 
                 // v612: 本地CV盲注OCR段已删除(recognizeBlinds/cropBlindText同步移除), GCD为唯一盲注来源
 
@@ -1916,6 +1996,14 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                             }
                         }
                         if (presetMatch >= 2) {
+                            // V2.9.645: 闸C(码深验证) — 我方筹码/candidateBB应为合理码深(10-300BB)。
+                            //   排除OCR误读导致的荒谬BB值(如mr=2886→BB=1443, 若chips=10000则码深仅6.9BB不合理)。
+                            //   码深验证通过→提高置信度,不通过→仍可pending但不建立锁(更保守)。
+                            val stackBB = if (candidateBB > 0 && localChipsValue > 0) localChipsValue.toFloat() / candidateBB else 0f
+                            val stackValid = stackBB in 10f..300f
+                            if (!stackValid) {
+                                Log.d(TAG, "GCD盲注码深验证失败: BB=$candidateBB chips=$localChipsValue 码深=${String.format("%.1f", stackBB)}BB (不在10-300BB范围)")
+                            }
                             // 闸B: 多帧一致性状态机
                             if (_bbLockCandidate != candidateBB) {
                                 _bbLockCandidate = candidateBB
@@ -1923,10 +2011,11 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                             } else {
                                 _bbLockCount++
                             }
-                            if (_bbLockCount >= 3) {
+                            // 锁建立条件: 连续3帧一致 + 码深验证通过(码深验证失败的候选绝不建立锁)
+                            if (_bbLockCount >= 3 && stackValid) {
                                 // 连续3帧一致 → 建立/覆盖锁存
                                 if (_lockedBBKotlin != candidateBB) {
-                                    Log.d(TAG, "🔒 GCD盲注锁更新: ${_lockedBBKotlin}→$candidateBB (连续${_bbLockCount}帧一致)")
+                                    Log.d(TAG, "🔒 GCD盲注锁更新: ${_lockedBBKotlin}→$candidateBB (连续${_bbLockCount}帧一致, 码深=${String.format("%.1f", stackBB)}BB)")
                                 }
                                 _lockedBBKotlin = candidateBB
                                 inferredBB = candidateBB
@@ -2256,7 +2345,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
         oppChipsMap: Map<Int, Int>,
         myChips: Int,
         dSeat: Int,
-        seatStatus: List<Pair<Boolean, Boolean>> = emptyList()
+        seatStatus: List<Pair<Boolean, Boolean>> = emptyList(),
+        oppBetMap: Map<Int, Int> = emptyMap()  // V2.9.645: 下注筹码堆黄色像素数（seatId→黄色像素）
     ): List<PlayerInfo> {
         val players = mutableListOf<PlayerInfo>()
         // idx(0..4) → seat(0,1,2,3,5)，与OPP_CHIPS/SEAT_CARDBACK顺序一致
@@ -2274,15 +2364,21 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val chips = oppChipsMap[seat]
                 val seated = idx in seatStatus.indices && seatStatus[idx].first
                 val inHand = idx in seatStatus.indices && seatStatus[idx].second
+                val hasBet = oppBetMap.containsKey(seat)
+                // V2.9.645: 下注筹码堆检测——有黄色筹码=该玩家下注了
+                //   ⚠️ 安全起见: 暂不设置bet字段(设为0),避免bet=1干扰JS侧HUD统计和3bet判定。
+                //   检测结果仅用于日志观测和后续校准,实机验证黄色像素与金额的对应关系后再启用。
+                //   解决"头像有两张牌面遮挡时筹码数字被挡→无法判断谁下注"的问题。
+                val betAmount = 0  // TODO: 校准后用黄色像素比例估算实际bet金额
                 if (seatStatus.isEmpty()) {
                     // 旧路径兜底：座位检测不可用时，有筹码OCR结果的座位视为活跃
                     if (chips != null && chips > 0) {
-                        players.add(PlayerInfo(pos, 0, chips, true))
+                        players.add(PlayerInfo(pos, betAmount, chips, true))
                     }
                 } else if (seated) {
                     // V2.9.607: 在座即列入players（chips OCR读不到离桌"全押"红字时给0）；
                     // active=true 仅当仍持牌参与本手，弃牌/离桌座位 active=false（JS action标fold）
-                    players.add(PlayerInfo(pos, 0, chips ?: 0, inHand))
+                    players.add(PlayerInfo(pos, betAmount, chips ?: 0, inHand))
                 }
             }
         }

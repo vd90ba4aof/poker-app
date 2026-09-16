@@ -85,6 +85,20 @@ object RegionCropper {
         RegionRect(45, 1430, 280, 1620)   // idx4 seat5 左中
     )
 
+    // ===== V2.9.645: 对手下注筹码堆检测区域（黄色筹码=已下注）=====
+    //   解决"头像有两张牌面遮挡时筹码数字被挡→无法判断谁下注"的问题。
+    //   位置：每个座位前方（靠近桌面中心一侧）的下注筹码堆放区。
+    //   检测方法：黄色像素计数（与按钮检测同源isYellow），有黄色筹码堆=该玩家下注了。
+    //   顺序与OPP_CHIPS严格一致：idx0=seat0, 1=seat1, 2=seat2, 3=seat3, 4=seat5
+    //   初始位置基于牌桌几何推算（头像内侧→桌面中心方向），后续用实机日志校准。
+    private val SEAT_BET_CHIPS = listOf(
+        RegionRect(150, 820, 310, 880),    // idx0 seat0 左上（头像右下方）
+        RegionRect(420, 470, 660, 555),    // idx1 seat1 正上（头像正下方）
+        RegionRect(770, 820, 930, 880),    // idx2 seat2 右上（头像左下方）
+        RegionRect(720, 1490, 880, 1575),  // idx3 seat3 右中（头像左下方）
+        RegionRect(200, 1490, 360, 1575)   // idx4 seat5 左中（头像右下方）
+    )
+
     // ===== 操作区（底部按钮+筹码+预设）=====
     // 包含：主操作按钮（y≈2140-2340）、预设按钮（x≈730-1060, y≈1640-2130）、
     //       我的筹码（x≈45-310, y≈1935-2020）、底部玩家信息
@@ -247,6 +261,15 @@ object RegionCropper {
     fun cropOpponentChips(bitmap: Bitmap, seatIndex: Int): Bitmap? {
         if (seatIndex < 0 || seatIndex >= OPP_CHIPS.size) return null
         return cropRegion(bitmap, OPP_CHIPS[seatIndex])
+    }
+
+    /**
+     * V2.9.645: 裁剪指定对手座位的下注筹码堆区域
+     * @param seatIndex 0-4，对应SEAT_BET_CHIPS列表索引（seat0,1,2,3,5）
+     */
+    fun cropOpponentBetChips(bitmap: Bitmap, seatIndex: Int): Bitmap? {
+        if (seatIndex < 0 || seatIndex >= SEAT_BET_CHIPS.size) return null
+        return cropRegion(bitmap, SEAT_BET_CHIPS[seatIndex])
     }
 
     /**
