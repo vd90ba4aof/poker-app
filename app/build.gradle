@@ -16,10 +16,21 @@ android {
         versionName "2.9.643"
     }
 
+    // Release签名配置
+    signingConfigs {
+        release {
+            storeFile file("../poker-app-release.keystore")
+            storePassword "pokerApp2026"
+            keyAlias "pokerAppRelease"
+            keyPassword "pokerApp2026"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
         debug {
             minifyEnabled false

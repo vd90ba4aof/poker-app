@@ -59,3 +59,4 @@ verification_output/
 app/src/main/assets/poker_helper_v*_backup.html
 firmware-v2.0.0/
 artifact.zip
+*.keystore
