@@ -441,6 +441,12 @@ var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 // 全局状态
 var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',platform:'standard',rake_cap:0};
 var _pi=null,_ms='h';
+// Fix: 安全AndroidBridge调用辅助——统一封装，防typeof检查不充分导致ReferenceError
+function _safeBridgeCall(methodName, defaultVal){
+  if(typeof AndroidBridge==='undefined')return defaultVal;
+  if(typeof AndroidBridge[methodName]!=='function')return defaultVal;
+  try{return AndroidBridge[methodName]();}catch(e){console.log('[bridge] '+methodName+' err: '+e.message);return defaultVal;}
+}
 // V2.9.630: 引擎路由统计——记录新旧引擎使用分布,指导渐进式迁移优先级
 var _engineStats=(function(){try{var _d=localStorage.getItem('poker_engine_stats');if(_d)return JSON.parse(_d);}catch(e){}return{seHit:0,seFallthrough:0,legacyOnly:0,seScene:{},legacyScene:{},total:0};})();
 var _decisionCache={};var _cacheMax=200;
@@ -9548,8 +9554,12 @@ function _decideInner(){
     }
     TablePulse.record(_profile);
     var keys=Object.keys(_decisionCache);
-    if(keys.length>=_cacheMax)delete _decisionCache[keys[0]];
+    // Fix: 先写入新缓存，再淘汰旧项——避免写入前误删当前key导致缓存丢失
     _decisionCache[ck]=result;
+    if(keys.length>=_cacheMax){
+      // 淘汰最早项（keys[0]是写入前的最早key，不可能是刚写入的ck）
+      delete _decisionCache[keys[0]];
+    }
     // V2.9.129: SelfTiltGuard r 前缀（在 V2.9.127/126 保护之后叠加，不动 action）
     // 设计: 命名空间隔离 - TiltDetector(V2.9.60)改action给策略, SelfTiltGuard(V2.9.129)只改r给预警
     // 硬约束: 不覆盖 V2.9.127 顶级牌保护, 不覆盖 V2.9.126 池驱反 fold
@@ -10104,7 +10114,7 @@ function go(){
           try{
             var _errR2={a:'fold',r:'[出错]'+e.message,eq:0,c:'l',_colorInfo:{colorKey:'FOLD',color:'#FF5252',signalType:'NONE'}};
             HandHistory.add(_errR2,false);
-            try{if(typeof autoExecuteDecision==="function"){var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;if(_am)autoExecuteDecision({a:'fold',eq:0,r:'[翻后出错]',_colorInfo:{colorKey:'FOLD',signalType:'NONE'}},_am);}}catch(_ae){console.log('[autoExec] 翻后出错fold err:'+_ae.message);}
+            try{if(typeof autoExecuteDecision==="function"){var _am=_safeBridgeCall('isAutoCaptureOn',false);if(_am)autoExecuteDecision({a:'fold',eq:0,r:'[翻后出错]',_colorInfo:{colorKey:'FOLD',signalType:'NONE'}},_am);}}catch(_ae){console.log('[autoExec] 翻后出错fold err:'+_ae.message);}
             if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('弃牌|COLOR:FOLD|SIGNAL:ERROR');}
           }catch(e3){console.log('[go诊断] catch补救也失败: '+e3.message);}
         }
@@ -10121,7 +10131,7 @@ function go(){
       console.log('[go诊断] decide()返回null→手牌不足,强制FOLD');
       HandHistory.add({a:'fold',r:'[无手牌]',eq:0,c:'l',_colorInfo:{colorKey:'FOLD'}},false);
       // V2.9.553-rev6 FIX: autoExecuteDecision移到showAdvice之前（同bridgeAdvice修复逻辑）
-      try{if(typeof autoExecuteDecision==="function"){var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;if(_am)autoExecuteDecision({a:'fold',eq:0,r:'[无手牌]',_colorInfo:{colorKey:'FOLD',signalType:'NONE'}},_am);}}catch(_ae){console.log("[autoExec] 无手牌fold err:"+_ae.message);}
+      try{if(typeof autoExecuteDecision==="function"){var _am=_safeBridgeCall('isAutoCaptureOn',false);if(_am)autoExecuteDecision({a:'fold',eq:0,r:'[无手牌]',_colorInfo:{colorKey:'FOLD',signalType:'NONE'}},_am);}}catch(_ae){console.log("[autoExec] 无手牌fold err:"+_ae.message);}
       if(typeof AndroidBridge!=='undefined'&&AndroidBridge.showAdvice){AndroidBridge.showAdvice('弃牌|COLOR:FOLD|SIGNAL:NO_DATA');}
       return;
     }
@@ -10167,7 +10177,11 @@ function bridgeAdvice(r){
     //   原因: showAdvice在Kotlin侧会STRATEGY_COMPUTING→IDLE(P0-fix#1)，
     //   若先showAdvice则autoDecision的R7守卫因FSM=IDLE而拦截所有auto-tap
     var _autoExecResult='skip';
-    var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;
+    // Fix: 安全调用isAutoCaptureOn——先检查typeof确保是function再调用
+    var _am=false;
+    if(typeof AndroidBridge!=='undefined'&&typeof AndroidBridge.isAutoCaptureOn==='function'){
+      try{_am=!!AndroidBridge.isAutoCaptureOn();}catch(_ame){console.log('[autoExec] isAutoCaptureOn err: '+_ame.message);}
+    }
     // V2.9.598 P2-3: 我方动作入账(仅自动模式_am——手动模式下r.a只是建议,豪哥未必照做,
     //   记成"我方真实动作"会失真);一手一街去重,写_hero*独立字段不污染对手建模
     try{
@@ -11172,7 +11186,7 @@ function onVisionResult(data){
     if(G._frameBtnCount > 0){
       try{
         if(typeof autoExecuteDecision==="function"){
-          var _am=typeof AndroidBridge!=="undefined"&&AndroidBridge.isAutoCaptureOn?AndroidBridge.isAutoCaptureOn():false;
+          var _am=_safeBridgeCall('isAutoCaptureOn',false);
           if(_am) autoExecuteDecision({a:'fold',eq:0,r:'[NO_TABLE但有按钮]',_colorInfo:{colorKey:'FOLD',signalType:'NO_TABLE_BTN'}},_am);
         }
       }catch(_ae){console.log('[autoExec] NO_TABLE fold err:'+_ae.message);}
@@ -11239,10 +11253,11 @@ function onVisionResult(data){
   }
   if(_handLocked && _isSameHand && G.hole[0] && G.hole[1]) {
     console.log('[手牌锁定] 已锁定('+_lockReason+')，hand='+_newHandKey+'，只更新公共牌/底池');
-    G.comm = [null,null,null,null,null];
+    // Fix P0: 不在此处清空G.comm——若本帧无data.community_cards(某些帧不返回公牌)，
+    // 翻后G.comm会被清空导致策略引擎误判为翻前。公共牌更新由下方data.community_cards块处理。
   } else if(_suitConflictSameRank) {
     console.log('[手牌锁定] rank相同suit分歧(帧'+_newHandKey+'≠锁'+_prevLockKey+')，保守保旧牌+多帧复核');
-    G.comm = [null,null,null,null,null];
+    // Fix P0: 同理不在保旧牌分支清空公牌，避免翻后误入翻前
     try{if(typeof AndroidBridge!=='undefined'&&AndroidBridge.triggerMultiFrame)AndroidBridge.triggerMultiFrame();}catch(_smfe){}
   } else {
     G._handLockKey = _newHandKey;

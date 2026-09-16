@@ -70,12 +70,12 @@ object VisionApiClient {
     var useCompactPrompt = true
 
     // V2.9.541: 本地CV为主识别链路（手牌/公共牌/操作区/筹码全像素匹配），VLM仅兜底
-    var useLocalRecognition: Boolean = true
+    @Volatile var useLocalRecognition: Boolean = true
     
-    var apiProvider = "siliconflow"
-    var apiKey = ""
-    var apiUrl = "https://api.siliconflow.cn/v1/chat/completions"
-    var modelName = "Qwen/Qwen3-VL-8B-Instruct"
+    @Volatile var apiProvider = "siliconflow"
+    @Volatile var apiKey = ""
+    @Volatile var apiUrl = "https://api.siliconflow.cn/v1/chat/completions"
+    @Volatile var modelName = "Qwen/Qwen3-VL-8B-Instruct"
     @Volatile var lastError = ""
     // V2.9.193: 保存API原始响应——用于诊断识别失败根因
     @Volatile var lastRawResponse = ""
@@ -1277,11 +1277,12 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             return null
         }
         try {
-            return try {
+            var screenshotBmp: Bitmap? = null
+            try {
                 val t0 = System.currentTimeMillis()
 
                 // 1. 解码截图
-                val screenshotBmp = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
+                screenshotBmp = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
                 if (screenshotBmp == null) {
                     lastError = "截图解码失败"
                     return null
@@ -1715,7 +1716,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 handBitmaps.forEach { RegionCropper.recycleBitmaps(it) }
                 commBitmaps.forEach { RegionCropper.recycleBitmaps(it) }
                 RegionCropper.recycleBitmaps(handStitch)
-                screenshotBmp.recycle()
+                // screenshotBmp由finally块统一回收，此处不再手动recycle（防双回收）
 
                 // 9. 并发API调用（牌面仅本地CV失败时才调API）
                 var boardResult: BoardRecognitionResult? = null
@@ -1987,11 +1988,14 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 lastResult = result
                 lastResultTime = System.currentTimeMillis()
                 lastError = ""
-                result
+                return result
             } catch (e: Exception) {
                 lastError = "V2识别异常: ${e.message}"
                 Log.e(TAG, "analyzeScreenshotConcurrent V2 failed", e)
-                null
+                return null
+            } finally {
+                // Fix: 确保screenshotBmp在任何路径（异常/正常/early return）下都被回收，防止Bitmap泄漏
+                screenshotBmp?.let { if (!it.isRecycled) it.recycle() }
             }
         } finally {
             analyzeLock.unlock()

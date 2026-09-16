@@ -45,9 +45,9 @@ class FloatingService : Service() {
 
     companion object {
         private const val TAG = "FloatingService"
-        var isRunning = false
-        var currentPanelWidth: Int = 0
-        var currentPanelHeight: Int = 0
+        @Volatile var isRunning = false
+        @Volatile var currentPanelWidth: Int = 0
+        @Volatile var currentPanelHeight: Int = 0
         private const val CHANNEL_ID = "screen_opt_v2"
         private const val NOTIFICATION_ID = 2
         private const val PREFS_NAME = "poker_floating_prefs"
@@ -86,11 +86,11 @@ class FloatingService : Service() {
     // V2.9.541: 本地CV为主识别链路（手牌/公共牌/操作区/筹码全像素匹配），VLM仅兜底
 
     // V2.9.153: AutoCapture
-    private var autoCaptureEnabled = false
+    @Volatile private var autoCaptureEnabled = false
     private var autoCaptureRunnable: Runnable? = null
     private var autoCaptureInterval = 3500L  // V2.9.569: 固定3.5秒间隔（AntiDetection±15%抖动≈3-4秒）
     // V2.9.180: 最新按钮坐标（Vision API返回，用于全自动执行）
-    private var latestButtonPositions = emptyList<VisionApiClient.ButtonPosition>()
+    @Volatile private var latestButtonPositions = emptyList<VisionApiClient.ButtonPosition>()
     // V2.9.207: 缓存场景数据——用于本地CV快速通道（跳过VLM）
     private var cachedPotSize: Int = 0
     private var cachedToCall: Int = 0
@@ -142,8 +142,8 @@ class FloatingService : Service() {
     private val _screenshotGate = java.util.concurrent.atomic.AtomicBoolean(false)
     private var _lastStrategyAdvice = ""   // V2.9.113: 最后策略结果
     // V2.9.155: 崩溃状态——JS ReferenceError/未捕获异常时悬浮球显示「崩」+红+快闪
-    private var _isCrashed = false
-    private var _lastCrashReason = ""
+    @Volatile private var _isCrashed = false
+    @Volatile private var _lastCrashReason = ""
     private val pendingJsCalls = java.util.Collections.synchronizedList(mutableListOf<String>())  // P2-fix: WebView线程与主线程并发安全
     // V2.9.167: 诊断日志变量——记录每次识别的完整信息
     private var _diagStartTime = 0L
@@ -164,7 +164,7 @@ class FloatingService : Service() {
     private val errorLogs = java.util.Collections.synchronizedList(mutableListOf<String>())
     private val ERROR_LOG_FILE = "error_logs.txt"
     private val MAX_ERROR_LOGS = 50
-    private var isBlinkingError = false
+    @Volatile private var isBlinkingError = false
     // R6-fix: addErrorLog文件写入频率限制（防I/O风暴导致ANR）
     @Volatile private var lastErrorLogWriteTime = 0L
     private val ERROR_LOG_MIN_INTERVAL_MS = 1000L // 最少1秒写一次文件
