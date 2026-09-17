@@ -3779,13 +3779,35 @@ function postflopActiveCount(){
   var n=0;
   try{
     var pl=G._lastPlayers&&G._lastPlayers.length>0?G._lastPlayers:(G.players||[]);
+    var _hasActiveField=false, _activeCount=0;
+    var _hasFoldedField=false, _foldedCount=0;
     for(var i=0;i<pl.length;i++){
       var pp=pl[i];if(!pp)continue;
-      var folded=pp.folded===true;
-      var active=pp.active===true||pp.active===1||(!folded&&pp.chips>0);
-      if(active&&!folded)n++;
+      // 统计active字段（优先，Vision直接识别）
+      if(pp.active!==undefined&&pp.active!==null){
+        _hasActiveField=true;
+        if(pp.active===true||pp.active===1||pp.active==='1')_activeCount++;
+      }
+      // 统计folded字段（辅助验证）
+      if(pp.folded!==undefined&&pp.folded!==null){
+        _hasFoldedField=true;
+        if(pp.folded===true||pp.folded===1||pp.folded==='1')_foldedCount++;
+      }
     }
-  }catch(e){n=0;}
+    // V2.9.659 FIX: 移除错误的chips>0 fallback——弃牌玩家chips也>0(筹码仍在座位上)
+    //   导致全员被计为active(n恒等于tt),equity严重低估,多人池调整乱加
+    if(_hasActiveField){
+      n=_activeCount;  // 优先用Vision的active字段（直接识别是否在牌局中）
+    }else if(_hasFoldedField){
+      n=pl.length-_foldedCount;  // 没有active时用folded反向推算
+    }
+    // 数据异常兜底: n=0或n等于总人数(全员active可疑),降级用G.act
+    var tt=G.tt||6;
+    if((n===0||n>=tt)&&G.act&&G.act>=2&&G.act<=tt){
+      n=G.act;
+      console.log('[postflopActiveCount] players数据异常(n='+_activeCount+')→降级用G.act='+n);
+    }
+  }catch(e){n=0;console.log('[postflopActiveCount] 异常: '+e.message);}
   return n<2?2:n;
 }
 // (2) 翻后场景归一——bet→raise,且 bet>=码深85%强制allin(与SE V2.9.632/V2.9.610完全同源)
@@ -12313,22 +12335,28 @@ var PoolTypeDetector = {
       // 多人池判定（最优先）——统计活跃玩家数,不用数组长度(6人桌数组永远有6个元素)
       var _nActivePlayers=0;
       try{
+        var _hasAct=false,_actCnt=0;
+        var _hasFld=false,_fldCnt=0;
         for(var _pi=0;_pi<players.length;_pi++){
           var _pp=players[_pi];if(!_pp)continue;
-          var _pfolded=_pp.folded===true;
-          var _pactive=_pp.active===true||_pp.active===1||(!_pfolded&&_pp.chips>0);
-          if(_pactive&&!_pfolded)_nActivePlayers++;
+          if(_pp.active!==undefined&&_pp.active!==null){
+            _hasAct=true;
+            if(_pp.active===true||_pp.active===1||_pp.active==='1')_actCnt++;
+          }
+          if(_pp.folded!==undefined&&_pp.folded!==null){
+            _hasFld=true;
+            if(_pp.folded===true||_pp.folded===1||_pp.folded==='1')_fldCnt++;
+          }
         }
+        // V2.9.659 FIX: 移除chips>0 fallback——弃牌玩家chips也>0,会导致全员active误判
+        if(_hasAct)_nActivePlayers=_actCnt;
+        else if(_hasFld)_nActivePlayers=players.length-_fldCnt;
       }catch(_pte){_nActivePlayers=0;}
-      // V2.9.659 FIX: 翻前act恒等于tt(不准确),但翻后players数组能正确标记folded则用活跃数
-      //   若活跃数异常(=0或=tt全员),降级用act判断(翻后act可能已更新)
-      if(_nActivePlayers>=3) return 'MP';
-      if(_nActivePlayers>0 && _nActivePlayers<tt){
-        // players数据可信(部分弃牌),<3则不是多人池,跳过后续act判断避免误判
-      }else{
-        // players数据不可信(全员active或全0),翻后用act作为兜底
-        if(phase==='post' && act >= 3) return 'MP';
+      // 数据异常兜底: n=0或n>=tt(全员active可疑),降级用act判断
+      if((_nActivePlayers===0||_nActivePlayers>=tt)&&act>=2&&act<=tt){
+        _nActivePlayers=act;
       }
+      if(_nActivePlayers>=3) return 'MP';
 
       // 4BP判定：bet/pot比值是最稳定的特征（不依赖_heroDid4bet,因preF会改它）
       if(scene==='reraise'){
