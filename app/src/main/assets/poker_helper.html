@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.646',
+  CURRENT_VERSION:'2.9.647',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.646';
+var APP_VERSION = '2.9.647';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3337,7 +3337,12 @@ function decidePreflop(k){
 
   // V3.24→rev10→V2.9.556: 纳什push/fold — 对手码深<=15BB触发, 直读不再用stk绝对值
   var _nashEffBBpre=_oppEffBB;
-  if(_nashEffBBpre>0&&_nashEffBBpre<=15){
+  // V2.9.647 FIX(P0): scene=check且bet=0时跳过Nash——免费过牌绝不fold!
+  //   根因: 短码(≤15BB)时Nash push/fold表对K4o/93s等弱牌return fold,
+  //   但scene=check+bet=0=无人加注的limped池,hero可免费过牌看flop,
+  //   Nash的"push or fold"逻辑不适用于免费过牌场景。
+  //   实机铁证: Kh4s utg 10.5BB scene=check bet=0→Nash fold(误杀免费过牌)
+  if(_nashEffBBpre>0&&_nashEffBBpre<=15&&!(scene==='check'&&bet===0)){
     try{
       if(typeof NashPushFold!=='undefined'&&typeof NashPushFold.decide==='function'){
         var _nashEffBB=_nashEffBBpre;
@@ -3524,6 +3529,19 @@ function decidePreflop(k){
     //   修复: posTable不存在时，安全fold(无法查表=对手位置未知=保守弃牌)
     // V2.9.645 FIX(P1): 小金额limp兜底——面对<=2BB的小额下注(大概率是limp/平跟),
     //   不在3bet范围也用eq+赔率判断是否跟注,避免翻前过紧(同花/连张/投机牌全部弃掉)
+    // V2.9.647 FIX(P1): raiser=unknown时posTable为null——尝试用UTG1(最保守raiser)表fallback。
+    //   根因: opp_seats无bet数据→raiser检测失败→vs_MP.from_MP不存在→直接安全fold。
+    //   修复: raiser=unknown时,尝试vs_UTG1.from_XX(最保守)作为fallback表,而非直接fold。
+    //   这样中等强度手牌(AJs/ATs/KQs等)能从UTG1表中找到跟注条目,不再一律fold。
+    if(!posTable&&raiserRole==='unknown'){
+      var _fbKey='vs_UTG1';
+      var _fbTb=_3B[_fbKey];
+      if(_fbTb&&_fbTb[fromKey]){
+        posTable=_fbTb[fromKey];
+        entry=posTable?posTable[k]:null;
+        console.log('[SE] raiser=unknown→fallback vs_UTG1.from_'+p5+' (保守raiser表)');
+      }
+    }
     var _betBB=(pot>0&&pot<=3)?bet/(pot/1.5):bet;  // 开池前底池≈1.5BB,估算下注额BB数
     var _isLimp=(_betBB>0&&_betBB<=2.5);  // <=2.5BB视为limp/平跟场景
     if(!posTable){
@@ -9648,16 +9666,23 @@ function _decideInner(){
         // V2.9.618: DANGER/TILT(level>=2)动作收紧——回撤刹车。
         //   旧设计"只改r给预警,不动action",深回撤时仍照常跟注垃圾牌(2026-09-11日志:70BB峰
         //   值回撤至44BB期间仍K3o/T9o/As8h连续跟注放血)。现仅把【弱跟注】收紧为fold:
-        //   翻前call且eq<48(对子/双高张/范围强牌eq自然达标不受影响);
+        //   翻前call且eq<阈值(对子/双高张/范围强牌eq自然达标不受影响);
         //   翻后call且hClass=AIR且eq<40(强牌/听牌赔率闸/池驱反fold放行的不命中)。
         //   raise类不碰(强牌加注是回血来源,紧≠放弃强牌);强牌call放行不受影响。
+        // V2.9.647 FIX(P1): 回撤刹车阈值改为底池赔率感知——limped池(bet<=1.5BB)只需25%即可跟注,
+        //   旧固定48%阈值导致limped池中K9o/T9o/87o等合理limp-call全被误杀(23%决策被改fold)。
+        //   新规则: limped池(bet<=1.5)阈值=33%(仍保守,高于底池赔率25%);
+        //         非limped池(bet>1.5)维持48%(面对加注需更强牌)。
         if(_stEval&&_stEval.level>=2&&result){
           var _stA=result.a;
           var _stEq=(typeof result.eq==='number'&&result.eq>0)?result.eq:50;
           var _stHC=(result.hClass&&result.hClass.name)?result.hClass.name:'';
           var _stBlock=false,_stWhy='';
-          if(G.phase==='pre'&&(_stA==='call'||_stA==='weak_call')&&_stEq<48){
-            _stBlock=true;_stWhy='翻前弱牌跟注(eq'+Math.round(_stEq)+'<48)';
+          if(G.phase==='pre'&&(_stA==='call'||_stA==='weak_call')){
+            var _stThreshold=(bet<=1.5)?33:48;  // limped池33%, 面对加注48%
+            if(_stEq<_stThreshold){
+              _stBlock=true;_stWhy='翻前弱牌跟注(eq'+Math.round(_stEq)+'<'+_stThreshold+(bet<=1.5?' limp池':'')+')';
+            }
           }else if(G.phase!=='pre'&&(_stA==='call'||_stA==='weak_call')&&_stHC==='AIR'&&_stEq<40){
             _stBlock=true;_stWhy='空气牌跟注(eq'+Math.round(_stEq)+'<40)';
           }
@@ -11943,6 +11968,16 @@ function onVisionResult(data){
     } else if(G.phase==='pre' && _pfHasCheck && !_pfHasCall && G.bet>0){
       console.log('[V2.9.571屏幕真相] 翻前让牌免费帧但G.bet='+G.bet+'→纠正为0');
       G.bet=0;
+    }
+    // V2.9.647 FIX(P1): 翻后屏幕真相——有跟注按钮无让牌按钮但G.bet=0→纠正bet。
+    //   根因: 翻后OCR读到toCall=0但按钮实际显示"跟注 300"→策略引擎以为免费过牌→返回check→
+    //   物理闸拦截check→fold(3次HIGH错误铁证)。
+    //   修复: 翻后同样用按钮物理信号纠正bet(翻前已有的逻辑扩展到翻后)。
+    if(G.phase!=='pre' && _pfHasCall && !_pfHasCheck && G.bet===0){
+      var _postBetBB=_pfCallAmt>0 && bbValue>0 ? Math.max(1,Math.round(_pfCallAmt/bbValue)) : 1;
+      console.log('[V2.9.647屏幕真相] 翻后有跟注按钮(额='+_pfCallAmt+')但G.bet=0→纠正为'+_postBetBB+'BB (bbValue='+bbValue+')');
+      G.bet=_postBetBB;
+      if(G.scene==='check'){G.scene='bet';}  // 场景同步: 有跟注无让牌=面对下注
     }
   }catch(_pfBtnErr){console.log('[V2.9.571屏幕真相] 异常: '+_pfBtnErr.message);}
 
