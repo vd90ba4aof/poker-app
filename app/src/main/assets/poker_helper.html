@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.658',
+  CURRENT_VERSION:'2.9.659',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.658';
+var APP_VERSION = '2.9.659';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -9409,6 +9409,32 @@ function _decideInner(){
             console.log('[V2.9.604 池驱反fold闸门] AIR+eq'+Math.round(_psmEq)+'%<'+_airEqFloor+'%→不反转付费动作(留fold/check)');
             _psmResult={action:(G.bet>0?'fold':'check'),reason:'牌力不足不反转(空气低eq)',colorKey:G.bet>0?'FOLD':'CHECK'};
           }
+          // V2.9.659 FIX: 面对下注时,禁止fold→raise反转——PSM的raise是主动下注语义(价值下注),
+          //   不是面对下注的加注语义。面对下注加注需要fold equity+被跟注时的equity双重支撑,
+          //   原SE已判定fold说明这两条件都不满足,强行反转raise必然负EV(是"加注后弃牌"被剥削感的根因)。
+          //   面对下注时最多只能反转为call(且需满足底池赔率)。
+          if(G.bet>0 && _psmResult && _psmResult.action==='raise'){
+            var _poFacing=G.bet/Math.max(G.pot+G.bet,1)*100;
+            if(_psmEq>=_poFacing+3){
+              // eq够跟注→降级为call(不raise)
+              console.log('[V2.9.659 池驱反fold闸门] 面对bet禁止fold→raise(PSM是主动下注语义)→降级call eq='+Math.round(_psmEq)+'%≥需'+Math.round(_poFacing+3)+'%');
+              _psmResult={action:'call',reason:'厚池降级跟注(不raise)',colorKey:'CALL'};
+            }else{
+              // eq连跟注都不够→保持fold
+              console.log('[V2.9.659 池驱反fold闸门] 面对bet且eq='+Math.round(_psmEq)+'%<需'+Math.round(_poFacing+3)+'%→保持fold(不raise不call)');
+              _psmResult={action:'fold',reason:'eq不足底池赔率不反转',colorKey:'FOLD'};
+            }
+          }
+          // V2.9.659 FIX: 面对下注时,fold→call也必须满足底池赔率(+3%缓冲)
+          //   补充V2.9.604赔率闸只覆盖"赔率型fold"(reason含odds/需XX%),漏掉了"频率型fold"
+          //   (如面CBet频率表fold),这类fold虽有GTO平衡意义,但反转call仍需eq≥底池赔率。
+          if(G.bet>0 && _psmResult && _psmResult.action==='call'){
+            var _poCall=G.bet/Math.max(G.pot+G.bet,1)*100;
+            if(_psmEq<_poCall+3){
+              console.log('[V2.9.659 池驱反fold闸门] 面对bet fold→call eq='+Math.round(_psmEq)+'%<需'+Math.round(_poCall+3)+'%→保持fold');
+              _psmResult={action:'fold',reason:'eq不足底池赔率不反转call',colorKey:'FOLD'};
+            }
+          }
           if(_psmResult&&_psmResult.action&&_psmResult.action!=='fold'){
             // V2.9.139: 面对bet时PoolStrategyMatrix返回check→无效(不能check过牌)，保留fold
             if(_psmResult.action==='check' && G.bet>0){
@@ -12284,10 +12310,25 @@ var PoolTypeDetector = {
       var players = (typeof G!=='undefined' && G.players) || [];
       var tt = (typeof G!=='undefined' && G.tt) || 6;
 
-      // 多人池判定（最优先）——用G.players长度,不用G.act(preflop G.act总等于tt,不准确)
-      if(players.length >= 3) return 'MP';
-      // 翻后无players数据时,用act判定(翻后G.act才反映实际进池人数)
-      if(phase==='post' && act >= 3) return 'MP';
+      // 多人池判定（最优先）——统计活跃玩家数,不用数组长度(6人桌数组永远有6个元素)
+      var _nActivePlayers=0;
+      try{
+        for(var _pi=0;_pi<players.length;_pi++){
+          var _pp=players[_pi];if(!_pp)continue;
+          var _pfolded=_pp.folded===true;
+          var _pactive=_pp.active===true||_pp.active===1||(!_pfolded&&_pp.chips>0);
+          if(_pactive&&!_pfolded)_nActivePlayers++;
+        }
+      }catch(_pte){_nActivePlayers=0;}
+      // V2.9.659 FIX: 翻前act恒等于tt(不准确),但翻后players数组能正确标记folded则用活跃数
+      //   若活跃数异常(=0或=tt全员),降级用act判断(翻后act可能已更新)
+      if(_nActivePlayers>=3) return 'MP';
+      if(_nActivePlayers>0 && _nActivePlayers<tt){
+        // players数据可信(部分弃牌),<3则不是多人池,跳过后续act判断避免误判
+      }else{
+        // players数据不可信(全员active或全0),翻后用act作为兜底
+        if(phase==='post' && act >= 3) return 'MP';
+      }
 
       // 4BP判定：bet/pot比值是最稳定的特征（不依赖_heroDid4bet,因preF会改它）
       if(scene==='reraise'){
