@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.655 · 全押硬闸底池赔率感知+limp兜底同花质量收紧+GTO call禁升raise+底池赔率公式修正"
+        android:text="V2.9.658 · 多人池equity双重折扣修复+对手范围位置修正+Fallback pot odds统一+StreetPlan兜底nOpp修复"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
