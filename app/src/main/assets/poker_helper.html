@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.660',
+  CURRENT_VERSION:'2.9.661',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.660';
+var APP_VERSION = '2.9.661';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3606,6 +3606,51 @@ function decidePreflop(k){
           return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_limpPo)+'%('+rP5+'无表)',eq:_exLimp.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLimp.exploit,_se:true,_seFreq:1,_limpFallback:true};
         }
       }
+      // V2.9.661: Flat Call防御——面对raise(非limp)且不在3B表时,中等牌力手牌应flat call而非直接fold
+      //   数学依据: 25手翻前fold中eq≥底池赔率,理论EV泄漏+81.5BB;当前策略100%call正确率=太紧
+      //   与limp兜底区别: 面对真实raise门槛更高(50% vs 45%),加位置劣势缓冲
+      else if(bet>0){
+        // 复用手牌质量标准(同limp兜底)
+        var _fcSuited=(k.length>=2&&k.charAt(k.length-1)==='s');
+        var _fcPair=(k.length>=2&&k.charAt(0)===k.charAt(1));
+        var _fcOffBW=false;
+        if(!_fcSuited&&!_fcPair&&k.length>=3){
+          var _fcr1=k.charAt(0),_fcr2=k.charAt(1);
+          var _fcBR=['A','K','Q','J','T'];_fcOffBW=(_fcBR.indexOf(_fcr1)>=0&&_fcBR.indexOf(_fcr2)>=0);
+          if(!_fcOffBW&&(_fcr1==='A'||_fcr2==='A')){
+            var _fcAx=(_fcr1==='A')?_fcr2:_fcr1;
+            if('9TJQK'.indexOf(_fcAx)>=0) _fcOffBW=true;
+          }
+        }
+        var _fcSuitedOK=false;
+        if(_fcSuited&&k.length>=3){
+          var _fcsr1=k.charAt(0),_fcsr2=k.charAt(1);
+          var _fcRO='23456789TJQKA';
+          var _fcI1=_fcRO.indexOf(_fcsr1),_fcI2=_fcRO.indexOf(_fcsr2);
+          var _fcGap=Math.abs(_fcI1-_fcI2)-1;
+          var _fcHasA=(_fcsr1==='A'||_fcsr2==='A');
+          var _fcMinR=Math.min(_fcI1,_fcI2);
+          _fcSuitedOK=_fcHasA||(_fcMinR>=5)||(_fcGap<=1);
+        }
+        var _fcQualOK=(_fcPair||_fcOffBW||(_fcSuited&&_fcSuitedOK));
+        if(_fcQualOK){
+          var _fcPo=bet/Math.max(pot+bet,1)*100;
+          // 基准门槛50%(比limp高5%——面对raise比limp强)
+          var _fcTh=50+Multiway.callThresholdAdj();
+          // 位置缓冲: OOP(utg/mp/sb/bb)+5% (位置劣势,翻后难打,需更高eq)
+          //          IP(btn/co)+0% (位置优势,翻后好打,不需额外缓冲)
+          if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fcTh+=5;
+          // SPR筹码深度调整(同limp兜底V2.9.660逻辑)
+          if(spr>25)_fcTh-=7;
+          else if(spr<10)_fcTh+=7;
+          // 安全闸: 不低于底池赔率+3%(最小+EV边缘),不高于65%(避免要求过离谱)
+          _fcTh=Math.max(_fcPo+3,Math.min(65,_fcTh));
+          if(eq>=_fcTh&&eq>=_fcPo){
+            var _exFC=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+            return{a:'call',v:bet,r:'FlatCall防御 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_fcPo)+'%('+rP5+'无表)',eq:_exFC.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exFC.exploit,_se:true,_seFreq:1,_flatCall:true};
+          }
+        }
+      }
       return _fold(eq,'vs '+rP5+' from_'+p5+' 无3B表(raiser未知)',spr);
     }
     if(!entry){
@@ -3645,6 +3690,44 @@ function decidePreflop(k){
         if(_limpQ2&&eq>=_limpTh2&&eq>=_limpPo2){
           var _exLimp2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
           return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_limpPo2)+'%('+rP5+'不在3B)',eq:_exLimp2.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLimp2.exploit,_se:true,_seFreq:1,_limpFallback:true};
+        }
+      }
+      // V2.9.661: Flat Call防御(同第一路径)——面对raise不在3B范围时中等牌力flat call
+      else if(bet>0){
+        var _fc2Suited=(k.length>=2&&k.charAt(k.length-1)==='s');
+        var _fc2Pair=(k.length>=2&&k.charAt(0)===k.charAt(1));
+        var _fc2OffBW=false;
+        if(!_fc2Suited&&!_fc2Pair&&k.length>=3){
+          var _fc2r1=k.charAt(0),_fc2r2=k.charAt(1);
+          var _fc2BR=['A','K','Q','J','T'];_fc2OffBW=(_fc2BR.indexOf(_fc2r1)>=0&&_fc2BR.indexOf(_fc2r2)>=0);
+          if(!_fc2OffBW&&(_fc2r1==='A'||_fc2r2==='A')){
+            var _fc2Ax=(_fc2r1==='A')?_fc2r2:_fc2r1;
+            if('9TJQK'.indexOf(_fc2Ax)>=0) _fc2OffBW=true;
+          }
+        }
+        var _fc2SuitedOK=false;
+        if(_fc2Suited&&k.length>=3){
+          var _fc2sr1=k.charAt(0),_fc2sr2=k.charAt(1);
+          var _fc2RO='23456789TJQKA';
+          var _fc2I1=_fc2RO.indexOf(_fc2sr1),_fc2I2=_fc2RO.indexOf(_fc2sr2);
+          var _fc2Gap=Math.abs(_fc2I1-_fc2I2)-1;
+          var _fc2HasA=(_fc2sr1==='A'||_fc2sr2==='A');
+          var _fc2MinR=Math.min(_fc2I1,_fc2I2);
+          _fc2SuitedOK=_fc2HasA||(_fc2MinR>=5)||(_fc2Gap<=1);
+        }
+        var _fc2QualOK=(_fc2Pair||_fc2OffBW||(_fc2Suited&&_fc2SuitedOK));
+        if(_fc2QualOK){
+          var _fc2Po=bet/Math.max(pot+bet,1)*100;
+          var _fc2Th=50+Multiway.callThresholdAdj();
+          if(G.act>=4)_fc2Th-=3; // 4人以上底池放宽(同limp)
+          if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fc2Th+=5;
+          if(spr>25)_fc2Th-=7;
+          else if(spr<10)_fc2Th+=7;
+          _fc2Th=Math.max(_fc2Po+3,Math.min(65,_fc2Th));
+          if(eq>=_fc2Th&&eq>=_fc2Po){
+            var _exFC2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+            return{a:'call',v:bet,r:'FlatCall防御 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_fc2Po)+'%('+rP5+'不在3B)',eq:_exFC2.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exFC2.exploit,_se:true,_seFreq:1,_flatCall:true};
+          }
         }
       }
       return _fold(eq,'vs '+rP5+' open不在3B范围',spr);
