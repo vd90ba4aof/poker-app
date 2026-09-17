@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.654';
+var APP_VERSION = '2.9.655';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3554,6 +3554,10 @@ function decidePreflop(k){
         // V2.9.652 FIX(P1): 增加手牌质量过滤——offsuit垃圾牌(98o/76o/A2o等)即使eq达标也不允许limp兜底
         //   实证: 7手limp兜底全部亏损(-13.8BB),offsuit占5/7手;offsuit垃圾牌翻后可玩性极差
         //   规则: offsuit需两张≥T(KQo/QJo等broadway);suited/对子不受限(有投机价值)
+        // V2.9.655 FIX(P1): suited质量过滤太松——43s/52s/63s/73s/82s/92s等垃圾同花也允许limp兜底
+        //   实证: 43s limp兜底call→对手修正加raise→翻后miss弃 -2BB; 垃圾同花翻后可玩性极差
+        //   修复: suited需满足以下之一: ①含A(A2s+) ②两张≥7(97s+/86s+等) ③连张(gap≤1)
+        //         43s(两张<7且gap=1)仍允许——但82s(两张<7且gap=6)阻止
         var _limpSuited=(k.length>=2&&k.charAt(k.length-1)==='s');
         var _limpPair=(k.length>=2&&k.charAt(0)===k.charAt(1));
         var _limpOffBroadway=false;
@@ -3562,9 +3566,23 @@ function decidePreflop(k){
           var _broadRanks=['A','K','Q','J','T'];
           _limpOffBroadway=(_broadRanks.indexOf(_r1)>=0&&_broadRanks.indexOf(_r2)>=0);
         }
-        var _limpQualityOK=(_limpSuited||_limpPair||_limpOffBroadway);
+        // V2.9.655: suited手牌最小质量检查
+        var _limpSuitedOK=false;
+        if(_limpSuited&&k.length>=3){
+          var _sr1=k.charAt(0),_sr2=k.charAt(1);
+          var _rankOrder='23456789TJQKA';
+          var _i1=_rankOrder.indexOf(_sr1),_i2=_rankOrder.indexOf(_sr2);
+          var _gap=Math.abs(_i1-_i2)-1;  // 0=连张,1=one-gapper, etc.
+          var _hasA=(_sr1==='A'||_sr2==='A');
+          var _minRank=Math.min(_rankOrder.indexOf(_sr1),_rankOrder.indexOf(_sr2));
+          // 允许: 含A(A2s+) 或 最小牌≥7(97s+) 或 连张gap≤1(54s/65s/76s/87s等)
+          _limpSuitedOK=_hasA||(_minRank>=5)||(_gap<=1);  // rank index 5='7'
+        }
+        var _limpQualityOK=(_limpPair||_limpOffBroadway||(_limpSuited&&_limpSuitedOK));
         // limp场景: 用eq+赔率+手牌质量三重门槛判断是否跟注
-        var _limpPo=bet/Math.max(pot+bet*2,1)*100;
+        // V2.9.655 FIX: 底池赔率公式修正 bet/(pot+bet*2)→bet/(pot+bet),旧公式双重计算bet
+        //   旧: pot=2.5 bet=1 → 1/(2.5+2)=22.2%; 正确: 1/(2.5+1)=28.6%
+        var _limpPo=bet/Math.max(pot+bet,1)*100;  // V2.9.655: 修正底池赔率公式
         var _limpTh=45+Multiway.callThresholdAdj(); // V2.9.652: 40→45,收紧
         if(_limpQualityOK&&eq>=_limpTh&&eq>=_limpPo){
           var _exLimp=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
@@ -3576,15 +3594,26 @@ function decidePreflop(k){
     if(!entry){
       // V2.9.645: limp场景兜底——小金额下注不在3B范围也可跟注
       if(_isLimp){
-        var _limpPo2=bet/Math.max(pot+bet*2,1)*100;
+        // V2.9.655 FIX: 底池赔率公式修正(同第一路径)
+        var _limpPo2=bet/Math.max(pot+bet,1)*100;
         var _limpTh2=45+Multiway.callThresholdAdj(); // V2.9.652: 40→45,收紧
         if(G.act>=4)_limpTh2-=3;  // 4人以上底池放宽
         // V2.9.652 FIX: 复用手牌质量过滤逻辑(var hoisted但值undefined,需重新计算)
+        // V2.9.655: 同第一路径,增加suited最小质量检查
         var _lq2s=(k.length>=2&&k.charAt(k.length-1)==='s');
         var _lq2p=(k.length>=2&&k.charAt(0)===k.charAt(1));
         var _lq2ob=false;
         if(!_lq2s&&!_lq2p&&k.length>=3){var _b2=['A','K','Q','J','T'];_lq2ob=(_b2.indexOf(k.charAt(0))>=0&&_b2.indexOf(k.charAt(1))>=0);}
-        var _limpQ2=(_lq2s||_lq2p||_lq2ob);
+        // V2.9.655: suited最小质量检查(同第一路径)
+        var _lq2sOK=false;
+        if(_lq2s&&k.length>=3){
+          var _ro2='23456789TJQKA';
+          var _g2=Math.abs(_ro2.indexOf(k.charAt(0))-_ro2.indexOf(k.charAt(1)))-1;
+          var _hA2=(k.charAt(0)==='A'||k.charAt(1)==='A');
+          var _mR2=Math.min(_ro2.indexOf(k.charAt(0)),_ro2.indexOf(k.charAt(1)));
+          _lq2sOK=_hA2||(_mR2>=5)||(_g2<=1);
+        }
+        var _limpQ2=(_lq2p||_lq2ob||(_lq2s&&_lq2sOK));
         if(_limpQ2&&eq>=_limpTh2&&eq>=_limpPo2){
           var _exLimp2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
           return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_limpPo2)+'%('+rP5+'不在3B)',eq:_exLimp2.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLimp2.exploit,_se:true,_seFreq:1,_limpFallback:true};
@@ -3688,11 +3717,18 @@ function decidePreflop(k){
     if(_aiDeep){
     // B闸-牌力硬底(不依赖eq质量): 翻前接全押,仅对子22+或两张>=J双高张(与L3432强牌硬底同口径);
     //   投机牌(同花连张/小对子/A低同花)翻前无翻后潜力可兑现,直接fold
+    // V2.9.655 FIX(P0): 全押硬闸B-gate忽略底池赔率——PKO大底池中A2o eq37%面对239BB底池只需4.8%却弃牌!
+    //   根因: B-gate检查手牌质量(对子/双J+)不看底池赔率,但底池赔率<15%时任何牌都+EV
+    //   修复: 底池赔率<15%时跳过B-gate,直接走A闸eq检查(纯数学决策)
       var _aiPair=(k.length===2&&k[0]===k[1]);
       var _aiTwoBroad=(!_aiPair&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
-      if(!_aiPair&&!_aiTwoBroad){
+      var _aiPotOddsLow=callThresh<15;  // V2.9.655: 底池赔率<15%时跳过手牌质量检查
+      if(!_aiPair&&!_aiTwoBroad&&!_aiPotOddsLow){
       console.log('[V2.9.625全押硬闸] '+k+' 翻前全压非强牌(非对子非双J+) fold (oppEff='+_oppEffBB+'BB ratio='+_preAiRatio.toFixed(2)+' inPot='+((typeof G._inPotPlayers!=='undefined')?G._inPotPlayers:'?')+')');
       return _fold(allinEq,'[V2.9.625全押硬闸] '+k+' 翻前全压牌力不足弃',spr);
+      }
+      if(_aiPotOddsLow&&!_aiPair&&!_aiTwoBroad){
+        console.log('[V2.9.655全押硬闸] '+k+' 跳过B-gate(底池赔率'+callThresh+'%<15%→纯数学决策) eq='+Math.round(allinEq)+'%');
       }
     // A闸-eq真实化: 查表值替换为mcVsRange对实际开牌范围+实际进池人数的蒙特卡洛胜率(复用翻后同款函数,不拍新范围表)。
     //   强牌(TT+/AQ+)HU仍65%+正常跟;多人池弱牌eq按人数客观回落。异常try-catch降级查表值。
@@ -9144,10 +9180,15 @@ function _decideInner(){
     // V2.9.652 FIX(P0): limp兜底call也不得升级为raise——limp兜底本身就是弱牌fallback,
     //   升级为raise会把弱牌引入膨胀的底池,翻牌面miss→面对CBet弃→负EV螺旋
     //   实证: A6s limp兜底call→fish偏移升raise→翻牌面全压弃 -5BB; A2o limp兜底call→升raise→弃 -2BB
+    // V2.9.655 FIX(P0): GTO call→raise升级导致底池膨胀——GTO引擎已决策call(非raise),
+    //   对手偏移不应覆盖GTO的战略决策. 实证: AK GTO call vs MP(15%)→fish偏移升raise
+    //   →对手3bet→call 8BB→翻牌miss弃 -9BB; A4s GTO call vs MP(25%)→升raise→弃 -2BB
+    //   修复: GTO call也加入_shouldBlockUpgrade,阻止applyOppActionShift升级
     var _origA=result.a;
     var _isSpecCall=(G.phase==='pre'&&_origA==='call'&&/投机/.test(result.r||''));
     var _isLimpFallbackCall=(G.phase==='pre'&&_origA==='call'&&/limp兜底/.test(result.r||''));
-    var _shouldBlockUpgrade=(G._facing3bet||_isSpecCall||_isLimpFallbackCall);
+    var _isGTOCall=(G.phase==='pre'&&_origA==='call'&&/GTO call/.test(result.r||''));  // V2.9.655: 阻止GTO call升级
+    var _shouldBlockUpgrade=(G._facing3bet||_isSpecCall||_isLimpFallbackCall||_isGTOCall);
     var _eqForShift=_eq;
     if(_isSpecCall){
       // 投机性跟注: 传入较低eq(去掉投机bonus)给偏移函数，使其不超过升级阈值
