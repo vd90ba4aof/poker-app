@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.647',
+  CURRENT_VERSION:'2.9.648',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.647';
+var APP_VERSION = '2.9.648';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -12867,13 +12867,21 @@ var NashPushFold={
       }
       return{a:'fold',r:'Nash fold vs push('+p+'/'+bbKey+'BB) '+k,eq:_nashRealEq,c:'l',scene:'纳什fold',spr:spr,_se:true,_nash:true};
     }
-    // V2.9.625 FIX(P1): allin场景走Nash CALL表——面对全压时,投机牌(同花连张/小对子/A低同花)
-    // 没有翻后潜力可兑现,应该用更保守的Nash均衡表判断,而非SE主路径的虚高eq
+    // V2.9.648 FIX(P0): 极短码(≤2BB)面对全压——先走底池赔率闸,不查Nash表!
+    //   根因: Nash CALL表1BB档极紧(BTN仅AA-TT+AK),但0.5BB码深面对65BB底池时,
+    //   底池赔率=0.5/(65+0.5)=0.76%,任何手牌equity>0.76%都应跟注。
+    //   实机铁证: 5d5h BTN 0.5BB pot=65BB eq=64%→Nash fold(误杀!对5弃牌=灾难性错误)
+    //   修复: 极短码(≤2BB)+scene=allin+底池赔率<10%时,equity>10%即call(留安全边际)。
     if(scene==='allin'){
+      var _aiPotOdds=(pot>0)?(bet/(pot+bet)*100):100;
+      if(effectiveBB<=2&&_aiPotOdds<10&&_nashRealEq>10){
+        console.log('[V2.9.648短码赔率闸] '+k+' '+p+' '+effectiveBB+'BB pot='+pot+'BB bet='+bet+'BB 赔率='+Math.round(_aiPotOdds)+'% eq='+_nashRealEq+'%→call(不查Nash)');
+        return{a:'call',r:'短码全压赔率call('+k+' eq'+_nashRealEq+'%>赔率'+Math.round(_aiPotOdds)+'%)',eq:50,c:'m',scene:'短码赔率call',spr:spr,_se:true,_seFreq:1,_nash:true};
+      }
       if(this.isNashCall(k,p,effectiveBB)){
         return{a:'call',r:'Nash call vs allin('+p+'/'+bbKey+'BB) '+k,eq:50,c:'m',scene:'纳什callvs全压',spr:spr,_se:true,_seFreq:1,_nash:true};
       }
-      return{a:'fold',r:'Nash fold vs allin('+p+'/'+bbKey+'BB) '+k,eq:_nashRealEq,c:'l',scene:'纳什foldvs全压',spr:spr,_se:true,_nash:true};
+      return{a:'fold',r:'Nash fold vs allin('+p+'/'+bbKey+'BB) '+k,eq:_nashRealEq,c:'l',scene:'纳什foldvs全压',spr:spr,_se:true,_seFreq:1,_nash:true};
     }
     return null;
   }
