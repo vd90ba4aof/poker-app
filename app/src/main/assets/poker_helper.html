@@ -4543,7 +4543,7 @@ function _riverFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_s
       var _oppLineEnum=(scene==='check')?'cbet':'raise';  // V2.9.601: check=对手过牌=范围弱,与主路径L3418同语义用cbet宽基线(旧错用barrel_river极化→eq低估)
       var oppRange=getOppRange('postflop',_oppLineEnum,bTexture.wetness>=2?'wet':'dry');
       if(!oppRange||oppRange.length===0)return null;
-      eqR=riverExactEquity(hole,bc,oppRange);
+      eqR=riverExactEquity(hole,bc,oppRange,(_nOpp&&_nOpp>=1)?_nOpp:1);  // V2.9.657 FIX: 兜底路径漏传nOpp→单挑eq虚高(多人池应多对手互斥抽样)
       if(!eqR||eqR.combos===0)return null;
       eq=eqR.eq/100;
     }
@@ -4620,7 +4620,7 @@ function _turnFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sp
       var mcI=2000;
       if(betSz>0&&betSz/(pot+betSz)>=.66)mcI=3500;
       else if(betSz>0&&betSz/(pot+betSz)>=.33)mcI=2500;
-      var ms=mcVsRange(hole,bc,oppRange,Math.min(mcI,5000));
+      var ms=mcVsRange(hole,bc,oppRange,Math.min(mcI,5000),(_nOpp&&_nOpp>=1)?_nOpp:1);  // V2.9.657 FIX: 兜底路径漏传nOpp→单挑eq虚高(多人池应多对手互斥抽样)
       if(!ms||typeof ms.eq!=='number')return null;
       eq=ms.eq/100;
     }
