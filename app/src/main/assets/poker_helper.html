@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.650',
+  CURRENT_VERSION:'2.9.651',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.650';
+var APP_VERSION = '2.9.651';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3549,7 +3549,7 @@ function decidePreflop(k){
       if(_isLimp){
         // limp场景: 用eq+赔率兜底判断是否跟注
         var _limpPo=bet/Math.max(pot+bet*2,1)*100;
-        var _limpTh=30+Multiway.callThresholdAdj();
+        var _limpTh=40+Multiway.callThresholdAdj(); // V2.9.651 FIX(P1): 30→40, 原30%阈值过松导致A2o/Q8o/J8o等垃圾牌大量入池(-EV)
         if(eq>=_limpTh&&eq>=_limpPo){
           var _exLimp=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
           return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_limpPo)+'%('+rP5+'无表)',eq:_exLimp.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLimp.exploit,_se:true,_seFreq:1,_limpFallback:true};
@@ -3561,9 +3561,8 @@ function decidePreflop(k){
       // V2.9.645: limp场景兜底——小金额下注不在3B范围也可跟注
       if(_isLimp){
         var _limpPo2=bet/Math.max(pot+bet*2,1)*100;
-        var _limpTh2=30+Multiway.callThresholdAdj();
-        // 后位(btn/co/sb)和多人池放宽门槛,鼓励投机牌入池
-        if(['BTN','CO','SB'].indexOf(p5)>=0)_limpTh2-=5;
+        var _limpTh2=40+Multiway.callThresholdAdj(); // V2.9.651 FIX(P1): 30→40, 防止垃圾牌大量入池
+        // V2.9.651 FIX(P1): 移除后位-5%放宽——后位隐含赔率已由pot+bet*2赔率公式体现,额外放宽导致过松
         if(G.act>=4)_limpTh2-=3;  // 4人以上底池放宽
         if(eq>=_limpTh2&&eq>=_limpPo2){
           var _exLimp2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
@@ -9679,9 +9678,23 @@ function _decideInner(){
           var _stHC=(result.hClass&&result.hClass.name)?result.hClass.name:'';
           var _stBlock=false,_stWhy='';
           if(G.phase==='pre'&&(_stA==='call'||_stA==='weak_call')){
-            var _stBet=G.bet||0; // V2.9.649 FIX: bet→G.bet (旧bet未定义导致回撤刹车完全不工作)
-            var _stThreshold=(_stBet<=1.5)?33:48;  // limped池33%, 面对加注48%
-            if(_stEq<_stThreshold){
+            var _stBet=G.bet||0;
+            var _stThreshold=(_stBet<=1.5)?33:48;
+            // V2.9.651 FIX(P0): 回撤刹车不得误弃+EV强牌——实机铁证: QQ UTG面对全压eq47%>赔率35%(+EV)
+            //   却被48%阈值误判为"弱牌跟注"→fold(-3BB)。
+            //   根因: 纯eq阈值不区分"弱牌投机跟注"和"强牌+EV跟注";且全压场景无后续下注,底池赔率才是唯一准绳。
+            //   修复: 全压场景用底池赔率+5%做阈值(纯数学决策),非全压场景保留33/48%阈值(含隐含赔率考量)
+            var _stPotOdds=G.pot>0?(_stBet/(G.pot+_stBet)*100):100;
+            var _stIsAllin=(G.scene==='allin');
+            if(_stIsAllin){
+              // 全压场景: 底池赔率+5%安全边际(无后续下注,纯数学决策)
+              var _stAllinTh=_stPotOdds+5;
+              if(_stEq<_stAllinTh){
+                _stBlock=true;_stWhy='全压弱牌跟注(eq'+Math.round(_stEq)+'<赔率'+Math.round(_stAllinTh)+'%)';
+              }else{
+                console.log('[SelfTiltGuard] 全压放行: eq='+Math.round(_stEq)+'% ≥ 赔率+5%='+Math.round(_stAllinTh)+'%');
+              }
+            }else if(_stEq<_stThreshold){
               _stBlock=true;_stWhy='翻前弱牌跟注(eq'+Math.round(_stEq)+'<'+_stThreshold+(_stBet<=1.5?' limp池':'')+')';
             }
           }else if(G.phase!=='pre'&&(_stA==='call'||_stA==='weak_call')&&_stHC==='AIR'&&_stEq<40){

@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.650 · 对手偏移双重升级修复(call不再→raise_big)+_facing3bet兜底(G.bet+FrameDiff)"
+        android:text="V2.9.651 · 回撤刹车全压赔率闸+limp兜底阈值收紧30→40+移除后位放宽"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
