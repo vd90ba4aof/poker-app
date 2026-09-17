@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.649',
+  CURRENT_VERSION:'2.9.650',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.649';
+var APP_VERSION = '2.9.650';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -9824,6 +9824,7 @@ function actionToColor(a){
 // V2.9.71: 对手类型偏移——直接修改action(从oppColorShift迁移)
 function applyOppActionShift(action,eq,oppType,tiltInfo,ceResult,pulse){
   var a=action;
+  var _origA=a; // V2.9.650 FIX(P0): 保存原始action,防止跨条件块双重升级(call→raise→raise_big)
   // check不变
   if(a==='check')return a;
   
@@ -9850,7 +9851,7 @@ function applyOppActionShift(action,eq,oppType,tiltInfo,ceResult,pulse){
   // V2.9.623 FIX(P0): 加!G._facing3bet防止3bet场景中fish偏移把call又升回raise(螺旋升级)
   if(oppType==='fish'||oppType==='calling_station'){
     if(a==='call'&&eq>=55&&!G._facing3bet)a='raise';
-    if(a==='raise'&&eq>=65&&!G._facing3bet)a='raise_big';
+    if(a==='raise'&&eq>=65&&!G._facing3bet&&_origA==='raise')a='raise_big'; // V2.9.650 FIX: 仅原始raise可升,防止call→raise→raise_big双重升级
     if(a==='weak_call')a='fold';
   }
   // vs紧: bluff效率高,但弱牌不加码
@@ -9866,7 +9867,7 @@ function applyOppActionShift(action,eq,oppType,tiltInfo,ceResult,pulse){
   // Tilt对手: 偏价值加注(但弱牌不加码)
   // V2.9.623 FIX(P0): 同上,加!G._facing3bet
   if(tiltInfo&&tiltInfo.tilt){
-    if(a==='raise'&&eq>=60)a='raise_big';
+    if(a==='raise'&&eq>=60&&_origA==='raise')a='raise_big'; // V2.9.650 FIX: 仅原始raise可升,防止call→raise→raise_big跨块双重升级
     if(a==='call'&&eq>=58&&!G._facing3bet)a='raise';
   }
   // 反剥削: 收紧
@@ -12085,6 +12086,25 @@ function onVisionResult(data){
       G.bet=0; // BB面对SB完成=无需额外跟注,可免费看牌
       G._raiserRole='sb_complete';
     }
+  }
+
+  // V2.9.650 FIX(P0): _facing3bet兜底——opp_seats bet检测常失败(头像牌面遮挡/识别不准)
+  //   实证: QsJs翻前limp-raise(400chips)后面对3-bet(pot=1400,betToCall=500=2.5BB→G.bet=3BB),
+  //         opp_seats为空→_facing3bet=false→对手偏移把call升为raise_big(4-bet!)→再被全压→23BB全损
+  //   兜底1: G.bet≥2BB(跟注额≥2BB=有人加注≥3BB)→facing3bet=true
+  //   兜底2: FrameDiff检测到对手raise→facing3bet=true
+  if(!G._facing3bet&&G.phase==='pre'&&G.bet>=2){
+    G._facing3bet=true;
+    console.log('[V2.9.650 _facing3bet兜底] G.bet='+G.bet+'BB≥2BB → facing3bet=true (opp_seats检测失败兜底)');
+  }
+  if(!G._facing3bet&&G.phase==='pre'){
+    try{
+      var _fdS3=FrameDiffEngine.getOppActionSummary();
+      if(_fdS3&&_fdS3.raises>0){
+        G._facing3bet=true;
+        console.log('[V2.9.650 _facing3bet兜底] FrameDiff raises='+_fdS3.raises+' → facing3bet=true');
+      }
+    }catch(_fdErr3){}
   }
 
   // V2.9.143: ★ 摊牌检测闭环 ★
