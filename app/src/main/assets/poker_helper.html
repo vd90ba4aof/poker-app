@@ -3503,7 +3503,7 @@ function decidePreflop(k){
     try{
       var _nCallers=(typeof G._numCallersBefore==='number')?G._numCallersBefore:0;
       if(_nCallers>=1 && ['btn','sb','bb'].indexOf(p)>=0){
-        var _sqOpenP5=_pos5(G._raiserRole||'unknown');
+        var _sqOpenP5=_pos5(getOppPos());
         var _sqTable=typeof _SQUEEZE!=='undefined'?_SQUEEZE['vs_'+_sqOpenP5+'_vs_caller']:null;
         var _sqPosKey=(p==='btn')?'BTN':'SB';
         if(_sqTable&&(_sqTable[_sqPosKey]||_sqTable['BTN'])){
@@ -3523,7 +3523,7 @@ function decidePreflop(k){
         }
       }
     }catch(eSq){console.log('[Squeeze]异常回落3B表: '+eSq.message);}
-    var raiserRole=G._raiserRole||'unknown',rP5=_pos5(raiserRole),vsKey='vs_'+rP5,fromKey='from_'+p5;
+    var raiserRole=getOppPos(),rP5=_pos5(raiserRole),vsKey='vs_'+rP5,fromKey='from_'+p5;
     var tb=_3B[vsKey],posTable=tb?tb[fromKey]:null;
     var entry=posTable?posTable[k]:null;
     // V2.9.640 FIX(P0): posTable为undefined时(如raiserRole='unknown'→rP5='MP'→vs_MP.from_MP不存在)
@@ -3754,7 +3754,7 @@ function decidePreflop(k){
       var _aiN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
       var _aiOpp=Math.max(1,_aiN-1);
       if(_aiHole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'){
-      var _aiRange=gO((G._raiserRole&&G._raiserRole!=='unknown')?G._raiserRole:(G.pos||'btn'));  // V2.9.658 FIX(P1): 全押硬闸用对手位置open范围,而非我方位置(同getOppRange根因)
+      var _aiRange=gO(getOppPos());  // V2.9.658: 统一用getOppPos()获取对手位置(单一真相源)
       var _aiMs=mcVsRange(_aiHole,[],_aiRange,1500,_aiOpp);
       if(_aiMs&&typeof _aiMs.eq==='number'&&_aiMs.eq>0){
       console.log('[V2.9.625全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
@@ -7429,6 +7429,16 @@ function gO(p){p=_fp(p);var o=G.tt===2?O2:G.tt===3?O3:G.tt===4?O4:G.tt<=5?O5:G.t
 function gT(p){p=_fp(p);var t=G.tt===2?TB2:G.tt===3?TB3:G.tt===4?TB4:G.tt<=5?TB5:G.tt===6?TB6:G.tt===7?TB7:G.tt===8?TB8:TB9;return t[p]||t.btn||t.co||[];}
 function gC(p){p=_fp(p);var c=G.tt===2?CB2:G.tt===3?CB3:G.tt===4?CB4:G.tt<=5?CB5:G.tt===6?CB6:G.tt===7?CB7:G.tt===8?CB8:CB9;return c[p]||c.btn||c.co||[];}
 function pA(p){var m={utg:0,utg1:0.5,mp:1,mp1:1.5,hj:2,co:3,btn:4,sb:5,bb:5.5};return m[p]!==undefined?m[p]:3;}
+// V2.9.658: 统一对手位置获取(单一真相源,防反复出现位置错位bug)
+// 历史教训: getOppRange/全押硬闸/3bet防守/squeeze/SE位置优势 等多处独立写G._raiserRole判断,
+//   容易漏改→P1类bug反复出现。统一入口后,修改逻辑只需改一处。
+// 回退策略: 对手位置未知时回退G.pos(保持兼容,偏保守),不抛错。
+function getOppPos(){
+  try{
+    if(G._raiserRole&&G._raiserRole!=='unknown')return G._raiserRole;
+  }catch(e){}
+  try{return G.pos||'btn';}catch(e2){return 'btn';}
+}
 function postflopIP(pos){var _pfOrdPF={sb:1,bb:2,utg:3,utg1:4,mp:5,mp1:6,hj:7,co:8,btn:9};return(_pfOrdPF[pos]||5)>=7;}
 function calcSPR(){var h=G.hole.filter(function(c){return c;}).length;if(h<2)return 20;var effStk=G.stk;var p=G.pot>0?G.pot:1;return effStk/p;}
 function getSPRAdvice(spr){if(spr<1.5)return{label:'极短码',color:'us',zone:'ultra_short'};if(spr<3)return{label:'短码',color:'lo',zone:'short'};if(spr<6)return{label:'中短码',color:'ms',zone:'med_short'};if(spr<13)return{label:'标准码',color:'sd',zone:'standard'};return{label:'深码',color:'dp',zone:'deep'};}
@@ -8016,17 +8026,11 @@ function _narrowRangeByLine(baseArr, line, wetness){
 }
 function getOppRange(phase,action,bTexture){
   if(phase==='preflop'){
-    // V2.9.657 FIX(P1): 翻前用对手(raiser)位置的open范围,而非我方位置
-    var _pfOpp=(G._raiserRole&&G._raiserRole!=='unknown')?G._raiserRole:G.pos;
-    return gO(_pfOpp);
+    return gO(getOppPos());
   }
   var wetness=bTexture?bTexture.wetness:0;
   // action 即行动线key: 'cbet'(flop防守宽) / 'barrel_turn' / 'barrel_river' / 'raise'(极化)
-  // V2.9.657 FIX(P1): 翻后用对手位置的防守范围作基线,而非我方位置G.pos
-  //   我方是PFR时→对手是防守方→对手防守范围就是他会call的牌→用对手位置的gC正确
-  //   对手是PFR时→对手CBet范围用其防守范围近似(保守假设,偏紧安全)→也应该用对手位置
-  var _oppPos=(G._raiserRole&&G._raiserRole!=='unknown')?G._raiserRole:G.pos;
-  var base=gC(_oppPos);
+  var base=gC(getOppPos());
   return _narrowRangeByLine(base, action, wetness);
 }
 function planStreets(hClass,eq,scene,opp,spr){
@@ -8085,16 +8089,12 @@ function applyExploit(eq,action,oppType,ctx){ctx=ctx||{};var mod=1,exploit='',si
 //   诈唬/撤退/慢打逻辑由策略引擎preF/flopM/turnM/riverM内联处理,这些模块只是定义了但从未接入决策流
 
 // ===== P2: 多人池equity衰减 =====
-function multiPlayerEquity(eq,opponents){
-  if(opponents<=2)return eq;
-  // V2.9.30: 非线性衰减(基于PokerStove实际数据拟合)
-  // AA: hu=85%, 3way=73%, 4way=64%, 5way=56%
-  // AKs: hu=67%, 3way=52%, 4way=42%, 5way=35%
-  var decayFactors={3:0.70, 4:0.55, 5:0.45, 6:0.38};
-  var factor=decayFactors[opponents];
-  if(!factor) factor=Math.max(0.25, 0.38-(opponents-6)*0.06);
-  return Math.round(eq*factor*10)/10;
-}
+// V2.9.658 REMOVED: multiPlayerEquity() 已删除(死代码,防误用)
+//   历史背景: rev10时代MC是单挑的,用此函数做"单挑→多人池"equity衰减;
+//   rev14 MC升级为多对手互斥抽样后,此函数变为冗余→二次折扣bug来源;
+//   V2.9.636只修了NUTS牌类,弱牌(MEDIUM/DRAW/AIR)的双重折扣持续到V2.9.657才彻底修复;
+//   删除原因: 死代码留着容易被未来修改者重新接入→重现双重折扣bug。
+//   多人池equity的正确做法: mcVsRange/riverExactEquity 传入 nOpp 参数,由MC多对手模拟直接产出。
 // V2.9.105: 多人池策略模块——多人池范围收紧/c-bet降低/bluff减少/draw收窄
 var Multiway={
   // V2.9.626 FIX(口径统一): 多人池程度必须按"真实在池人数"_inPotPlayers(V2.9.144底池反推,翻后沿用),
@@ -9307,7 +9307,7 @@ function _decideInner(){
     result._colorInfo={colorKey:_colorKey,color:ColorStrategy.COLORS[_colorKey],signalType:_signalType,signalClass:_signalType==='TILT'?'signal-tilt':_signalType==='COUNTER'?'signal-counter':_signalType==='UNCERTAIN'?'signal-uncertain':''};
     result._reliability=_reliability;
     // 计算EV(仅展示用,不影响决策)
-    try{var _pfOrdDI={sb:1,bb:2,utg:3,utg1:4,mp:5,mp1:6,hj:7,co:8,btn:9};var _diH=_pfOrdDI[G.pos]||5;var _diO=_pfOrdDI[G._raiserRole||G._raiserPos||""]||5;var _diIP=_diH>_diO;
+    try{var _pfOrdDI={sb:1,bb:2,utg:3,utg1:4,mp:5,mp1:6,hj:7,co:8,btn:9};var _diH=_pfOrdDI[G.pos]||5;var _diO=_pfOrdDI[getOppPos()]||5;var _diIP=_diH>_diO;
       var _raiseSz=result.v||Math.round(_pot*0.66);
       var _evs=EVCalc.calc(_eq,_pot,_bet,_raiseSz,_oppType,cc===5?'river':cc===4?'turn':cc===3?'flop':'preflop',_diIP,_spr);
       result._evs=_evs;
