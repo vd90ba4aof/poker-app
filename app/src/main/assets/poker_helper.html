@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.659',
+  CURRENT_VERSION:'2.9.660',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.659';
+var APP_VERSION = '2.9.660';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3593,6 +3593,14 @@ function decidePreflop(k){
         //   旧: pot=2.5 bet=1 → 1/(2.5+2)=22.2%; 正确: 1/(2.5+1)=28.6%
         var _limpPo=bet/Math.max(pot+bet,1)*100;  // V2.9.655: 修正底池赔率公式
         var _limpTh=45+Multiway.callThresholdAdj(); // V2.9.652: 40→45,收紧
+        // V2.9.660: 筹码深度调整——深码隐含赔率高,投机牌应放宽;短码隐含赔率低,应收紧
+        //   理论依据: 小对/同花/顺子等投机牌的价值主要来自翻后中nuts时赢大池(隐含赔率)
+        //   深码(SPR>25): 中了可以赢对手全部筹码,放宽-7%
+        //   中码(SPR 10-25): 基准
+        //   短码(SPR<10): 中了也赢不多,收紧+7%
+        if(spr>25)_limpTh-=7;
+        else if(spr<10)_limpTh+=7;
+        _limpTh=Math.max(20,Math.min(70,_limpTh)); // 安全闸: 不低于20%(底池赔率兜底),不高于70%
         if(_limpQualityOK&&eq>=_limpTh&&eq>=_limpPo){
           var _exLimp=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
           return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_limpPo)+'%('+rP5+'无表)',eq:_exLimp.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLimp.exploit,_se:true,_seFreq:1,_limpFallback:true};
@@ -3607,6 +3615,10 @@ function decidePreflop(k){
         var _limpPo2=bet/Math.max(pot+bet,1)*100;
         var _limpTh2=45+Multiway.callThresholdAdj(); // V2.9.652: 40→45,收紧
         if(G.act>=4)_limpTh2-=3;  // 4人以上底池放宽
+        // V2.9.660: 筹码深度调整(同第一路径)——深码放宽投机牌阈值,短码收紧
+        if(spr>25)_limpTh2-=7;
+        else if(spr<10)_limpTh2+=7;
+        _limpTh2=Math.max(20,Math.min(70,_limpTh2));
         // V2.9.652 FIX: 复用手牌质量过滤逻辑(var hoisted但值undefined,需重新计算)
         // V2.9.655: 同第一路径,增加suited最小质量检查
         var _lq2s=(k.length>=2&&k.charAt(k.length-1)==='s');
