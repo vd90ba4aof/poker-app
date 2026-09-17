@@ -3754,7 +3754,7 @@ function decidePreflop(k){
       var _aiN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
       var _aiOpp=Math.max(1,_aiN-1);
       if(_aiHole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'){
-      var _aiRange=gO(G.pos||'btn');
+      var _aiRange=gO((G._raiserRole&&G._raiserRole!=='unknown')?G._raiserRole:(G.pos||'btn'));  // V2.9.658 FIX(P1): 全押硬闸用对手位置open范围,而非我方位置(同getOppRange根因)
       var _aiMs=mcVsRange(_aiHole,[],_aiRange,1500,_aiOpp);
       if(_aiMs&&typeof _aiMs.eq==='number'&&_aiMs.eq>0){
       console.log('[V2.9.625全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
