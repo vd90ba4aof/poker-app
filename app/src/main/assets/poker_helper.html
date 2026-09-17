@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.648',
+  CURRENT_VERSION:'2.9.649',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.648';
+var APP_VERSION = '2.9.649';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -9679,9 +9679,10 @@ function _decideInner(){
           var _stHC=(result.hClass&&result.hClass.name)?result.hClass.name:'';
           var _stBlock=false,_stWhy='';
           if(G.phase==='pre'&&(_stA==='call'||_stA==='weak_call')){
-            var _stThreshold=(bet<=1.5)?33:48;  // limped池33%, 面对加注48%
+            var _stBet=G.bet||0; // V2.9.649 FIX: bet→G.bet (旧bet未定义导致回撤刹车完全不工作)
+            var _stThreshold=(_stBet<=1.5)?33:48;  // limped池33%, 面对加注48%
             if(_stEq<_stThreshold){
-              _stBlock=true;_stWhy='翻前弱牌跟注(eq'+Math.round(_stEq)+'<'+_stThreshold+(bet<=1.5?' limp池':'')+')';
+              _stBlock=true;_stWhy='翻前弱牌跟注(eq'+Math.round(_stEq)+'<'+_stThreshold+(_stBet<=1.5?' limp池':'')+')';
             }
           }else if(G.phase!=='pre'&&(_stA==='call'||_stA==='weak_call')&&_stHC==='AIR'&&_stEq<40){
             _stBlock=true;_stWhy='空气牌跟注(eq'+Math.round(_stEq)+'<40)';
