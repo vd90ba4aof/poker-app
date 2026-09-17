@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.663',
+  CURRENT_VERSION:'2.9.664',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.663';
+var APP_VERSION = '2.9.664';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -7559,12 +7559,15 @@ function pA(p){var m={utg:0,utg1:0.5,mp:1,mp1:1.5,hj:2,co:3,btn:4,sb:5,bb:5.5};r
 // V2.9.658: 统一对手位置获取(单一真相源,防反复出现位置错位bug)
 // 历史教训: getOppRange/全押硬闸/3bet防守/squeeze/SE位置优势 等多处独立写G._raiserRole判断,
 //   容易漏改→P1类bug反复出现。统一入口后,修改逻辑只需改一处。
-// 回退策略: 对手位置未知时回退G.pos(保持兼容,偏保守),不抛错。
+// V2.9.664 FIX(P1): 回退策略从G.pos改为'utg'(最保守早期位置)
+//   旧BUG: G._raiserRole='unknown'时回退G.pos→BB vs BB/BTN vs BTN等自引用→vs_XX.from_XX表不存在→
+//          UTG1 fallback永远不触发(raiserRole!='unknown')→直接走无表fold→错失+EV跟注
+//   修复: 回退'utg'(最紧raiser=最强范围=最保守),所有表都有UTG条目,且UTG1兜底逻辑仍可用作安全网
 function getOppPos(){
   try{
     if(G._raiserRole&&G._raiserRole!=='unknown')return G._raiserRole;
   }catch(e){}
-  try{return G.pos||'btn';}catch(e2){return 'btn';}
+  return 'utg'; // V2.9.664: 最保守默认——假设early position raiser(范围最紧)
 }
 function postflopIP(pos){var _pfOrdPF={sb:1,bb:2,utg:3,utg1:4,mp:5,mp1:6,hj:7,co:8,btn:9};return(_pfOrdPF[pos]||5)>=7;}
 function calcSPR(){var h=G.hole.filter(function(c){return c;}).length;if(h<2)return 20;var effStk=G.stk;var p=G.pot>0?G.pot:1;return effStk/p;}
