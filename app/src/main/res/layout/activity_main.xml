@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.661 · Flat Call防御(vs-raise中等牌力跟注)+V2.9.660筹码深度调整+V2.9.659全套修复"
+        android:text="V2.9.662 · FlatCall防升级BUG修复+门槛优化(47%/3%/K9o+)+V2.9.661全套"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
