@@ -40,6 +40,19 @@ class HttpServerService : Service() {
         // SECURITY-FIX: 热更新默认关闭——用户需手动在设置中开启
         // 避免首次启动即自动拉取远程代码
         private const val PREF_HOTLOAD_ENABLED = "hotload_enabled"
+
+        // V2.9.667 FIX(P1): 语义化版本比较（旧: 字符串字典序比较，"10" < "9" 导致误判）
+        private fun compareSemVer(a: String, b: String): Int {
+            val pa = a.split(".").mapNotNull { it.toIntOrNull() }
+            val pb = b.split(".").mapNotNull { it.toIntOrNull() }
+            val len = maxOf(pa.size, pb.size)
+            for (i in 0 until len) {
+                val va = pa.getOrElse(i) { 0 }
+                val vb = pb.getOrElse(i) { 0 }
+                if (va != vb) return va.compareTo(vb)
+            }
+            return 0
+        }
     }
 
     // R6-fix: 热更新并发信号量（最多1个并发下载）
