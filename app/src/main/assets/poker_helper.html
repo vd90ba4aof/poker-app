@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.671',
+  CURRENT_VERSION:'2.9.672',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -1766,7 +1766,7 @@ var OppProfiler={
           // V2.9.105: 行动线追踪——fold-to-3bet/fold-to-cbet/CR/donk频率
           _faced3bet:0,_foldTo3bet:0, // 面对3bet次数/弃牌次数
           _facedCBet:0,_foldToCBet:0, // 面对cbet次数/弃牌次数
-          _checkRaise:0,_sawFlopAsOOP:0, // check-raise次数/OOP看到flop次数
+          _checkRaise:0,_sawFlopAsOOP:0,_sawFlopAsPFR:0, // check-raise次数/OOP看到flop次数/PFR看到flop次数
           _donkBets:0,_sawFlopAsNonPFR:0, // donk bet次数/非PFR看到flop次数
           _heroDid3bet:false, _heroDidCBet:false, // 英雄是否执3bet/cbet(用于检测对手响应)
           // V2.9.164: 翻后对手统计追踪
@@ -1813,6 +1813,8 @@ var OppProfiler={
             p._pfOpenOpp++;
             if(!p._posPFR[s.pos])p._posPFR[s.pos]=0;
             p._posPFR[s.pos]++;
+            // V2.9.672 FIX(P0) BUG6: 标记此手牌对手是PFR→翻牌圈用于递增_sawFlopAsPFR
+            p._wasPFRThisHand=true;
           }
           if(s.bet>_blindBB*4&&p._lastPfBet>_blindBB*2){
             p._pf3bet++;
@@ -1821,6 +1823,17 @@ var OppProfiler={
           }
         }
         p._lastPfBet=Math.max(p._lastPfBet||0,s.bet);
+      }
+      // V2.9.672 FIX(P0) BUG6: 翻牌圈递增_sawFlopAsPFR(作为PFR看到flop的次数)
+      //   根因: getStat('cbetFlop')读取此字段但从未递增→cbetOpp始终为0→cbet剥削完全失效
+      if((street==='flop')&&p._wasPFRThisHand&&!p._sawFlopAsPFRCounted){
+        p._sawFlopAsPFR++;
+        p._sawFlopAsPFRCounted=true;  // 每手只计一次
+      }
+      // V2.9.672: 同步递增_sawFlopAsOOP(对手作为非PFR看到flop)
+      if((street==='flop')&&!p._wasPFRThisHand&&p._enteredThisHand&&!p._sawFlopAsOOPCounted){
+        p._sawFlopAsOOP++;
+        p._sawFlopAsOOPCounted=true;
       }
       p._lastBet=s.bet;
       // 筹码变化检测（兜底）
@@ -1884,6 +1897,10 @@ var OppProfiler={
       p._lastBet=0;
       p._raiseCount=0;
       p._raiseMarkedThisHand=false; // V2.9.669: action=raise二值加注标记每手重置
+      // V2.9.672: 重置翻牌圈PFR/OOP追踪标记(每手重置,确保_sawFlopAsPFRCounted不跨手残留)
+      p._wasPFRThisHand=false;
+      p._sawFlopAsPFRCounted=false;
+      p._sawFlopAsOOPCounted=false;
       // V2.9.106: 用保存的_wastFolded检测对手对英雄 3bet/cbet 的响应
       if(p._heroDid3bet){
         if(_wasFolded)p._foldTo3bet++;
@@ -2915,7 +2932,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.671';
+var APP_VERSION = '2.9.672';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3659,6 +3676,21 @@ function decidePreflop(k){
           _limpSuitedOK=_hasA||(_minRank>=5)||(_gap<=1);  // rank index 5='7'
         }
         var _limpQualityOK=(_limpPair||_limpOffBroadway||(_limpSuited&&_limpSuitedOK));
+        // V2.9.672 FIX(P1): 小对子(22-66)limp隐含赔率检查——翻牌仅~12%中set
+        //   日志实证: 44s limp call→check flop→fold river -1BB(翻牌未中set,无后续价值)
+        //   修复: 小对子limp需满足: ①深码(SPR>15)确保隐含赔率 ②或eq门槛提高5%补偿miss率
+        var _limpSmallPair=false;
+        if(_limpPair&&k.length===2){
+          var _spRank='23456789TJQKA';
+          var _spIdx=_spRank.indexOf(k.charAt(0));
+          if(_spIdx<=4)_limpSmallPair=true;  // 22-66
+        }
+        if(_limpSmallPair){
+          // 小对子: 短码(SPR<15)直接收紧——中了set也赢不够
+          if(spr<15)_limpTh+=8;
+          // 深码时隐含赔率足够,但eq门槛仍需+3%补偿88%miss率
+          else _limpTh+=3;
+        }
         // limp场景: 用eq+赔率+手牌质量三重门槛判断是否跟注
         // V2.9.655 FIX: 底池赔率公式修正 bet/(pot+bet*2)→bet/(pot+bet),旧公式双重计算bet
         //   旧: pot=2.5 bet=1 → 1/(2.5+2)=22.2%; 正确: 1/(2.5+1)=28.6%
@@ -3801,6 +3833,10 @@ function decidePreflop(k){
         if(_fc2QualOK){
           var _fc2Po=bet/Math.max(pot+bet,1)*100;
           var _fc2Th=47+Multiway.callThresholdAdj(); // V2.9.662: 50→47
+          // V2.9.672: 放宽GTO表——vs fish/calling_station降低FlatCall门槛5%
+          //   日志实证: 17手fold因"不在3B范围",其中多数是中等强度手牌(Axs/Kxs/小对)
+          //   fish对手特征: call多bluff少→中等牌showdown价值高→应放宽防守范围
+          if(oppType==='fish'||oppType==='calling_station')_fc2Th-=5;
           if(G.act>=4)_fc2Th-=3; // 4人以上底池放宽(同limp)
           if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fc2Th+=3; // V2.9.662: 5→3
           if(spr>25)_fc2Th-=7;
@@ -3816,6 +3852,12 @@ function decidePreflop(k){
     }
     if(entry!==null){
       var act=entry.a,f=entry.f;f=_adjFreq3bet(act,f,oppType,raiserRole,p,k);
+      // V2.9.672 FIX(P0) BUG8: 翻前路径从未调用ExploitAdjuster→剥削调整全部失效
+      //   修复: 在_adjFreq3bet之后调用ExploitAdjuster,对翻前3bet/call频率做剥削微调
+      if(typeof f==='number'&&f>0){
+        var _pfExploit=ExploitAdjuster(f,act==='3b'?'raise':'call',k,oppType,'preflop','vs_3bet');
+        if(_pfExploit.label){f=_pfExploit.freq;console.log('[SE] 翻前剥削 '+_pfExploit.label+' '+k+' f→'+f.toFixed(2));}
+      }
       if(act==='3b'){var adj3=_quantExploitAdjust(f,'raise',profile);f=adj3.freq>f?Math.min(1,adj3.freq):f;}
       // V2.9.615 P3闭环: vs open的3b/c频率leak收紧(掷骰前最后一道,只收紧;fold动作不受影响)
       if(typeof f==='number'&&f>0){
@@ -5220,8 +5262,26 @@ function ExploitAdjuster(freq,action,hcKey,oppType,street,scene){
 function _fold(eq,reason,spr){return{a:'fold',r:'[SE]'+reason,eq:eq,c:'l',scene:'',spr:spr||0,sprAdvice:spr?getSPRAdvice(spr):'',_se:true};}
 function _preflopSizing(pos,pot,scene,spr){var base=Math.round(pot*2.5);if(pos==='btn'||pos==='sb')base=Math.round(pot*3);if(spr<4)base=Math.round(pot*2.2);return Math.min(base,G.stk||100000);}
 function _adjFreq3bet(act,freq,oppType,raiserRole,heroPos,k){
-  // rev11修复PRE-4: PREFLOP_OPP_ADJ对手类型调整表接线(旧表只服务旧引擎,新引擎3b段完全不区分对手)
-  if(act==='3b'&&(oppType==='calling_station'||oppType==='fish'))return freq*0.3;  // 跟注站:诈唬3bet无效,大幅减少
+  // V2.9.672 FIX(P1) BUG9: 原代码对fish/calling_station一律×0.3→价值3bet(AA/KK/QQ/AK)也被砍70%
+  //   修复: 按手牌强度分流——价值牌(hcKey≤4)加码(fish call多),诈唬牌(hcKey≥9)减频
+  if(act==='3b'&&(oppType==='calling_station'||oppType==='fish')){
+    if(k){
+      var _isPair3b=(k.length===2&&k[0]===k[1]&&'23456789TJQKA'.indexOf(k[0])>=0);
+      var _r1b=k.charAt(0),_r2b=k.charAt(1);
+      var _rankVal3b='23456789TJQKA';
+      var _rv1=_rankVal3b.indexOf(_r1b),_rv2=_rankVal3b.indexOf(_r2b);
+      var _isBroadway3b=('TJQKA'.indexOf(_r1b)>=0&&'TJQKA'.indexOf(_r2b)>=0);
+      var _hasA3b=(_r1b==='A'||_r2b==='A');
+      // 价值牌: 高对(TT+)或两张broadway或AK/AQ → 加码(fish call多,价值回报高)
+      if(_isPair3b&&_rv1>=_rankVal3b.indexOf('T'))return Math.min(1,freq*1.3);
+      if(_isBroadway3b||(_hasA3b&&'TJQKA'.indexOf(_r2b)>=0)||(_hasA3b&&'TJQKA'.indexOf(_r1b)>=0))return Math.min(1,freq*1.2);
+      // 中等牌(Axs小A suited): 保持原频率(有blocker+可玩性)
+      if(_hasA3b&&k.indexOf('s')>=0)return freq;
+      // 诈唬牌: 其余垃圾牌 → 大幅减少(fish不fold)
+      return freq*0.3;
+    }
+    return freq*0.5;
+  }
   if(act==='3b'&&(oppType==='nit'||oppType==='tight')){
     // 紧手:普通3bet×1.2(弃牌率高);blocker牌(A2s-A5s/Kxs)再×1.3/1.2=1.56——用阻断牌施压弃牌率最高
     var _mult=1.2;
@@ -5891,7 +5951,12 @@ var DRTA={
     }
     t.recent_agg.push(agg);
     if(t.recent_agg.length>5)t.recent_agg.shift();
-    if(street==='preflop'&&(action==='call'||action==='bet'||action==='raise'||action==='reraise'))t.vpip++;
+    if(street==='preflop'&&(action==='call'||action==='bet'||action==='raise'||action==='reraise')){
+      // V2.9.672 FIX(P1) BUG7: VPIP计数器无去重→每手牌多次record()导致VPIP=286.7%(86/30手)
+      //   修复: 用_vpipKey去重,每手preflop最多+1次(与_saw_flop去重逻辑一致)
+      var _vpipKey=(G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'';
+      if(t._vpipKey!==_vpipKey){t.vpip++;t._vpipKey=_vpipKey;}
+    }
     if(isFacingBet)t._bet_faced++;
     if(t.hands%3===0)this.save();
     this.updateUI();
