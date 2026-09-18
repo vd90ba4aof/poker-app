@@ -52,7 +52,7 @@ jobs:
       run: node tests/engine_lock_regression.test.js
       
     - name: Build with Gradle
-      run: ./gradlew assembleDebug
+      run: gradle assembleDebug --no-daemon
       
     - name: Rename APK with version
       run: |
