@@ -1030,6 +1030,8 @@ var HandHistory={
       reason:result.r,
       eq:result.eq,hClass:result.hClass?result.hClass.name:'?',
       opp:G.opp,
+      // V2.9.672 FIX: 捕获剥削标签用于日志诊断
+      exploit:result.exploit||'',
       rawPot:window._lastVisionPot||0,
       rawChips:window._lastVisionChips||0,
       rawBB:window._lastVisionBB||0,
@@ -1391,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.672',
+  CURRENT_VERSION:'2.9.673',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2932,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.672';
+var APP_VERSION = '2.9.673';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -5239,18 +5241,46 @@ freq=_applyPipeline(freq,'bet',hcKey,_oppType2||'unknown',_street2||'flop','donk
 // ====== V3.11: ExploitAdjuster (从v2.9.164合并) ======
 function ExploitAdjuster(freq,action,hcKey,oppType,street,scene){
     _resetExploitHistory();var adj=freq;var label='';
+    // V2.9.672 FIX(P0): OppProfiler样本不足时回退DRTA全局统计
+    //   根因: getStat()要求单个对手档案样本≥2,27手分散在多个对手→每个对手<2→全部返回null
+    //   修复: OppProfiler返回null时用DRTA全局统计(cbet率/fold率/AF)
+    var ftCB=0,oppCB=0,oppAF=1;
     if(OppProfiler&&OppProfiler.getStat){
-      var ftCB=OppProfiler.getStat('foldToCBetFlop')||0;
-      var oppCB=OppProfiler.getStat('cbetFlop')||0;
-      var oppAF=OppProfiler.getStat('af')||1;
-      if((action==='bet'||action==='raise')&&ftCB>.6){adj=Math.min(.95,adj*1.4);label='过度弃牌剥削';}
-      else if((action==='bet'||action==='raise')&&ftCB>.5){adj=Math.min(.95,adj*1.2);label='偏弃牌剥削';}
-      if(action==='raise'&&scene==='facing_cbet'&&oppCB>.7){adj=Math.min(.4,adj*1.8);label='过度CBet剥削';}
-      if(action==='fold'&&oppAF<1&&scene==='facing_raise'){adj=Math.min(.95,adj*1.3);label='被动对手剥削';}
-      if(oppType==='nit'&&(action==='bet'||action==='raise')&&hcKey>=13){adj=Math.min(.9,adj*1.5);label='nit诈唬剥削';}
-      if((oppType==='calling_station'||oppType==='fish')&&hcKey>=13){adj=adj*0.2;label='跟注站不诈唬';}
-      if((oppType==='calling_station'||oppType==='fish')&&hcKey<=4){adj=Math.min(.95,adj*1.3);label='跟注站价值加码';}
+      ftCB=OppProfiler.getStat('foldToCBetFlop');
+      oppCB=OppProfiler.getStat('cbetFlop');
+      oppAF=OppProfiler.getStat('af');
     }
+    // DRTA回退: 当OppProfiler样本不足时用全局统计
+    if((ftCB===null||ftCB===undefined)&&typeof DRTA!=='undefined'&&DRTA.tracker){
+      var t=DRTA.tracker;
+      // cbet率: 对手实际cbet次数 / cbet机会次数
+      if(t._cbet_opp>=2){
+        oppCB=t._cbet/t._cbet_opp;
+        console.log('[ExploitAdjuster] DRTA回退: cbet率='+oppCB.toFixed(2)+' ('+t._cbet+'/'+t._cbet_opp+')');
+      }
+      // fold-to-cbet率: 英雄fold cbet次数 / 面对cbet次数
+      if(t._face_cbet>=1){
+        ftCB=t._fold_cbet/t._face_cbet;
+        console.log('[ExploitAdjuster] DRTA回退: fold-to-cbet率='+ftCB.toFixed(2)+' ('+t._fold_cbet+'/'+t._face_cbet+')');
+      }
+      // AF: 全局攻击性因子(已在DRTA.tracker.af中)
+      if(t.af!==undefined&&t.af!==null){
+        oppAF=t.af;
+        console.log('[ExploitAdjuster] DRTA回退: AF='+oppAF.toFixed(2));
+      }
+    }
+    // 默认值
+    if(ftCB===null||ftCB===undefined)ftCB=0;
+    if(oppCB===null||oppCB===undefined)oppCB=0;
+    if(oppAF===null||oppAF===undefined)oppAF=1;
+    
+    if((action==='bet'||action==='raise')&&ftCB>.6){adj=Math.min(.95,adj*1.4);label='过度弃牌剥削';}
+    else if((action==='bet'||action==='raise')&&ftCB>.5){adj=Math.min(.95,adj*1.2);label='偏弃牌剥削';}
+    if(action==='raise'&&scene==='facing_cbet'&&oppCB>.7){adj=Math.min(.4,adj*1.8);label='过度CBet剥削';}
+    if(action==='fold'&&oppAF<1&&scene==='facing_raise'){adj=Math.min(.95,adj*1.3);label='被动对手剥削';}
+    if(oppType==='nit'&&(action==='bet'||action==='raise')&&hcKey>=13){adj=Math.min(.9,adj*1.5);label='nit诈唬剥削';}
+    if((oppType==='calling_station'||oppType==='fish')&&hcKey>=13){adj=adj*0.2;label='跟注站不诈唬';}
+    if((oppType==='calling_station'||oppType==='fish')&&hcKey<=4){adj=Math.min(.95,adj*1.3);label='跟注站价值加码';}
     if(_exploitHistory.bluffAttempts>=3){var br=_exploitHistory.bluffWins/_exploitHistory.bluffAttempts;if(br<.3&&(action==='bet'||action==='raise')&&hcKey>=13){adj=adj*0.3;label='bluff被catch减频';}}
     if(_exploitHistory.valueCalls>=5){var vr=_exploitHistory.valueWins/_exploitHistory.valueCalls;if(vr>.8&&hcKey<=4){adj=Math.min(.98,adj*1.15);label='价值尺度加码';}}
     if(_exploitHistory.foldToTotal>=5){var fr2=_exploitHistory.foldToFaced/_exploitHistory.foldToTotal;if(fr2>.6&&action==='fold'){adj=adj*0.7;label='过度fold修正';}}
