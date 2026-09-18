@@ -425,28 +425,35 @@ object HudLearner {
     private fun computeProfile(records: List<HandRecord>, totalHands: Int): OpponentProfile {
         if (records.isEmpty()) return getBaselineProfile(currentLevel)
         val n = records.size
-        var totalWeight = 0f
-        var wVpip = 0f; var wPfr = 0f; var w3b = 0f; var wAts = 0f; var wF3b = 0f
-        var wCb = 0f; var wCbt = 0f; var wFcb = 0f; var wFcbt = 0f
-        var wCrv = 0f; var wCrf = 0f
+        // V2.9.667 FIX(P1): 每维度独立权重归一化(旧: totalWeight仅在vpip>=0时累加,导致其他维度被错误缩放)
+        var wV = 0f; var tV = 0f
+        var wP = 0f; var tP = 0f
+        var w3 = 0f; var t3 = 0f
+        var wA = 0f; var tA = 0f
+        var wF3 = 0f; var tF3 = 0f
+        var wCb = 0f; var tCb = 0f
+        var wCbt = 0f; var tCbt = 0f
+        var wFcb = 0f; var tFcb = 0f
+        var wFcbt = 0f; var tFcbt = 0f
+        var wCrv = 0f; var tCrv = 0f
+        var wCrf = 0f; var tCrf = 0f
 
         for (i in records.indices) {
             val r = records[i]
             val weight = (i + 1).toFloat() / n
-            if (r.vpip >= 0) { wVpip += r.vpip * weight; totalWeight += weight }
-            if (r.pfr >= 0) wPfr += r.pfr * weight
-            if (r.threeBet >= 0) w3b += r.threeBet * weight
-            if (r.ats >= 0) wAts += r.ats * weight
-            if (r.foldTo3Bet >= 0) wF3b += r.foldTo3Bet * weight
-            if (r.cbetFlop >= 0) wCb += r.cbetFlop * weight
-            if (r.cbetTurn >= 0) wCbt += r.cbetTurn * weight
-            if (r.foldToCBetFlop >= 0) wFcb += r.foldToCBetFlop * weight
-            if (r.foldToCBetTurn >= 0) wFcbt += r.foldToCBetTurn * weight
-            if (r.callRiver >= 0) wCrv += r.callRiver * weight
-            if (r.checkRaiseFlop >= 0) wCrf += r.checkRaiseFlop * weight
+            if (r.vpip >= 0) { wV += r.vpip * weight; tV += weight }
+            if (r.pfr >= 0) { wP += r.pfr * weight; tP += weight }
+            if (r.threeBet >= 0) { w3 += r.threeBet * weight; t3 += weight }
+            if (r.ats >= 0) { wA += r.ats * weight; tA += weight }
+            if (r.foldTo3Bet >= 0) { wF3 += r.foldTo3Bet * weight; tF3 += weight }
+            if (r.cbetFlop >= 0) { wCb += r.cbetFlop * weight; tCb += weight }
+            if (r.cbetTurn >= 0) { wCbt += r.cbetTurn * weight; tCbt += weight }
+            if (r.foldToCBetFlop >= 0) { wFcb += r.foldToCBetFlop * weight; tFcb += weight }
+            if (r.foldToCBetTurn >= 0) { wFcbt += r.foldToCBetTurn * weight; tFcbt += weight }
+            if (r.callRiver >= 0) { wCrv += r.callRiver * weight; tCrv += weight }
+            if (r.checkRaiseFlop >= 0) { wCrf += r.checkRaiseFlop * weight; tCrf += weight }
         }
 
-        val norm = maxOf(totalWeight, 1f)
         val confidence = when {
             totalHands >= MIN_HANDS_FOR_OVERRIDE -> 0.90f
             totalHands >= MIN_HANDS_FOR_TRUST ->
@@ -456,11 +463,11 @@ object HudLearner {
         }
 
         return OpponentProfile(
-            vpip = wVpip / norm, pfr = wPfr / norm, threeBet = w3b / norm,
-            ats = wAts / norm,
-            foldTo3Bet = wF3b / norm, cbetFlop = wCb / norm, cbetTurn = wCbt / norm,
-            foldToCBetFlop = wFcb / norm, foldToCBetTurn = wFcbt / norm,
-            callRiver = wCrv / norm, checkRaiseFlop = wCrf / norm,
+            vpip = wV / maxOf(tV, 1f), pfr = wP / maxOf(tP, 1f), threeBet = w3 / maxOf(t3, 1f),
+            ats = wA / maxOf(tA, 1f),
+            foldTo3Bet = wF3 / maxOf(tF3, 1f), cbetFlop = wCb / maxOf(tCb, 1f), cbetTurn = wCbt / maxOf(tCbt, 1f),
+            foldToCBetFlop = wFcb / maxOf(tFcb, 1f), foldToCBetTurn = wFcbt / maxOf(tFcbt, 1f),
+            callRiver = wCrv / maxOf(tCrv, 1f), checkRaiseFlop = wCrf / maxOf(tCrf, 1f),
             confidence = confidence, totalHandsObserved = totalHands, type = "self"
         )
     }

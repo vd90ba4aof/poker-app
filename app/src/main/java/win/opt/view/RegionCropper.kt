@@ -204,7 +204,7 @@ object RegionCropper {
             val sb = StringBuilder()
             for (y in 0 until h step step) {
                 for (x in 0 until w step step) {
-                    sb.append(bitmap.getPixel(x, y))
+                    sb.append(bitmap.getPixel(x, y)).append(',')
                 }
             }
             val md = MessageDigest.getInstance("MD5")

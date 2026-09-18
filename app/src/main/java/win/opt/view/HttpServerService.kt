@@ -76,7 +76,7 @@ class HttpServerService : Service() {
                     val hotHtml = hotFile.readText(Charsets.UTF_8)
                     val hotVerMatch = Regex("""V(\d+\.\d+\.\d+)""").find(hotHtml)
                     val hotVer = hotVerMatch?.groupValues?.get(1) ?: "0"
-                    if (assetsVer.isNotEmpty() && hotVer < assetsVer) {
+                    if (assetsVer.isNotEmpty() && compareSemVer(hotVer, assetsVer) < 0) {
                         // 热更新版本比assets旧→删除，用assets的新版
                         hotFile.delete()
                         Log.w(TAG, "热更新版本$hotVer < assets版本$assetsVer，已删除旧热更新")

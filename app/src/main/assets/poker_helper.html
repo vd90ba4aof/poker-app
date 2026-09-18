@@ -4035,6 +4035,32 @@ function decidePostflop(k,_pfInj){
       }
       if(_aiEff>40){_aiThresh=Math.max(_aiThresh,40);}
     }catch(_aiE){}
+    // V2.9.667 FIX(P0): 小对子(22-99)在连牌面/同花面脆弱,提高门槛
+    try{
+      var _spH=hole||[];
+      var _spPair=_spH.length>=2&&_spH[0].rank===_spH[1].rank;
+      var _spRank=_spPair?_spH[0].rank:0;
+      if(_spPair&&'23456789'.indexOf(_spRank)!==-1){
+        var _spC=comm.filter(function(c){return c;});
+        var _spIdx=[];_spC.forEach(function(c){var i=R.indexOf(c.rank);if(i>=0)_spIdx.push(i);});
+        _spIdx.sort(function(a,b){return a-b;});
+        var _spConn=0;for(var _si=0;_si<_spIdx.length-1;_si++){if(_spIdx[_si+1]-_spIdx[_si]<=2)_spConn++;}
+        var _spGap=_spIdx.length>=3&&(_spIdx[_spIdx.length-1]-_spIdx[0])<=4;
+        var _spFSh={};_spC.forEach(function(c){if(c.suit)_spFSh[c.suit]=(_spFSh[c.suit]||0)+1;});
+        var _spMaxF=0;for(var _fk in _spFSh)_spMaxF=Math.max(_spMaxF,_spFSh[_fk]);
+        var _spHigh=(_spConn>=2)||(_spConn>=1&&_spGap);
+        var _spMed=_spConn>=1||_spMaxF>=3;
+        if(_spHigh){
+          _aiThresh=Math.max(_aiThresh,55);
+          if(hClass&&hClass.key!=='NUTS'){hClass={key:'MEDIUM',name:'中对',detail:'小对连牌面降级'};}
+          console.log('[SP-AI] 小对'+_spRank+_spRank+' 高协调 门槛>=55% eq='+Math.round(eq)+'%');
+        }else if(_spMed){
+          _aiThresh=Math.max(_aiThresh,_aiThresh+8);
+          if(hClass&&hClass.key==='STRONG'){hClass={key:'MEDIUM',name:'中对',detail:'小对协调面降级'};}
+          console.log('[SP-AI] 小对'+_spRank+_spRank+' 中协调 门槛='+_aiThresh+'% eq='+Math.round(eq)+'%');
+        }
+      }
+    }catch(_spE){console.error('[SP-AI]',_spE);}
     if(eq>=_aiThresh){
       var _aiExploit=applyExploit(eq,'call',oppType,{bet:_aiBet,pot:pot});
       return{a:'call',r:'GTO 翻后vs allin eq'+Math.round(eq)+'%>='+_aiThresh+'%',eq:_aiExploit.eq,c:eq>=65?'h':'m',scene:'面对allin',spr:spr,_se:true};
@@ -4571,9 +4597,14 @@ var _RIV={
   };
 
 function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,_is3bP3,_isMW3,eq){
-    // V3.36: _sprAdj默认值改为局部变量(避免隐式全局污染)
-    var _sprAdjLocal=(typeof _sprAdj!=='undefined'&&_sprAdj)?_sprAdj:{fcb:1,cbet:1,bluff:1};
-    if(!_sprAdj3)_sprAdj3=_sprAdjLocal;
+    // V2.9.667 FIX(P1): _sprAdj3默认值改为根据实际SPR分区计算，不再依赖未定义的全局_sprAdj
+    if(!_sprAdj3){
+      var _rivSpr=calcSPR();
+      if(_rivSpr<3){_sprAdj3={fcb:1.15,cbet:0.85,bluff:0.5};}
+      else if(_rivSpr<=8){_sprAdj3={fcb:1,cbet:1,bluff:1};}
+      else if(_rivSpr<=15){_sprAdj3={fcb:0.92,cbet:0.95,bluff:1.1};}
+      else{_sprAdj3={fcb:0.85,cbet:0.9,bluff:1.15};}
+    }
     // V2.9.161: River按面纹理+位置选择策略表
     var rivTbl=ip?_RIV.IP:_RIV.OOP;
     var rivKey=btKey+'_'+(scene==='check'?'bet':'face');
@@ -4976,16 +5007,21 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk,eq){
       var _cfBase=adjC+adjF;
       if(_cfBase>0.001){adjC+=_dR*(adjC/_cfBase);adjF+=_dR*(adjF/_cfBase);}
     }
-    // V2.9.161: SPR区面CBet调整
-    var _sprAdjSafe=(typeof _sprAdj!=='undefined'&&_sprAdj)?_sprAdj:{fcb:1,cbet:1,bluff:1};  // V3.35: 默认值防止ReferenceError
+    // V2.9.667 FIX(P1): SPR区面CBet调整——从calcSPR()本地计算
+    var _sprCur2=calcSPR();
+    var _sprAdjSafe={fcb:1,cbet:1,bluff:1};
+    if(_sprCur2<3){_sprAdjSafe={fcb:1.15,cbet:1.1,bluff:0.85};}
+    else if(_sprCur2<=8){_sprAdjSafe={fcb:1.0,cbet:1.0,bluff:1.0};}
+    else if(_sprCur2<=15){_sprAdjSafe={fcb:0.92,cbet:0.95,bluff:1.08};}
+    else{_sprAdjSafe={fcb:0.85,cbet:0.9,bluff:1.15};}
     adjF=adjF*_sprAdjSafe.fcb;
-    // rev12修复POST-14: 调整链末端统一归一化(旧式ExploitAdjuster后与SPR调整后不再归一,三概率和可≠1)
+    // rev12修复POST-14: 调整链末端统一归一化
     var _sumEA=adjC+adjR+adjF;
     if(_sumEA>0.01){adjC/=_sumEA;adjR/=_sumEA;adjF/=_sumEA;}
     adjC=Math.max(0,adjC);adjR=Math.max(0,adjR);adjF=Math.max(0,adjF);
     // 频率随机决策
     var r=Math.random();
-    var spr=calcSPR();
+    var spr=_sprCur2;
     if(r<adjR){
       var rSz=Math.round(Math.max(betSz*2.5,pot*.66));
       rSz=Math.min(rSz,G.stk||100000);
@@ -5029,8 +5065,22 @@ function _facingCR(k,hcKey,btKey,betSz,pot,eq){
     var table=_FCR[btKey];
     if(!table||!table[hcKey])return null;
     var e=table[hcKey];
+    // V2.9.667 FIX(P1): 补全 _facingCR 缺失的调整链(与 _facingCBet 对齐)
+    var adjC=e.c, adjR=e.rr, adjF=e.f;
+    var _street2=(typeof street!=='undefined')?street:(typeof G!=='undefined'&&G.street?G.street:'flop');
+    if(_street2==='turn'){adjC=Math.max(0,adjC-0.06);adjR=Math.max(0,adjR-0.02);adjF=Math.min(1,adjF+0.08);}
+    if(_street2==='river'){adjC=Math.max(0,adjC-0.10);adjR=Math.max(0,adjR-0.03);adjF=Math.min(1,adjF+0.13);}
+    if(typeof G!=='undefined'&&G._is3betPot){adjF=adjF*0.7;adjC=adjC+(1-adjC-adjR)*0.3;}
+    if(typeof G!=='undefined'&&G._isMultiway){adjF=Math.min(1,adjF*1.2);adjR=adjR*0.6;}
+    var _sprCur3=calcSPR();
+    if(_sprCur3<3){adjF=adjF*1.15;}
+    else if(_sprCur3<=8){}
+    else if(_sprCur3<=15){adjF=adjF*0.92;}
+    else{adjF=adjF*0.85;}
+    var sum=adjC+adjR+adjF;
+    if(sum>0.01){adjC/=sum;adjR/=sum;adjF/=sum;}else{adjC=e.c;adjR=e.rr;adjF=e.f;}
     var r=Math.random();
-    var spr=calcSPR();
+    var spr=_sprCur3;
     if(r<e.rr){
       var rrSz=Math.round(Math.max(betSz*2.5,pot*2));
       rrSz=Math.min(rrSz,G.stk||100000);
@@ -10948,6 +10998,12 @@ function riverExactEquity(hole,comm,oppRange,nOpponents){
     var w=0,t=0,total=0;
     for(var oi=0;oi<oppHands.length;oi++){
       for(var oj=oi+1;oj<oppHands.length;oj++){
+        // V2.9.667 FIX(P2): 排除共享牌
+        var _shared=false;
+        for(var _si=0;_si<2;_si++){for(var _sj=0;_sj<2;_sj++){
+          if(oppHands[oi][_si].rank===oppHands[oj][_sj].rank&&oppHands[oi][_si].suit===oppHands[oj][_sj].suit){_shared=true;break;}
+        }if(_shared)break;}
+        if(_shared)continue;
         var opp1Best=e5([].concat(oppHands[oi],comm));
         var opp2Best=e5([].concat(oppHands[oj],comm));
         var maxOppBest=Math.max(opp1Best,opp2Best);
