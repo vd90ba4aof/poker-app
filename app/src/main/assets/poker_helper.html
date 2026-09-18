@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.670',
+  CURRENT_VERSION:'2.9.671',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -1995,6 +1995,53 @@ var OppProfiler={
     var p=this._profiles[nickname];
     if(!p||p._sawFlopAsNonPFR<2)return null;
     return Math.round(p._donkBets/p._sawFlopAsNonPFR*100);
+  },
+  // V2.9.671 FIX(P1): 添加getStat()方法——策略引擎调用此方法获取对手统计数据
+  // 根因: 代码中多处调用OppProfiler.getStat('cbetFlop')等方法，但此方法从未定义→剥削调整全部失效
+  // 返回所有对手的加权平均统计(按样本数加权)，样本不足返回null
+  getStat:function(statName){
+    try{
+      var sum=0,weight=0;
+      for(var nk in this._profiles){
+        var p=this._profiles[nk];
+        if(!p)continue;
+        
+        if(statName==='cbetFlop'){
+          // cbet频率 = cbet次数 / 作为PFR看到flop的次数
+          var cbetOpp=p._sawFlopAsPFR||0;
+          if(cbetOpp>=2){
+            var cbetRate=(p._cbetFlop||0)/cbetOpp;
+            sum+=cbetRate*cbetOpp; // 加权
+            weight+=cbetOpp;
+          }
+        }
+        else if(statName==='foldToCBetFlop'){
+          // fold-to-cbet频率
+          var facedCBet=p._facedCBet||0;
+          if(facedCBet>=2){
+            var foldRate=(p._foldToCBet||0)/facedCBet;
+            sum+=foldRate*facedCBet;
+            weight+=facedCBet;
+          }
+        }
+        else if(statName==='af'){
+          // 攻击性因子 = (bet+raise) / call
+          var aggActions=(p._raiseFlop||0)+(p._raiseTurn||0)+(p._raiseRiver||0);
+          var passiveActions=(p._callFlop||0)+(p._callTurn||0)+(p._callRiver||0);
+          if(passiveActions>=2){
+            var af=aggActions/Math.max(passiveActions,1);
+            sum+=af*passiveActions;
+            weight+=passiveActions;
+          }
+        }
+      }
+      
+      if(weight<2)return null; // 样本不足
+      return sum/weight;
+    }catch(e){
+      console.log('[OppProfiler] getStat异常: '+e.message);
+      return null;
+    }
   },
   // V2.9.164: 翻后对手统计 getter
   getFoldToTurnCBetPct:function(nickname){
@@ -2868,7 +2915,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.670';
+var APP_VERSION = '2.9.671';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3569,9 +3616,14 @@ function decidePreflop(k){
     //   修复: 增加pot大小检查,真正limp场景pot应该≤4BB(1.5BB盲注+2-3个limper)
     var _betBB=(pot>0&&pot<=3)?bet/(pot/1.5):bet;
     var _isLimp=(_betBB>0&&_betBB<=2.5&&pot<=4);  // V2.9.652 FIX: +pot≤4BB门槛,防止大底池误判为limp
+    // V2.9.671 FIX(P1): limp兜底位置限制——UTG/MP位置禁止limp兜底
+    // 根因: 日志显示3次limp兜底全亏-5BB(A8s@co -2BB, K9s@mp -1BB, A6s@utg -2BB)
+    // UTG/MP位置limp入池后: ①没有位置优势 ②翻牌miss率>50% ③容易被3bet导致更大损失
+    // 对比: FlatCall防御(line 3714)有位置调整,limp兜底没有→净亏
+    var _limpPosOK=(p!=='utg'&&p!=='mp');  // 只允许CO/BTN/SB/BB位置limp兜底
     if(!posTable){
       console.log('[SE] vs_'+rP5+' from_'+p5+' 无3B表(raiser='+raiserRole+')→安全fold '+k);
-      if(_isLimp){
+      if(_isLimp&&_limpPosOK){
         // V2.9.652 FIX(P1): 增加手牌质量过滤——offsuit垃圾牌(98o/76o/A2o等)即使eq达标也不允许limp兜底
         //   实证: 7手limp兜底全部亏损(-13.8BB),offsuit占5/7手;offsuit垃圾牌翻后可玩性极差
         //   规则: offsuit需两张≥T(KQo/QJo等broadway);suited/对子不受限(有投机价值)
@@ -4199,7 +4251,7 @@ function decidePostflop(k,_pfInj){
   // ★ V3.12: 面对Check-Raise (我们CBet后被反加)
   if(didPFR && scene==='reraise' && typeof _facingCR==='function'){
     try{
-      var _fcrR=_facingCR(k,hcKey,btKey,bet,pot,eq);
+      var _fcrR=_facingCR(k,hcKey,btKey,bet,pot,eq,street);
       if(_fcrR&&_fcrR.a){return _fcrR;}
     }catch(e){}
   }
@@ -5078,7 +5130,7 @@ var _DONK={
     '3_oop':{0:[0.34,0.68],1:[0.28,0.59],2:[0.22,0.59],3:[0.2,0.45],4:[0.17,0.45],5:[0.11,0.36],6:[0.08,0.3],7:[0.03,0],8:[0.14,0.72],9:[0.11,0.72],10:[0.08,0.68],11:[0.17,0.68],12:[0.04,0.72],13:[0.02,0.72]}
   };
 
-function _facingCR(k,hcKey,btKey,betSz,pot,eq){
+function _facingCR(k,hcKey,btKey,betSz,pot,eq,street){
     var btFallback={6:'4',1:'0',3:'2'};
     if(!_FCR[btKey]){btKey=btFallback[btKey]||btKey;}
     var table=_FCR[btKey];
@@ -5086,7 +5138,8 @@ function _facingCR(k,hcKey,btKey,betSz,pot,eq){
     var e=table[hcKey];
     // V2.9.668 FIX(P1): 补全 _facingCR 缺失的调整链(与 _facingCBet 对齐)
     var adjC=e.c, adjR=e.rr, adjF=e.f;
-    var _street2=(typeof street!=='undefined')?street:(typeof G!=='undefined'&&G.street?G.street:'flop');
+    // V2.9.671 FIX(P1): street变量作用域修复——从调用方传入,不再依赖未定义的外部street或G.street
+    var _street2=street||'flop';
     if(_street2==='turn'){adjC=Math.max(0,adjC-0.06);adjR=Math.max(0,adjR-0.02);adjF=Math.min(1,adjF+0.08);}
     if(_street2==='river'){adjC=Math.max(0,adjC-0.10);adjR=Math.max(0,adjR-0.03);adjF=Math.min(1,adjF+0.13);}
     if(typeof G!=='undefined'&&G._is3betPot){adjF=adjF*0.7;adjC=adjC+(1-adjC-adjR)*0.3;}
@@ -5772,7 +5825,16 @@ var DRTA={
   
   record:function(action,street,isFacingBet){
     var t=this.tracker;
-    t.hands++;
+    // V2.9.671 FIX(P0): hands计数器去重——只在preflop街首次调用时递增
+    // 根因: record()在preflop/flop/turn/river每个街都被调用,旧代码每次t.hands++
+    // →一手牌打到河牌会+4→hands虚高→vpip%计算错误(日志显示145%)
+    if(street==='preflop'){
+      var _handKey=(G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'';
+      if(t._lastCountedHand!==_handKey){
+        t.hands++;
+        t._lastCountedHand=_handKey;
+      }
+    }
     t.lastActionTime=Date.now();
     var agg=0;
     // V2.9.58: 追踪行动序列
@@ -6710,16 +6772,16 @@ var TableQualityMeter={
     if(bb<0)this._q.negBBStreak++;
     else this._q.negBBStreak=0;
   },
-  // 计算整桌平均 VPIP（从 G.players / DRTA 拿）
+  // 计算整桌平均 VPIP（从 OppProfiler 拿）
   _avgVPIP:function(){
     try{
-      if(typeof DRTA==='undefined'||!DRTA.players)return null;
+      if(typeof OppProfiler==='undefined'||!OppProfiler._profiles)return null;
       var sum=0,n=0;
-      var keys=Object.keys(DRTA.players);
-      for(var i=0;i<keys.length;i++){
-        var p=DRTA.players[keys[i]];
+      for(var nk in OppProfiler._profiles){
+        var p=OppProfiler._profiles[nk];
         if(p&&typeof p.hands==='number'&&p.hands>=3){
-          sum+=p.vpip||0;
+          var vpip=p.hands>0?Math.round(p.entered/p.hands*100):0;
+          sum+=vpip;
           n++;
         }
       }
@@ -6729,14 +6791,14 @@ var TableQualityMeter={
   // 计算低 WTSD 对手数（< 25%）
   _lowWTSDCnt:function(){
     try{
-      if(typeof DRTA==='undefined'||!DRTA.players)return null;
+      if(typeof OppProfiler==='undefined'||!OppProfiler._profiles)return null;
       var cnt=0,total=0;
-      var keys=Object.keys(DRTA.players);
-      for(var i=0;i<keys.length;i++){
-        var p=DRTA.players[keys[i]];
+      for(var nk in OppProfiler._profiles){
+        var p=OppProfiler._profiles[nk];
         if(p&&typeof p.hands==='number'&&p.hands>=5){
           total++;
-          if((p.wtsd||0)<this.THRESHOLDS.WTSD_TIGHT)cnt++;
+          var wtsd=p._sawFlop>0?Math.round((p._sawShowdown||0)/p._sawFlop*100):100;
+          if(wtsd<this.THRESHOLDS.WTSD_TIGHT)cnt++;
         }
       }
       return total>=this.THRESHOLDS.WTSD_OPPS?{low:cnt,total:total}:null;
@@ -6745,14 +6807,13 @@ var TableQualityMeter={
   // 计算整桌 3bet 频率
   _threeBetRate:function(){
     try{
-      if(typeof DRTA==='undefined'||!DRTA.players)return null;
+      if(typeof OppProfiler==='undefined'||!OppProfiler._profiles)return null;
       var sum3=0,sumOpp=0;
-      var keys=Object.keys(DRTA.players);
-      for(var i=0;i<keys.length;i++){
-        var p=DRTA.players[keys[i]];
+      for(var nk in OppProfiler._profiles){
+        var p=OppProfiler._profiles[nk];
         if(p&&typeof p.hands==='number'&&p.hands>=5){
-          sum3+=p.threeBet||0;
-          sumOpp+=p.hands||0;
+          sum3+=p._pf3bet||0;
+          sumOpp+=p._pfOpenOpp||0;
         }
       }
       return sumOpp>0?(sum3/sumOpp*100):null;
