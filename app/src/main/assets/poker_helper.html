@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.664',
+  CURRENT_VERSION:'2.9.666',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.664';
+var APP_VERSION = '2.9.666';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3593,6 +3593,7 @@ function decidePreflop(k){
         //   旧: pot=2.5 bet=1 → 1/(2.5+2)=22.2%; 正确: 1/(2.5+1)=28.6%
         var _limpPo=bet/Math.max(pot+bet,1)*100;  // V2.9.655: 修正底池赔率公式
         var _limpTh=45+Multiway.callThresholdAdj(); // V2.9.652: 40→45,收紧
+        if(G.act>=4)_limpTh-=3;  // V2.9.666: 补齐第二路径的多人池放宽(原遗漏)
         // V2.9.660: 筹码深度调整——深码隐含赔率高,投机牌应放宽;短码隐含赔率低,应收紧
         //   理论依据: 小对/同花/顺子等投机牌的价值主要来自翻后中nuts时赢大池(隐含赔率)
         //   深码(SPR>25): 中了可以赢对手全部筹码,放宽-7%
@@ -3643,7 +3644,7 @@ function decidePreflop(k){
           var _fcPo=bet/Math.max(pot+bet,1)*100;
           // V2.9.662: 基准门槛从50%降到47%——面对2.5x open底池赔率~29%,47%=+18%缓冲合理
           var _fcTh=47+Multiway.callThresholdAdj();
-          // V2.9.662: 位置缓冲从5%降到3%——5%太严导致OOP几乎永远过不了
+          if(G.act>=4)_fcTh-=3;  // V2.9.666: 补齐第二路径的多人池放宽(原遗漏)
           if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fcTh+=3;
           // SPR筹码深度调整(同limp兜底V2.9.660逻辑)
           if(spr>25)_fcTh-=7;
@@ -4422,10 +4423,11 @@ function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW
       var _betList=[s33,s50,s75,s100,s133];
       for(var bi=0;bi<_betList.length;bi++){
         var bs=_betList[bi];
-        // rev10修复POST-3: value EV标准式 F*pot+(1-F)*[eq*pot-(1-eq)*b]
-        // (旧式漏算对手fold直接赢pot的分支,强牌EV高估~0.18pot致边缘牌越过15%闸门乱value)
-        // V2.9.656 FIX: eq*(pot+b)→eq*pot, pot已含对手bet, 旧公式高估eq*b
-        var ev=_statFold*pot+(1-_statFold)*(eq*pot-(1-eq)*bs);
+        // rev10修复POST-3: value EV标准式 F*pot+(1-F)*[eq*(pot+b)-(1-eq)*b]
+        // V2.9.666 FIX(P0): V2.9.656错误地将Call EV修正套用到Bet——Bet时对手跟注投入b,
+        //   hero赢时净收益=pot+b(非pot),旧修复eq*pot低估了eq*b。
+        //   正确: eq*(pot+bs)-(1-eq)*bs; 低估量=eq*bs(pot=10,bs=5,eq=60%→低估3BB)
+        var ev=_statFold*pot+(1-_statFold)*(eq*(pot+bs)-(1-eq)*bs);
         if(ev>evs.betValue){evs.betValue=ev;evs.betValueSz=bs;}
       }
       evs.bluff=-99999; evs.bluffSz=0;
@@ -4434,7 +4436,8 @@ function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW
           var bs2=_betList[bj];
           // rev10修复POST-3: 对手弃牌我们赢得的是当前底池pot,不是我们下的注bs2
           // (旧式_statFold*bs2使33%pot档弃牌收益低估3倍,小尺寸诈唬EV永远算不正)
-          var bluffEV=_statFold*pot + (1-_statFold)*(eq*pot-(1-eq)*bs2); // V2.9.656: 修正EV公式
+          // V2.9.666 FIX(P0): 同betValue,bluff被跟时hero赢净收益=pot+bs2(非pot)
+          var bluffEV=_statFold*pot + (1-_statFold)*(eq*(pot+bs2)-(1-eq)*bs2);
           if(bluffEV>evs.bluff){evs.bluff=bluffEV;evs.bluffSz=bs2;}
         }
       }
@@ -4462,7 +4465,7 @@ function _computeFullEVCore(scene, betSz, pot, eq, _prof, _sprAdj, _is3bP, _isMW
       var _hcCA=_hcKey!==undefined?_hcKey:6;
       var _caMult=_hcCA<=4?0.88:_hcCA<=8?0.70:_hcCA<=12?0.95:0.55;
       var callAfterEq=Math.min(0.97,eq*_caMult);
-      evs.raise=_raiseFold*pot + (1-_raiseFold)*(callAfterEq*pot-(1-callAfterEq)*raiseSz); // V2.9.656: 修正fold分支pot+betSz→pot(已含bet), call分支同EV公式修正
+      evs.raise=_raiseFold*pot + (1-_raiseFold)*(callAfterEq*(pot+raiseSz-betSz)-(1-callAfterEq)*raiseSz); // V2.9.666 FIX: raise被跟时hero净收益=pot+raiseSz-betSz(对手匹配差额)
       if(evs.fold>bestEV){bestA='fold';bestEV=evs.fold;bestSz=0;}
       if(evs.call>bestEV){bestA='call';bestEV=evs.call;bestSz=0;}
       if(evs.raise>bestEV){bestA='raise';bestEV=evs.raise;bestSz=raiseSz;}
@@ -7097,20 +7100,21 @@ var EVCalc={
     if(betToCall<=0){
       results.check={ev:eq01*pot,action:'check'}; // 过牌EV=eq*pot(保留equity)
     }
-    // Raise EV = FE*pot + (1-FE)*[eq*pot-(1-eq)*raiseSize]
+    // Raise EV = FE*pot + (1-FE)*[eq*(pot+raiseSize-betToCall)-(1-eq)*raiseSize]
     // V2.9.64: eq<20时禁止bluff(equity太低不应主动加注)
-    // V2.9.656 FIX(P0): callEvWhenCalled同Call EV公式修正,去除eq*raiseSize高估
+    // V2.9.666 FIX(P0): V2.9.656修正只对Call正确,对Raise错误——raise被跟时hero净收益=pot+raiseSize-betToCall
+    //   (对手匹配raise差额=raiseSize-betToCall是hero的赢利),旧修复eq*pot低估了eq*(raiseSize-betToCall)
     if(raiseSize>0&&eq>=20){
       var fe=this.foldEquity(oppType,raiseSize,pot,street,ip);
-      var callEvWhenCalled=eq01*pot-(1-eq01)*raiseSize;  // V2.9.656: 修正公式
+      var callEvWhenCalled=eq01*(pot+raiseSize-betToCall)-(1-eq01)*raiseSize;  // V2.9.666: 修正raise被跟EV
       results.raise={ev:fe*pot+(1-fe)*callEvWhenCalled,action:'raise',foldEquity:fe};
     }
     // All-in EV(短码时)
-    // V2.9.656 FIX(P0): callEvAI同上修正
+    // V2.9.666 FIX(P0): callEvAI同raise修正——allin被跟时hero净收益=pot+allInSize-betToCall
     if(spr!==undefined&&spr<=4&&raiseSize>0){
       var allInSize=spr*pot;
       var fe2=this.foldEquity(oppType,allInSize,pot,street,ip);
-      var callEvAI=eq01*pot-(1-eq01)*allInSize;  // V2.9.656: 修正公式
+      var callEvAI=eq01*(pot+allInSize-betToCall)-(1-eq01)*allInSize;  // V2.9.666: 修正allin被跟EV
       results.allin={ev:fe2*pot+(1-fe2)*callEvAI,action:'allin',foldEquity:fe2};
     }
     return results;
@@ -7949,8 +7953,27 @@ function handClassify(hole,comm){
         madeType='MEDIUM';pairSubType='双对子面+差踢';
       }
     }else if(hasHolePair){
-      // 手牌参与了两对(板面最多1对)→真正两对→STRONG
-      madeType='STRONG';pairSubType='两对(手牌参与)';
+      // 手牌参与了两对(板面最多1对)→真正两对
+      // V2.9.665 FIX(P1): 底两对(bottom two pair)误判STRONG——
+      //   实证: 66在J-J-3-T面→两对JJ+66→判STRONG→实际是底两对→eq仅3.9%!
+      //   4d2s在Q-2-4-K-5面→两对44+22→判STRONG→实际底两对(4<Q,K)→需检查
+      //   修复: hero两对中最高对rank < board最高单张rank → 底两对 → 降级MEDIUM
+      //   top two pair(hero最高对 > board最高单张)保持STRONG
+      var _tpHeroPair=holePairRanks.length>0?holePairRanks[0]:-1;
+      var _tpMaxBoardSingle=-1;
+      for(var _rk2 in commRankCounts){
+        if(commRankCounts[_rk2]===1){  // board单张(非对子)
+          var _br2=RV[_rk2];
+          if(_br2>_tpMaxBoardSingle)_tpMaxBoardSingle=_br2;
+        }
+      }
+      if(_tpHeroPair<_tpMaxBoardSingle){
+        // V2.9.665: 底两对(hero最高对 < board最高单张)→MEDIUM
+        madeType='MEDIUM';pairSubType='底两对(hero对<板面单张)';
+        console.log('[V2.9.665牌力] 底两对降级STRONG→MEDIUM(hero='+_tpHeroPair+'<board单张='+_tpMaxBoardSingle+')');
+      }else{
+        madeType='STRONG';pairSubType='两对(手牌参与)';
+      }
     }else{
       // 板面1对+手牌没参与→其实只有1对
       madeType='MEDIUM';pairSubType='板面对+差踢';
@@ -8125,7 +8148,7 @@ var ImpliedOddsCalc={
 var CBET_FREQ={static:{nit:75,fish:55,lag:70,maniac:65,calling_station:50,tag:70,tight:80,unknown:65},dry:{nit:65,fish:55,lag:60,maniac:55,calling_station:45,tag:65,tight:75,unknown:60},'semi-wet':{nit:50,fish:60,lag:45,maniac:40,calling_station:55,tag:50,tight:60,unknown:50},paired:{nit:55,fish:50,lag:50,maniac:45,calling_station:45,tag:55,tight:60,unknown:50},wet:{nit:35,fish:70,lag:30,maniac:25,calling_station:65,tag:35,tight:45,unknown:40}};
 function blocker(hole,range){var h=hole.filter(function(c){return c;});if(h.length<2)return 1;var rank1=h[0].rank,rank2=h[1].rank;var blockerCount=0;range.forEach(function(key){if(key.indexOf(rank1)!==-1||key.indexOf(rank2)!==-1)blockerCount++;});return blockerCount/Math.max(range.length,1);}
 function getBlockerScore(k,oppRange){return blocker(G.hole.map(function(c){return{k:c.rank+(SS[c.suit]||'')};}).filter(function(x){return x.k;}).map(function(x){return{k:x.k[0]};}),oppRange);}
-function compareEVs(eq,pot,betToCall,raiseSz){var results={};var eq01=eq/100;if(betToCall>0){results.call=eq01*pot-(1-eq01)*betToCall;}if(raiseSz>0){results.raise=eq01*pot-(1-eq01)*raiseSz;}return results;} // V2.9.656: 修正EV公式
+function compareEVs(eq,pot,betToCall,raiseSz){var results={};var eq01=eq/100;if(betToCall>0){results.call=eq01*pot-(1-eq01)*betToCall;}if(raiseSz>0){results.raise=eq01*(pot+raiseSz-betToCall)-(1-eq01)*raiseSz;}return results;} // V2.9.666: raise被跟EV=eq*(pot+raiseSz-betToCall)
 // rev11修复POST-6: 旧getOppRange只识别'cbet',其余action全返回gO宽开池范围——
 // barrel/raise/donk线路共用同一宽范围,对手连开两枪的范围里仍计入大量空气,bluff捕获和value判断全偏。
 // 按行动线静态收窄(无蒙特卡洛开销): 在防守基线gC上按手牌结构强度过滤
@@ -9364,7 +9387,7 @@ function _decideInner(){
     //   修复: 仅阻断eq<65%的marginal GTO call;eq≥65%的premium手牌允许fish偏移升raise
     var _origA=result.a;
     var _isSpecCall=(G.phase==='pre'&&_origA==='call'&&/投机/.test(result.r||''));
-    var _isLimpFallbackCall=(G.phase==='pre'&&_origA==='call'&&/limp兜底/.test(result.r||''));
+    var _isLimpFallbackCall=(G.phase==='pre'&&_origA==='call'&&/(limp兜底|BB补盲)/.test(result.r||''));  // V2.9.666: +BB补盲,同属弱牌防守call不应升级
     var _isFlatCall=(G.phase==='pre'&&_origA==='call'&&(result._flatCall===true||/FlatCall/.test(result.r||'')));
     var _isGTOCall=(G.phase==='pre'&&_origA==='call'&&/GTO call/.test(result.r||'')&&_eq<65);  // V2.9.656: 仅阻断非premium
     // V2.9.662 FIX: FlatCall防御的call也必须阻止升级——FlatCall覆盖的是不够3bet但可以call的中等牌,
