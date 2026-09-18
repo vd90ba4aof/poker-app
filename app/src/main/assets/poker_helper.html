@@ -9387,7 +9387,7 @@ function _decideInner(){
     //   修复: 仅阻断eq<65%的marginal GTO call;eq≥65%的premium手牌允许fish偏移升raise
     var _origA=result.a;
     var _isSpecCall=(G.phase==='pre'&&_origA==='call'&&/投机/.test(result.r||''));
-    var _isLimpFallbackCall=(G.phase==='pre'&&_origA==='call'&&/(limp兜底|BB补盲)/.test(result.r||''));  // V2.9.666: +BB补盲,同属弱牌防守call不应升级
+    var _isLimpFallbackCall=(G.phase==='pre'&&_origA==='call'&&/(limp兜底|BB补盲)/.test(result.r||'')&&_eq<65);  // V2.9.666: +BB补盲,同属弱牌防守call不应升级; +eq<65守卫对齐GTO call(L9392),放行premium升级
     var _isFlatCall=(G.phase==='pre'&&_origA==='call'&&(result._flatCall===true||/FlatCall/.test(result.r||'')));
     var _isGTOCall=(G.phase==='pre'&&_origA==='call'&&/GTO call/.test(result.r||'')&&_eq<65);  // V2.9.656: 仅阻断非premium
     // V2.9.662 FIX: FlatCall防御的call也必须阻止升级——FlatCall覆盖的是不够3bet但可以call的中等牌,
