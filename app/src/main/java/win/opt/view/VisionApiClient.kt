@@ -1501,6 +1501,8 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 var localChipsValue = 0
                 var amountDiag = "skipped"
                 val oppChipsMap = HashMap<Int, Int>()
+                // V2.9.670: 外提oppBetMap声明到try外,使纯本地路径buildOppPlayerList能拿到黄色筹码堆信号
+                val oppBetMap = HashMap<Int, Int>()  // seatId → 下注筹码黄色像素数
                 try {
                     val tAmt = System.currentTimeMillis()
                     val potBmpLocal = RegionCropper.cropPotAmount(screenshotBmp)
@@ -1549,7 +1551,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     //   解决"头像有两张牌面遮挡时筹码数字被挡→无法判断谁下注"的问题。
                     //   检测每个座位前的黄色筹码堆，有黄色=该玩家下注了，像素量≈下注大小。
                     val tBetChips = System.currentTimeMillis()
-                    val oppBetMap = HashMap<Int, Int>()  // seatId → 下注筹码黄色像素数
+                    // V2.9.670: oppBetMap已外提声明
                     for ((idx, seatId) in oppSeatIds.withIndex()) {
                         val betBmp = RegionCropper.cropOpponentBetChips(screenshotBmp, idx)
                         if (betBmp != null) {
@@ -2117,7 +2119,9 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                     blindSB = finalBlindSB,
                     blindBB = finalBlindBB,
                     ante = 0,
-                    players = buildOppPlayerList(oppChipsMap, localChipsValue, dButtonSeatLocal, if (seatStatusOk) seatStatus else emptyList()),
+                    // V2.9.670 FIX: 必须传入oppBetMap——V2.9.669新增的hasBetChip黄色筹码堆信号
+                    //   因调用点漏传(用默认emptyMap)在纯本地路径被完全丢弃→JS limpers/callers二值信号失效。
+                    players = buildOppPlayerList(oppChipsMap, localChipsValue, dButtonSeatLocal, if (seatStatusOk) seatStatus else emptyList(), oppBetMap),
                     dButtonPosition = mapDSeatToPosition(
                         if (dButtonSeatLocal >= 0) dButtonSeatLocal else (action?.dButtonSeat ?: -1)
                     ),

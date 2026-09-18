@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.669',
+  CURRENT_VERSION:'2.9.670',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2868,7 +2868,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.669';
+var APP_VERSION = '2.9.670';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -5640,25 +5640,45 @@ var SeatRole={
 //   ③ 本地CV黄色筹码堆(hasBetChip) + 全桌无加注者 + 非盲位
 // 仅在翻前运行; 全桌一旦出现加注→isLimpedPot=false, limpers=0。
 var LimpDetector={
-  // 判断全桌翻前是否已出现加注(有raise/allin动作 或 任意bet>1.6BB)
-  _hasRaiser:function(seats,bb){
-    for(var i=0;i<seats.length;i++){
-      var s=seats[i];
-      if(!s||s.action==='fold')continue;
-      if(s.action==='raise'||s.action==='allin')return true;
-      if(bb>0&&(s.bet||0)>bb*1.6)return true;
-    }
-    // FrameDiff动作日志兜底: 本手翻前出现raise/bet动作
+  // V2.9.670: 纯本地CV路径重写(生产构建 CLOUD_VLM_ENABLED=false)。
+  //   纯本地路径 opp_seats: action恒为占位""、bet恒0, 只有 chips/active/hasBetChip 可信。
+  //   故不能依赖VLM的action/bet两路。本地可用信号:
+  //   A. FrameDiffEngine._al(扁平数组): 条目 {s:座位号,a:'call'/'raise'/'fold',am:筹码变化量,st:街};
+  //      pos需经 seatToPosStr(s) 转换; am是本动作投入的筹码(非BB)。
+  //   B. opp_seats[].hasBetChip: 黄色下注筹码堆二值信号(有/无, 非金额)。
+  //   C. G.bet(我需跟注额,BB): 翻前 >=2BB 即面对加注, 最权威的raiser信号。
+  //   D. SeatRole角色: 排除SB/BB(强制盲注)与HERO。
+  // 命名归一: seatToPosStr(1)='bottom', SeatRole.CW用'bottom-center', 仅hero位差异。
+  _normPos:function(p){return(p==='bottom')?'bottom-center':p;},
+  _roleOf:function(pos){try{return SeatRole.getRole(this._normPos(pos))||'';}catch(e){return '';}},
+  _isHero:function(s,pos){if(s===1)return true;var p=this._normPos(pos);return p==='bottom-center';},
+  // 本手翻前动作日志(扁平_al; 翻前帧st为preflop/pre/空)
+  _preflopActions:function(){
+    var out=[];
     try{
-      if(typeof FrameDiffEngine!=='undefined'&&FrameDiffEngine._al){
-        for(var k in FrameDiffEngine._al){
-          var lst=FrameDiffEngine._al[k];
-          for(var j=0;j<lst.length;j++){
-            if(lst[j]&&(lst[j].type==='raise'||lst[j].type==='bet'))return true;
-          }
-        }
+      if(typeof FrameDiffEngine==='undefined'||!FrameDiffEngine._al)return out;
+      var al=FrameDiffEngine._al;
+      for(var i=0;i<al.length;i++){
+        var e=al[i];if(!e)continue;
+        if(e.a!=='call'&&e.a!=='raise'&&e.a!=='fold')continue;
+        var st=(e.st||'').toLowerCase();
+        if(st==='flop'||st==='turn'||st==='river'||st==='showdown')continue; // 翻后动作剔除
+        out.push(e);
       }
-    }catch(e){}
+    }catch(err){}
+    return out;
+  },
+  _hasRaiser:function(seats,bb){
+    // 信号C(最权威): 我需跟注额>=2BB→面对加注, 必非limp pot
+    try{if((typeof G!=='undefined'&&G.bet)&&G.bet>=2)return true;}catch(e){}
+    // 信号A: FrameDiff本手翻前出现raise(allin在_df里归为raise: d>toCall+pot)
+    var acts=this._preflopActions();
+    for(var i=0;i<acts.length;i++){if(acts[i].a==='raise')return true;}
+    // VLM路径兼容(本地action占位""/bet=0, 不会命中)
+    for(var j=0;j<seats.length;j++){var sx=seats[j];if(!sx||sx.action==='fold')continue;
+      if(sx.action==='raise'||sx.action==='allin')return true;
+      if(bb>0&&(sx.bet||0)>bb*1.6)return true;
+    }
     return false;
   },
   // 主入口: 返回 {count, detail:[pos...], source}
@@ -5666,31 +5686,32 @@ var LimpDetector={
     var isPre=(street==='preflop'||street==='pre');
     if(!isPre||!seats||!seats.length)return {count:G.limpers||0,detail:[],source:'skip'};
     var bb=blindBB||window._lastBlindBB||0;
-    var hasRaiser=this._hasRaiser(seats,bb);
-    if(hasRaiser){
-      // 翻前已加注→不是limp pot; 保留手动值不强行清零(用户可能正面对3bet pot手动设置)
-      return {count:0,detail:[],source:'raised'};
-    }
+    if(bb<=0)return {count:G.limpers||0,detail:[],source:'no_bb'}; // 无BB无法界定1BB, 保守不自动覆盖
+    if(this._hasRaiser(seats,bb))return {count:0,detail:[],source:'raised'};
     var limpPos=[];
-    for(var i=0;i<seats.length;i++){
-      var s=seats[i];
-      if(!s)continue;
-      // 排除盲位(SB/BB的投入是强制盲注, 非主动limp)
-      var role='';
-      try{role=SeatRole.getRole(s.pos)||'';}catch(e){role='';}
-      if(role==='SB'||role==='BB')continue;
-      // 排除hero自己(本地CV路径hero座位bottom-center会进入opp_seats)
-      if(s.pos==='bottom-center'||s.pos==='bottom'||s.seat===1)continue;
-      if(s.action==='fold'||s.active===false)continue;
-      var bet=s.bet||0;
-      var isLimp=false;
-      // 信号①: 真实bet≈1BB
-      if(bb>0&&bet>=bb*0.7&&bet<=bb*1.5&&s.action!=='raise'&&s.action!=='allin')isLimp=true;
-      // 信号②: action=call 且无加注(limp即平跟1BB)
-      if(!isLimp&&s.action==='call')isLimp=true;
-      // 信号③: 本地CV黄色筹码堆二值信号
-      if(!isLimp&&s.hasBetChip)isLimp=true;
-      if(isLimp&&limpPos.indexOf(s.pos)<0)limpPos.push(s.pos);
+    var pushIf=function(pos){if(pos&&limpPos.indexOf(pos)<0)limpPos.push(pos);};
+    // 信号A(本地主信号): FrameDiff翻前call且投入≈1BB, 排除盲位/hero。
+    //   SB补全(0.5BB→am<0.7BB)被排除; UTG/MP等limp(am=BB)命中; BB check无筹码变化不入日志。
+    var acts=this._preflopActions();
+    for(var i=0;i<acts.length;i++){
+      var a=acts[i];if(a.a!=='call')continue;
+      if(this._isHero(a.s))continue;
+      var posA=seatToPosStr(a.s);
+      var roleA=this._roleOf(posA);
+      if(roleA==='SB'||roleA==='BB'||roleA==='HERO'||!roleA)continue;
+      var am=a.am||0;
+      if(am>=bb*0.7&&am<=bb*1.5)pushIf(this._normPos(posA));
+    }
+    // 信号B(本地补充): 黄色筹码堆 + 非盲位 + 非hero + active。
+    //   全桌无加注前提下, 翻前非盲位座位前出现下注筹码堆即limp(非盲位最小投入=1BB)。
+    for(var s=0;s<seats.length;s++){
+      var sx=seats[s];if(!sx)continue;
+      if(this._isHero(sx.seat,sx.pos))continue;
+      var posB=this._normPos(sx.pos);
+      var roleB=this._roleOf(posB);
+      if(roleB==='SB'||roleB==='BB'||roleB==='HERO'||!roleB)continue;
+      if(sx.active===false||sx.action==='fold')continue;
+      if(sx.hasBetChip)pushIf(posB);
     }
     return {count:limpPos.length,detail:limpPos,source:'auto'};
   }
@@ -12266,6 +12287,36 @@ function onVisionResult(data){
     var _blindBB0=bbValue||200;
     var _seatsForRaiser=G.oppSeats||data.opp_seats||[];
     var _sawActionRaiser=false;
+    // V2.9.670 FIX(纯本地): hasBetChip无法区分limper/raiser(只表示座位前有下注筹码堆)。
+    //   纯本地路径action占位/bet=0, 旧代码会把首个hasBetChip的limper误定位为raiser。
+    //   先用FrameDiff本手翻前raise动作的座位精确锁定raiser(跨帧筹码差已区分call/raise);
+    //   只有完全没有动作日志(首帧/无历史)时, 才退回hasBetChip+VLM金额/动作信号。
+    var _fdRaiserSeats={};
+    try{
+      if(typeof FrameDiffEngine!=='undefined'&&FrameDiffEngine._al){
+        var _al0=FrameDiffEngine._al;
+        for(var _ai=0;_ai<_al0.length;_ai++){
+          var _ae=_al0[_ai];
+          if(!_ae)continue;
+          var _ast=(_ae.st||'').toLowerCase();
+          if(_ast==='flop'||_ast==='turn'||_ast==='river'||_ast==='showdown')continue;
+          if(_ae.a==='raise')_fdRaiserSeats[_ae.s]=(_ae.am||0);
+        }
+      }
+    }catch(_e0){}
+    var _fdRaiserSeatNums=Object.keys(_fdRaiserSeats);
+    var _fdHasRaiser=_fdRaiserSeatNums.length>0;
+    if(_fdHasRaiser){
+      // 取加注额最大的座位作为raiser(3bet/4bet场景)
+      var _bestSeat=0,_bestAm=-1;
+      for(var _rs=0;_rs<_fdRaiserSeatNums.length;_rs++){
+        var _sn=parseInt(_fdRaiserSeatNums[_rs]);
+        if(_fdRaiserSeats[_sn]>_bestAm){_bestAm=_fdRaiserSeats[_sn];_bestSeat=_sn;}
+      }
+      _raiserPos=LimpDetector._normPos(seatToPosStr(_bestSeat));
+      _sawActionRaiser=true;
+      if(_bestAm>0&&_blindBB0>0&&_bestAm>_blindBB0*2)G._facing3bet=true;
+    }
     for(var i=0;i<_seatsForRaiser.length;i++){
       var os=_seatsForRaiser[i];
       if(os.active===false||os.action==='fold')continue;
@@ -12273,9 +12324,11 @@ function onVisionResult(data){
       if(os.pos==='bottom-center'||os.pos==='bottom'||os.seat===1)continue;
       var _osBet=os.bet||0;
       var _isRaiserAction=(os.action==='raise'||os.action==='allin');
-      if(_osBet>0||_isRaiserAction||os.hasBetChip){
+      // FrameDiff已锁定raiser时: hasBetChip的limper不得参与raiser定位/3bet判定,
+      //   但VLM精确金额bet仍可用于冷跟者统计。
+      if(_osBet>0||_isRaiserAction||(os.hasBetChip&&!_fdHasRaiser)){
         // 找最大bet的对手(动作加注但金额未知时用action标记, 金额路径优先定位)
-        if(_osBet>_maxBet){_maxBet=_osBet;_raiserPos=os.pos;}
+        if(_osBet>_maxBet){_maxBet=_osBet;if(!_fdHasRaiser)_raiserPos=os.pos;}
         if(_isRaiserAction){
           _sawActionRaiser=true;
           if(!_raiserPos)_raiserPos=os.pos; // 金额全未知时用动作座位兜底
