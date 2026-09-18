@@ -233,7 +233,9 @@ object VisionApiClient {
     )
 
     data class CardInfo(val rank: String, val suit: String)
-    data class PlayerInfo(val position: String, val bet: Int, val chips: Int, val active: Boolean, val nickname: String = "")
+    // V2.9.669: actionRaw=VLM原始动作(call/raise/fold/check/allin), 不再用bet反推;
+    //   hasBetChip=本地CV黄色下注筹码堆信号(头像牌面遮挡OCR失败时的二值兜底)
+    data class PlayerInfo(val position: String, val bet: Int, val chips: Int, val active: Boolean, val nickname: String = "", val actionRaw: String = "", val hasBetChip: Boolean = false)
     // V2.9.143: 摊牌信息——对手亮牌+输赢
     data class ShowdownInfo(val seat: Int, val cards: List<CardInfo>, val won: Boolean)
     // V2.9.153: Smart HUD
@@ -579,13 +581,13 @@ object VisionApiClient {
         // V2.9.200: 根据当前平台动态调整prompt描述（GG/标准/短牌）
         val platformHint = buildPlatformPromptHint()
         val prompt = """${platformHint.first}5-max识别引擎。只输出JSON。
-Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"GGPOKER"}
+Schema(缺填null):{"is_poker_table":bool,"hole_cards":[{"rank":"A","suit":"s"}],"community_cards":[],"pot":数字,"my_chips":数字,"bet_to_call":数字,"dealer_seat":1-5,"my_seat":1-5,"phase":"preflop","opp_seats":[{"seat":2,"nickname":"P1","chips":"3000","bet":"0","action":"fold"}],"buttons":["弃牌","跟注500"],"button_positions":[{"text":"弃牌","xPct":0.17,"yPct":0.88}],"d_button_pos":"left-top","total_players":5,"active_players":3,"showdown_cards":[],"opp_hud":[],"is_straddle":false,"is_bomb_pot":false,"is_insurance":false,"is_pko":false,"game_mode":"cash","detected_platform":"GGPOKER"}
 花色:s=♠黑 h=♥红心 d=♦方块 c=♣梅花。对子花色须不同。
 pot展开简写:1.2K=1200,1.5M=1500000。底池=桌面中央筹码堆。
 active_players=仅有牌(明/暗)的玩家,弃牌/空座不计。
 buttons=底部全部按钮(${platformHint.second}),不可遗漏!
 button_positions=每按钮{text与buttons一致,xPct=中心X/屏宽,yPct=中心Y/屏高},加注可能横排多坐标。
-opp_seats须含nickname(头像旁用户名)。showdown_cards=摊牌对手牌,看不到填[]。opp_hud=对手统计,看不到填[]。
+opp_seats须含nickname(头像旁用户名)。chips=剩余筹码, bet=本手已投入底池额(未投入填"0",翻前平跟填1个大盲),二者必须分开不可混淆。showdown_cards=摊牌对手牌,看不到填[]。opp_hud=对手统计,看不到填[]。
 GG特有字段:is_straddle=是否Straddle(第三盲注);is_bomb_pot=是否BombPot(所有玩家ante后直接翻牌);is_insurance=是否出现Insurance/EV Cashout按钮;is_pko=是否PKO赏金赛(牌桌有赏金标识)。
 game_mode=现金桌填cash,锦标赛填tournament。判断依据:有"锦标赛/报名费/奖池/剩余人数/盲注倒计时"填tournament,否则填cash。
 detected_platform=根据桌面logo/品牌文字自动识别平台。判断依据:看到GGPoker/GG标志填GGPOKER,仅支持GGPOKER。
@@ -713,7 +715,19 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
     private fun parseOppSeats(arr: JSONArray?): List<PlayerInfo> {
         if (arr == null) return emptyList()
         return (0 until arr.length()).mapNotNull { i ->
-            try { val o = arr.optJSONObject(i) ?: return@mapNotNull null; val s = o.optInt("seat", 0); val c = parseChipValue(o, "chips"); val a = o.optString("action", ""); val nick = o.optString("nickname", ""); if (s > 0) PlayerInfo(seatToPosition(s), if (a == "raise" || a == "call" || a == "allin") c else 0, c, a != "fold", nick) else null } catch (_: Exception) { null }
+            // V2.9.669 FIX(级联BUG根因): 旧代码把chips(剩余筹码)当bet——
+            //   action=call/raise/allin时 bet=c(剩余筹码, 如18000), 再经toJson反推 action:
+            //   bet>3BB→"raise", 导致几乎所有活跃玩家被误标raise, JS raiser/3bet/limpers全失真。
+            //   修复: bet只读VLM的bet字段(本手已投入额, 缺省0), actionRaw原样保留供JS区分call/raise。
+            try {
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val s = o.optInt("seat", 0)
+                val c = parseChipValue(o, "chips")
+                val a = o.optString("action", "")
+                val nick = o.optString("nickname", "")
+                val b = parseChipValue(o, "bet")  // V2.9.669: 真实已投入额, 缺省0
+                if (s > 0) PlayerInfo(seatToPosition(s), b, c, a != "fold", nick, a) else null
+            } catch (_: Exception) { null }
         }
     }
     private fun seatToPosition(s: Int) = when(s) { 1->"bottom"; 2->"left-bottom"; 3->"left-top"; 4->"top-center"; 5->"right-top"; 6->"right-bottom"; else->"seat_$s" }
@@ -739,7 +753,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
     }
     private fun parseLegacyPlayers(arr: JSONArray?): List<PlayerInfo> {
         if (arr == null) return emptyList()
-        return try { (0 until arr.length()).mapNotNull { i -> val o = arr.optJSONObject(i) ?: return@mapNotNull null; val p = o.optString("position", ""); if (p.isNotEmpty()) PlayerInfo(p, o.optInt("bet", 0), o.optInt("chips", 0), o.optBoolean("active", true)) else null } } catch (_: Exception) { emptyList() }
+        return try { (0 until arr.length()).mapNotNull { i -> val o = arr.optJSONObject(i) ?: return@mapNotNull null; val p = o.optString("position", ""); if (p.isNotEmpty()) PlayerInfo(p, o.optInt("bet", 0), o.optInt("chips", 0), o.optBoolean("active", true), o.optString("nickname", ""), o.optString("action", "")) else null } } catch (_: Exception) { emptyList() }
     }
 
     // V2.9.194: extractJson 重写——逐个尝试每个{位置+详细日志
@@ -1112,17 +1126,33 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
             // v612: result.blindBB已是构建期锁存后的值(翻后沿用上一翻前GCD锁存)
             put("buttons", JSONArray(result.buttons)); put("blind_sb", result.blindSB); put("blind_bb", result.blindBB); put("ante", result.ante)
             put("button_positions", JSONArray(result.buttonPositions.map { JSONObject().apply { put("text", it.text); put("x_pct", it.xPct); put("y_pct", it.yPct) } }))
-            put("players", JSONArray(result.players.map { JSONObject().apply { put("position", it.position); put("bet", it.bet); put("chips", it.chips); put("active", it.active); if(it.nickname.isNotEmpty()) put("nickname", it.nickname) } }))
+            put("players", JSONArray(result.players.map { JSONObject().apply {
+                // V2.9.669: 统一到CW命名(bottom→bottom-center), 与SeatRole/FrameDiff一致
+                val posOut = if(it.position=="bottom") "bottom-center" else it.position
+                put("position", posOut); put("bet", it.bet); put("chips", it.chips); put("active", it.active); put("has_bet_chip", it.hasBetChip); if(it.nickname.isNotEmpty()) put("nickname", it.nickname)
+            } }))
             // V2.9.168: 同时输出opp_seats格式供JS OppProfiler使用
+            // V2.9.669 FIX: action直接用VLM原始动作(p.actionRaw), 不再用bet>3BB反推——
+            //   旧反推在parseOppSeats把chips误当bet时把所有活跃玩家误标raise。
+            //   bet=本手真实已投入额(无VLM bet字段时为0); has_bet_chip=本地CV黄色筹码堆信号。
             put("opp_seats", JSONArray(result.players.map { p -> JSONObject().apply {
-                val seatNum = when(p.position) { "bottom"->1; "left-bottom"->2; "left-top"->3; "top-center"->4; "right-top"->5; "right-bottom"->6; else->0 }
-                val bbThreshold = if(result.blindBB > 0) result.blindBB * 3 else 600
+                // V2.9.669: 补全两套座位命名——VLM路径用"bottom", 本地CV路径用"bottom-center",
+                //   旧映射缺"bottom-center"→seatNum=0→JS _seatToPos(0)='seat0'脱离SeatRole角色体系
+                val seatNum = when(p.position) { "bottom"->1; "bottom-center"->1; "left-bottom"->2; "left-top"->3; "top-center"->4; "right-top"->5; "right-bottom"->6; else->0 }
                 put("seat", seatNum)
                 put("chips", p.chips.toString())
                 put("bet", p.bet)
                 put("stack", p.chips)
-                put("action", if(p.bet > bbThreshold) "raise" else if(p.bet > 0) "call" else if(p.active) "" else "fold")
+                // actionRaw非空优先用原始动作; 否则本地CV筹码堆信号标call(二值,精确额未知); 其余按active
+                val actOut = when {
+                    p.actionRaw.isNotEmpty() -> p.actionRaw
+                    p.hasBetChip -> "call"
+                    p.active -> ""
+                    else -> "fold"
+                }
+                put("action", actOut)
                 put("active", p.active)
+                put("has_bet_chip", p.hasBetChip)
                 if(p.nickname.isNotEmpty()) put("nickname", p.nickname)
             } }))
             put("lock_just_established", lockJustEstablished); lockJustEstablished = false; // V2.9.604: 一次性标志,透传即清
@@ -2385,20 +2415,19 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val seated = idx in seatStatus.indices && seatStatus[idx].first
                 val inHand = idx in seatStatus.indices && seatStatus[idx].second
                 val hasBet = oppBetMap.containsKey(seat)
-                // V2.9.645: 下注筹码堆检测——有黄色筹码=该玩家下注了
-                //   ⚠️ 安全起见: 暂不设置bet字段(设为0),避免bet=1干扰JS侧HUD统计和3bet判定。
-                //   检测结果仅用于日志观测和后续校准,实机验证黄色像素与金额的对应关系后再启用。
-                //   解决"头像有两张牌面遮挡时筹码数字被挡→无法判断谁下注"的问题。
-                val betAmount = 0  // TODO: 校准后用黄色像素比例估算实际bet金额
+                // V2.9.669: 黄色筹码堆只给二值"该座已下注"信号(hasBetChip), 精确额仍不可估——
+                //   解决头像牌面遮挡导致OCR读不到下注额时, JS侧limpers/callers完全无信号的问题。
+                //   bet金额保持0(不用像素数冒充金额, 避免污染3bet/raiser的精确BB判定)。
+                val betAmount = 0
                 if (seatStatus.isEmpty()) {
                     // 旧路径兜底：座位检测不可用时，有筹码OCR结果的座位视为活跃
                     if (chips != null && chips > 0) {
-                        players.add(PlayerInfo(pos, betAmount, chips, true))
+                        players.add(PlayerInfo(pos, betAmount, chips, true, hasBetChip = hasBet))
                     }
                 } else if (seated) {
                     // V2.9.607: 在座即列入players（chips OCR读不到离桌"全押"红字时给0）；
                     // active=true 仅当仍持牌参与本手，弃牌/离桌座位 active=false（JS action标fold）
-                    players.add(PlayerInfo(pos, betAmount, chips ?: 0, inHand))
+                    players.add(PlayerInfo(pos, betAmount, chips ?: 0, inHand, hasBetChip = hasBet))
                 }
             }
         }
