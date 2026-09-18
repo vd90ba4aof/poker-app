@@ -1617,7 +1617,7 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                             conf, whiteRatio * 100, redRatio * 100, blackRatio * 100))
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "明牌检测seat=$seat失败: ${e.message}")
+                    Log.w(TAG, "明牌检测seat=${seat}失败: ${e.message}")
                 }
             }
         } catch (e: Exception) {

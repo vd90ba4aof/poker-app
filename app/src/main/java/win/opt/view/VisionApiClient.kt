@@ -1566,7 +1566,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val finalActivePlayers = if (seatStatusOk) localActivePlayersSafe(localActiveCount) else (oppChipsMap.size + 1)
 
                 // V2.9.668: 对手明牌(Showdown)本地CV检测——识别摊牌时对手亮出的牌
-                var localShowdownCards = emptyList<VisionResult.ShowdownInfo>()
+                var localShowdownCards = emptyList<ShowdownInfo>()
                 try {
                     val tSD = System.currentTimeMillis()
                     val seatCardsMap = RegionCropper.cropOpponentShowdownCards(screenshotBmp)
@@ -1574,7 +1574,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         val sdResults = larInstance.detectShowdownCards(seatCardsMap)
                         if (sdResults.isNotEmpty()) {
                             localShowdownCards = sdResults.map { sd ->
-                                VisionResult.ShowdownInfo(sd.seat, emptyList(), false)
+                                ShowdownInfo(sd.seat, emptyList(), false)
                             }
                             Log.d(TAG, "🃏 明牌检测: ${System.currentTimeMillis() - tSD}ms | seats=${sdResults.map { it.seat }}")
                         }
@@ -2092,7 +2092,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         if (dButtonSeatLocal >= 0) dButtonSeatLocal else (action?.dButtonSeat ?: -1)
                     ),
                     rawResponse = "V2: board=${boardResult?.rawResponse?.take(100)} | action=${action?.rawResponse?.take(100)}",
-                    showdownCards = if (localShowdownCards.isNotEmpty()) localShowdownCards else (result?.showdownCards ?: emptyList()),
+                    showdownCards = if (localShowdownCards.isNotEmpty()) localShowdownCards else emptyList(),
                     oppHud = emptyList(),
                     buttonPositions = action?.buttonPositions ?: emptyList(),
                     suitUncertain = false,
