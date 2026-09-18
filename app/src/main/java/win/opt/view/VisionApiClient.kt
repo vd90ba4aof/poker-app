@@ -1565,6 +1565,26 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                 val finalTotalPlayers = 6
                 val finalActivePlayers = if (seatStatusOk) localActivePlayersSafe(localActiveCount) else (oppChipsMap.size + 1)
 
+                // V2.9.668: 对手明牌(Showdown)本地CV检测——识别摊牌时对手亮出的牌
+                var localShowdownCards = emptyList<VisionResult.ShowdownInfo>()
+                try {
+                    val tSD = System.currentTimeMillis()
+                    val seatCardsMap = RegionCropper.cropOpponentShowdownCards(screenshotBmp)
+                    if (seatCardsMap.isNotEmpty()) {
+                        val sdResults = larInstance.detectShowdownCards(seatCardsMap)
+                        if (sdResults.isNotEmpty()) {
+                            localShowdownCards = sdResults.map { sd ->
+                                VisionResult.ShowdownInfo(sd.seat, emptyList(), false)
+                            }
+                            Log.d(TAG, "🃏 明牌检测: ${System.currentTimeMillis() - tSD}ms | seats=${sdResults.map { it.seat }}")
+                        }
+                        // 释放bitmap
+                        seatCardsMap.values.forEach { if (!it.isRecycled) it.recycle() }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "明牌检测异常: ${e.message}")
+                }
+
                 // V2.9.645: 对手筹码历史补全——解决"头像有牌面遮挡时OCR读不到筹码"的问题
                 //   规则: 座位inHand=true但OCR读不到→用历史缓存值兜底(上一手有效读数)
                 //   更新: OCR读到有效值→更新历史缓存；翻前首帧清理弃牌座位的历史(避免跨手污染)
@@ -2072,7 +2092,7 @@ return VisionResult(isPokerTable, parseCards(data.optJSONArray("hole_cards")), p
                         if (dButtonSeatLocal >= 0) dButtonSeatLocal else (action?.dButtonSeat ?: -1)
                     ),
                     rawResponse = "V2: board=${boardResult?.rawResponse?.take(100)} | action=${action?.rawResponse?.take(100)}",
-                    showdownCards = emptyList(),
+                    showdownCards = if (localShowdownCards.isNotEmpty()) localShowdownCards else (result?.showdownCards ?: emptyList()),
                     oppHud = emptyList(),
                     buttonPositions = action?.buttonPositions ?: emptyList(),
                     suitUncertain = false,

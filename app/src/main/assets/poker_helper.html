@@ -1391,7 +1391,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.667',
+  CURRENT_VERSION:'2.9.668',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2849,7 +2849,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.667';
+var APP_VERSION = '2.9.668';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -4035,7 +4035,7 @@ function decidePostflop(k,_pfInj){
       }
       if(_aiEff>40){_aiThresh=Math.max(_aiThresh,40);}
     }catch(_aiE){}
-    // V2.9.667 FIX(P0): 小对子(22-99)在连牌面/同花面脆弱,提高门槛
+    // V2.9.668 FIX(P0): 小对子(22-99)在连牌面/同花面脆弱,提高门槛
     try{
       var _spH=hole||[];
       var _spPair=_spH.length>=2&&_spH[0].rank===_spH[1].rank;
@@ -4597,7 +4597,7 @@ var _RIV={
   };
 
 function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,_is3bP3,_isMW3,eq){
-    // V2.9.667 FIX(P1): _sprAdj3默认值改为根据实际SPR分区计算，不再依赖未定义的全局_sprAdj
+    // V2.9.668 FIX(P1): _sprAdj3默认值改为根据实际SPR分区计算，不再依赖未定义的全局_sprAdj
     if(!_sprAdj3){
       var _rivSpr=calcSPR();
       if(_rivSpr<3){_sprAdj3={fcb:1.15,cbet:0.85,bluff:0.5};}
@@ -5007,7 +5007,7 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk,eq){
       var _cfBase=adjC+adjF;
       if(_cfBase>0.001){adjC+=_dR*(adjC/_cfBase);adjF+=_dR*(adjF/_cfBase);}
     }
-    // V2.9.667 FIX(P1): SPR区面CBet调整——从calcSPR()本地计算
+    // V2.9.668 FIX(P1): SPR区面CBet调整——从calcSPR()本地计算
     var _sprCur2=calcSPR();
     var _sprAdjSafe={fcb:1,cbet:1,bluff:1};
     if(_sprCur2<3){_sprAdjSafe={fcb:1.15,cbet:1.1,bluff:0.85};}
@@ -5065,7 +5065,7 @@ function _facingCR(k,hcKey,btKey,betSz,pot,eq){
     var table=_FCR[btKey];
     if(!table||!table[hcKey])return null;
     var e=table[hcKey];
-    // V2.9.667 FIX(P1): 补全 _facingCR 缺失的调整链(与 _facingCBet 对齐)
+    // V2.9.668 FIX(P1): 补全 _facingCR 缺失的调整链(与 _facingCBet 对齐)
     var adjC=e.c, adjR=e.rr, adjF=e.f;
     var _street2=(typeof street!=='undefined')?street:(typeof G!=='undefined'&&G.street?G.street:'flop');
     if(_street2==='turn'){adjC=Math.max(0,adjC-0.06);adjR=Math.max(0,adjR-0.02);adjF=Math.min(1,adjF+0.08);}
@@ -10998,7 +10998,7 @@ function riverExactEquity(hole,comm,oppRange,nOpponents){
     var w=0,t=0,total=0;
     for(var oi=0;oi<oppHands.length;oi++){
       for(var oj=oi+1;oj<oppHands.length;oj++){
-        // V2.9.667 FIX(P2): 排除共享牌
+        // V2.9.668 FIX(P2): 排除共享牌
         var _shared=false;
         for(var _si=0;_si<2;_si++){for(var _sj=0;_sj<2;_sj++){
           if(oppHands[oi][_si].rank===oppHands[oj][_sj].rank&&oppHands[oi][_si].suit===oppHands[oj][_sj].suit){_shared=true;break;}

@@ -597,4 +597,70 @@ object RegionCropper {
             } catch (_: Exception) {}
         }
     }
+
+    // ========== V2.9.668: 对手明牌(Showdown)区域裁剪 ==========
+
+    /**
+     * V2.9.668: 获取对手座位的明牌(Showdown)区域
+     * GG Poker 6-max桌，对手明牌位于头像附近：
+     * - 左上/右上座位：牌在头像下方
+     * - 左中/右中座位：牌在头像旁边
+     * - 正上座位：牌在头像下方
+     * - 正下座位(Hero)：不处理
+     * 
+     * 返回6个座位的明牌区域裁剪结果，null表示该座位无明牌
+     */
+    fun cropOpponentShowdownCards(screenshot: Bitmap): Map<Int, Bitmap> {
+        val result = HashMap<Int, Bitmap>()
+        try {
+            val sw = screenshot.width
+            val sh = screenshot.height
+            val sx = sw / 1080f
+            val sy = sh / 2344f
+
+            // 6个座位的明牌区域（1080x2344基准）
+            // 每张明牌约 65x90 像素，两张牌横排约 140x90
+            val showdownRegions = listOf(
+                // seat, x, y, w, h
+                0 to intArrayOf(60, 870, 140, 100),     // 左上
+                1 to intArrayOf(300, 430, 140, 100),    // 正上
+                2 to intArrayOf(860, 870, 140, 100),    // 右上
+                3 to intArrayOf(900, 1180, 140, 100),   // 右中
+                // seat 4 is Hero, skip
+                5 to intArrayOf(20, 1180, 140, 100),    // 左中
+            )
+
+            for ((seat, region) in showdownRegions) {
+                val rx = (region[0] * sx).toInt().coerceIn(0, sw - 1)
+                val ry = (region[1] * sy).toInt().coerceIn(0, sh - 1)
+                val rw = (region[2] * sx).toInt().coerceAtMost(sw - rx)
+                val rh = (region[3] * sy).toInt().coerceAtMost(sh - ry)
+
+                if (rw < 50 || rh < 50) continue
+
+                val bmp = Bitmap.createBitmap(screenshot, rx, ry, rw, rh)
+
+                // 检测是否为有效明牌区域：白色卡片像素占比>20%
+                val pixels = IntArray(rw * rh)
+                bmp.getPixels(pixels, 0, rw, 0, 0, rw, rh)
+                var whitePixels = 0
+                for (p in pixels) {
+                    val r = p shr 16 and 0xFF
+                    val g = p shr 8 and 0xFF
+                    val b = p and 0xFF
+                    if (r > 200 && g > 200 && b > 200) whitePixels++
+                }
+                val whiteRatio = whitePixels.toFloat() / pixels.size
+
+                if (whiteRatio > 0.20f) {
+                    result[seat] = bmp
+                } else {
+                    bmp.recycle()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "对手明牌裁剪失败: ${e.message}")
+        }
+        return result
+    }
 }

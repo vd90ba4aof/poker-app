@@ -1239,17 +1239,20 @@ class LocalActionRecognizer private constructor(private val context: Context) {
         DZone(5, 101, 1317)    // seat5 左中：D实测(101,1317)✅
     )
 
-    private val D_ZONE_RADIUS = 55
+    // V2.9.668: 扩大D按钮搜索半径，适配不同分辨率下D按钮偏移
+    private val D_ZONE_RADIUS = 85
     // D按钮主体：金黄色（R>200, G>160, B<100）
     private val D_BODY_R_MIN = 200
     private val D_BODY_G_MIN = 160
     private val D_BODY_B_MAX = 100
     // D字母：深色（R<80, G<80, B<80）
     private val D_LETTER_MAX = 80
-    private val D_MIN_BODY = 150
+    // V2.9.668: 降低最小主体像素，适配小尺寸D按钮
+    private val D_MIN_BODY = 100
     private val D_MAX_BODY = 2500
     private val D_MIN_CLUSTER = 18
-    private val D_MIN_DARK_IN = 30
+    // V2.9.668: 降低最小暗色像素，适配浅色D字母变体
+    private val D_MIN_DARK_IN = 15
     private val D_GREEN_RATIO = 0.35f
 
     data class DButtonResult(
@@ -1445,6 +1448,18 @@ class LocalActionRecognizer private constructor(private val context: Context) {
                 }
             }
 
+            // V2.9.668: 全表备用扫描——当分区未找到D按钮时，在桌面felt区域全范围搜索
+            if (bestSeat < 0) {
+                val fullScanResult = fullTableDButtonScan(screenshot, sw, sh, sx, sy)
+                if (fullScanResult.seat >= 0 && fullScanResult.confidence >= 0.25f) {
+                    bestSeat = fullScanResult.seat
+                    bestX = fullScanResult.x
+                    bestY = fullScanResult.y
+                    bestScore = fullScanResult.confidence
+                    Log.d(TAG, "🎲 D按钮全表扫描: seat=$bestSeat conf=%.2f".format(bestScore))
+                }
+            }
+
             if (bestSeat >= 0) {
                 Log.d(TAG, "🎲 D按钮检测: seat=$bestSeat pos=($bestX,$bestY) conf=%.2f".format(bestScore))
             }
@@ -1453,5 +1468,161 @@ class LocalActionRecognizer private constructor(private val context: Context) {
             Log.w(TAG, "D按钮检测失败: ${e.message}")
             DButtonResult(-1, 0, 0, 0f)
         }
+    }
+
+    /**
+     * V2.9.668: 全表D按钮备用扫描——在桌面felt区域按网格搜索D按钮
+     * 用于分区坐标偏移时兜底，扫描范围覆盖整个桌面椭圆区域
+     */
+    private fun fullTableDButtonScan(screenshot: Bitmap, sw: Int, sh: Int, sx: Float, sy: Float): DButtonResult {
+        return try {
+            // 桌面felt区域：排除顶部状态栏和底部按钮行
+            val scanTop = (150 * sy).toInt().coerceAtLeast(0)
+            val scanBottom = (sh - 250 * sy).toInt().coerceAtMost(sh)
+            val scanLeft = 0
+            val scanRight = sw
+
+            // 按80px网格步进扫描
+            val step = (80 * (sx + sy) / 2f).toInt().coerceAtLeast(40)
+            val radius = (45 * (sx + sy) / 2f).toInt().coerceAtLeast(20)
+
+            var bestSeat = -1
+            var bestX = 0
+            var bestY = 0
+            var bestScore = 0f
+
+            var gy = scanTop
+            while (gy < scanBottom) {
+                var gx = scanLeft
+                while (gx < scanRight) {
+                    val x0 = (gx - radius).coerceIn(0, sw - 1)
+                    val y0 = (gy - radius).coerceIn(0, sh - 1)
+                    val x1 = (gx + radius).coerceIn(x0 + 1, sw)
+                    val y1 = (gy + radius).coerceIn(y0 + 1, sh)
+                    val zw = x1 - x0
+                    val zh = y1 - y0
+                    if (zw < 10 || zh < 10) { gx += step; continue }
+
+                    val pixels = IntArray(zw * zh)
+                    screenshot.getPixels(pixels, 0, zw, x0, y0, zw, zh)
+
+                    // 统计金黄色像素比例
+                    var bodyCount = 0
+                    var darkCount = 0
+                    for (p in pixels) {
+                        if (isDBody(p)) bodyCount++
+                        if (isDLetter(p)) darkCount++
+                    }
+
+                    val totalPixels = zw * zh
+                    val bodyRatio = bodyCount.toFloat() / totalPixels
+                    val darkRatio = darkCount.toFloat() / totalPixels
+
+                    // D按钮特征：金黄色占比5-20%，深色字母占比3-15%
+                    if (bodyRatio > 0.05f && bodyRatio < 0.25f && darkRatio > 0.02f && darkRatio < 0.20f) {
+                        val score = (bodyRatio * 0.5f + darkRatio * 0.5f) * 3f
+                        if (score > bestScore) {
+                            bestScore = score
+                            bestX = gx
+                            bestY = gy
+                            // 根据位置估算seat
+                            bestSeat = estimateSeatFromPosition(gx, gy, sw, sh)
+                        }
+                    }
+                    gx += step
+                }
+                gy += step
+            }
+
+            DButtonResult(bestSeat, bestX, bestY, bestScore)
+        } catch (e: Exception) {
+            Log.w(TAG, "全表D按钮扫描失败: ${e.message}")
+            DButtonResult(-1, 0, 0, 0f)
+        }
+    }
+
+    /**
+     * V2.9.668: 根据D按钮像素位置估算所属座位
+     */
+    private fun estimateSeatFromPosition(x: Int, y: Int, sw: Int, sh: Int): Int {
+        val cx = sw / 2f
+        val cy = sh / 2f
+        // 6个方位：正上(1) / 右上(2) / 右中(3) / 正下(4) / 左中(5) / 左上(0)
+        val dx = x - cx
+        val dy = y - cy
+        val angle = Math.atan2(dy.toDouble(), dx.toDouble()) * 180.0 / Math.PI
+        // 角度转座位：-180~180度映射到6个座位
+        val normalizedAngle = (angle + 360) % 360
+        return when {
+            normalizedAngle >= 300 || normalizedAngle < 60 -> 4  // 底部=Hero
+            normalizedAngle >= 60 && normalizedAngle < 120 -> 5  // 左下=左中
+            normalizedAngle >= 120 && normalizedAngle < 180 -> 0  // 左上
+            normalizedAngle >= 180 && normalizedAngle < 240 -> 1  // 顶部
+            normalizedAngle >= 240 && normalizedAngle < 300 -> 2  // 右上
+            else -> 3  // 右中
+        }
+    }
+
+    // ========== V2.9.668: 对手明牌(Showdown)本地CV检测 ==========
+
+    data class ShowdownCardResult(
+        val seat: Int,
+        val cards: List<String>,  // e.g. ["Ah", "Kd"]
+        val confidence: Float
+    )
+
+    /**
+     * V2.9.668: 检测对手明牌区域是否有亮出的牌
+     * 使用白色卡片背景检测 + 简单像素特征分析
+     * 注意：这是初步检测，精确牌面识别由VLM完成
+     */
+    fun detectShowdownCards(seatCardsMap: Map<Int, Bitmap>): List<ShowdownCardResult> {
+        val results = mutableListOf<ShowdownCardResult>()
+        try {
+            for ((seat, cardBmp) in seatCardsMap) {
+                try {
+                    val cw = cardBmp.width
+                    val ch = cardBmp.height
+                    if (cw < 20 || ch < 20) continue
+
+                    val pixels = IntArray(cw * ch)
+                    cardBmp.getPixels(pixels, 0, cw, 0, 0, cw, ch)
+
+                    // 检测白色卡片背景占比
+                    var whitePixels = 0
+                    var redPixels = 0
+                    var blackPixels = 0
+                    for (p in pixels) {
+                        val r = p shr 16 and 0xFF
+                        val g = p shr 8 and 0xFF
+                        val b = p and 0xFF
+                        if (r > 200 && g > 200 && b > 200) whitePixels++
+                        if (r > 130 && g < 90 && b < 90) redPixels++
+                        if (r < 70 && g < 70 && b < 70) blackPixels++
+                    }
+                    val total = pixels.size.toFloat()
+                    val whiteRatio = whitePixels / total
+                    val redRatio = redPixels / total
+                    val blackRatio = blackPixels / total
+
+                    // 有明牌的特征：白色背景>15% + 有红色或黑色牌面像素
+                    val hasCard = whiteRatio > 0.15f && (redRatio > 0.01f || blackRatio > 0.01f)
+
+                    if (hasCard) {
+                        // 使用简单的颜色分布作为置信度
+                        val conf = (whiteRatio * 0.4f + (redRatio + blackRatio) * 0.6f).coerceAtMost(0.8f)
+                        // 牌面具体内容留给VLM识别，这里返回占位符
+                        results.add(ShowdownCardResult(seat, listOf("showdown"), conf))
+                        Log.d(TAG, " 对手明牌seat=$seat: detected conf=%.2f white=%.1f%% red=%.1f%% black=%.1f%%".format(
+                            conf, whiteRatio * 100, redRatio * 100, blackRatio * 100))
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "明牌检测seat=$seat失败: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "明牌检测整体失败: ${e.message}")
+        }
+        return results
     }
 }
