@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.677',
+  CURRENT_VERSION:'2.9.678',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.677';
+var APP_VERSION = '2.9.678';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8350,6 +8350,7 @@ function handClassify(hole,comm){
       // 实证: 9d9c在三花面eq=53.4%实际只有30-35%，中对在三花面极其脆弱
       // 逻辑: 三花面+手牌未完全阻断(0-1张该花色) → 中对/底对降级为AIR
       // 例外: 顶对顶踢(TPTK)在三花面仍保持MEDIUM(有踢脚价值)
+      var _downgradedBy3Flush=false;  // V2.9.678: 防止三花面降级被后续DRAW升级覆盖
       if(_boardHas3Flush && madeType==='MEDIUM'){
         // 找出三花面的花色
         var _flush3Suit=null;
@@ -8361,6 +8362,7 @@ function handClassify(hole,comm){
           // 未完全阻断(0-1张) → 降级中对/底对
           if(_holeFlushCount<2){
             madeType='AIR';pairSubType+='(三花面降级)';
+            _downgradedBy3Flush=true;  // V2.9.678: 标记已降级，防止后续DRAW覆盖
             console.log('[V2.9.676牌力] 三花面对子降级MEDIUM→AIR(手牌'+_holeFlushCount+'张'+_flush3Suit+'阻断)');
           }
         }
@@ -8388,16 +8390,16 @@ function handClassify(hole,comm){
     outs=2;
     if(bonusOuts>0){outs+=bonusOuts;hasComboDraw=true;}
   }
-  if(madeType==='AIR'&&(flushDraw||isOpenEnd||isGutshot)){
+  if(madeType==='AIR'&&!_downgradedBy3Flush&&(flushDraw||isOpenEnd||isGutshot)){
     madeType='DRAW';
     if(isOpenEnd){outs=flushDraw?15:8;}      // V2.9.602: 听花+两端顺=15outs(9+8-重叠2张同花补牌),旧8+9=17双计
     else if(isGutshot){outs=flushDraw?12:4;}  // V2.9.602: 听花+卡顺=12outs(9+4-重叠1),旧4+9=13双计
     else if(flushDraw){outs=9;}
     if((isOpenEnd||isGutshot)&&flushDraw)hasComboDraw=true;
   }
-    // V2.9.161: Ace-high超牌=3outs但不标记isGutshot(根修误判)
+  // V2.9.161: Ace-high超牌=3outs但不标记isGutshot(根修误判)
   var isOvercard=false;
-  if(madeType==="AIR"
+  if(madeType==="AIR"&&!_downgradedBy3Flush
     &&holeRanks.indexOf(12)>=0&&commCount>=3&&commCount<5){ // V2.9.602: 超牌听牌outs仅翻牌/转牌(有补牌),河牌cc=5无补牌不应标3outs听牌
     var _maxComm=comm.filter(function(c){return c;}).map(function(c){return RV[c.rank];});
     _maxComm=_maxComm.length>0?Math.max.apply(null,_maxComm):-1;
@@ -8407,7 +8409,7 @@ function handClassify(hole,comm){
   // 实证: KcTc@Jd5s8s、Jc8c@KhTdKd、Kh8h@9c5c5d都被错误标记为DRAW
   // 这些牌没有同花听牌(花色<4)、没有顺子听牌(间隔太大)，只是单纯高牌
   // 修复: 超牌只有在有实际outs(后门听牌)时才标记DRAW，否则保持AIR
-  if(madeType==="AIR"&&!isOvercard&&commCount>=3&&commCount<5){
+  if(madeType==="AIR"&&!_downgradedBy3Flush&&!isOvercard&&commCount>=3&&commCount<5){
     var _bestHole=holeRanks.length>0?Math.max.apply(null,holeRanks):-1;
     var _maxComm2=comm.filter(function(c){return c;}).map(function(c){return RV[c.rank];});
     _maxComm2=_maxComm2.length>0?Math.max.apply(null,_maxComm2):-1;
@@ -8444,7 +8446,7 @@ function handClassify(hole,comm){
     }
   }
   // V2.9.48-fix: 公共牌对子面，没有手牌参与→检查是否有顺子听牌
-  if(madeType==='AIR'&&hasBoardPair&&!hasHolePair&&commCount>=3&&commCount<5){ // V2.9.602: 板对子顺听outs仅翻/转,河牌无补牌
+  if(madeType==='AIR'&&!_downgradedBy3Flush&&hasBoardPair&&!hasHolePair&&commCount>=3&&commCount<5){ // V2.9.602: 板对子顺听outs仅翻/转,河牌无补牌
     if(isOpenEnd){madeType='DRAW';outs=8;}
     else if(isGutshot){madeType='DRAW';outs=4;}
   }
