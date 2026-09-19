@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.681',
+  CURRENT_VERSION:'2.9.682',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.681';
+var APP_VERSION = '2.9.682';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -4063,6 +4063,59 @@ function postflopSceneNorm(rawScene,bet,stk){
 // go()(多对手Worker异步预算)与StrategyEngine.decidePostflop(兜底自算)共用,
 // 杜绝"go()按单挑cbet范围Worker算一遍 + SE按行动线多对手范围UI主线程同步重算一遍"的口径分裂与卡顿。
 // sceneIn 已按SE规则归一(check / raise / allin); nActive=含我方在内的活跃人数。
+
+// V2.9.682 FIX: 多人池范围收窄——多人池中存活对手范围更紧,移除弱牌避免MC权益膨胀
+function _narrowRangeMultiway(baseArr,nOpp){
+  if(!baseArr||baseArr.length===0||nOpp<2)return baseArr;
+  try{
+    // 评分函数:对子高分,suited broadway中高分,suited连张中分,offsuit低分
+    var scored=[];
+    for(var i=0;i<baseArr.length;i++){
+      var key=String(baseArr[i]);
+      var score=0;
+      var isPair=key.length===2;
+      var r0=RV[key[0]],r1=RV[key[1]];
+      var gap=(r0!==undefined&&r1!==undefined)?Math.abs(r0-r1):9;
+      var suited=key.indexOf('s')>=0;
+      var hi=key[0];
+      if(isPair){
+        // 对子:按牌力评分,22=10,AA=23
+        score=10+r0;
+      }else if(suited&&'AKQ'.indexOf(hi)>=0&&gap<=2){
+        // suited broadway连张:AKs,AQs,KQs等
+        score=15+r0-gap;
+      }else if(suited&&'AKQ'.indexOf(hi)>=0){
+        // suited broadway非连张
+        score=12+r0-gap*0.5;
+      }else if(suited&&gap<=2&&r0>=RV['8']){
+        // suited连张87s+
+        score=10+r0-gap;
+      }else if(suited&&gap<=3){
+        // 其他suited
+        score=6+r0-gap*0.5;
+      }else{
+        // offsuit
+        score=2+r0-gap*0.3;
+      }
+      scored.push({key:key,score:score});
+    }
+    // 按分数降序排序
+    scored.sort(function(a,b){return b.score-a.score;});
+    // 保留数量:每多一对手移除20%,最少保留10手,最多移除60%
+    var keepCount=Math.max(10,Math.round(baseArr.length*(1-(nOpp-1)*0.2)));
+    keepCount=Math.min(keepCount,Math.round(baseArr.length*0.4)); // 最多保留40%
+    keepCount=Math.min(keepCount,scored.length);
+    var result=[];
+    for(var j=0;j<keepCount;j++){
+      result.push(scored[j].key);
+    }
+    console.log('[MW范围收窄] nOpp='+nOpp+' '+baseArr.length+'→'+result.length+'手');
+    return result;
+  }catch(e){
+    return baseArr;
+  }
+}
+
 function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive){
   try{
     var _nOpp=Math.max(1,(nActive||2)-1);
@@ -4070,6 +4123,8 @@ function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive){
     var line=(sceneIn==='check')?'cbet':(bc.length===5?'barrel_river':bc.length===4?'barrel_turn':'cbet');
     var wet=(bTexture&&bTexture.wetness>=2)?'wet':'dry';
     var range=getOppRange('postflop',line,wet);
+    // V2.9.682 FIX: 多人池范围收窄——移除弱牌避免MC权益膨胀
+    range=_narrowRangeMultiway(range,_nOpp);
     var iter, isRiver=(bc.filter(function(c){return c;}).length===5);
     if(isRiver){
       // 河牌走精确枚举(2对手且范围<=200组合枚举,否则2000次MC),与riverExactEquity内部回退一致
@@ -4907,6 +4962,8 @@ function _turnFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sp
       var bTexture=boardTexture(bc);
       var _oppLineEnum=(scene==='check')?'cbet':'raise';  // V2.9.601: check=对手过牌=范围弱,与主路径L3418同语义用cbet宽基线(旧错用barrel_turn极化→eq低估)
       var oppRange=getOppRange('postflop',_oppLineEnum,bTexture.wetness>=2?'wet':'dry');
+      // V2.9.682 FIX: 兜底路径也做多人池范围收窄(与postflopEqSpec同口径)
+      oppRange=_narrowRangeMultiway(oppRange,(_nOpp&&_nOpp>=1)?_nOpp:1);
       if(!oppRange||oppRange.length===0)return null;
       var mcI=2000;
       if(betSz>0&&betSz/(pot+betSz)>=.66)mcI=3500;
