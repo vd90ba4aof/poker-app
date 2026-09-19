@@ -8237,6 +8237,12 @@ function handClassify(hole,comm){
     // 顺子+板面有对子(可能被葫芦)或非坚果顺(可能被更高顺)→STRONG
     if(_boardHasPair||_isNonNutStraight){madeType='STRONG';}
     else{madeType='NUTS';}
+    // V2.9.676 FIX(P0): 顺子在三花面的降级——顺子在三花面也很脆弱
+    // 实证: 顺子在三花面容易被同花beat，应该降级为STRONG
+    if(_boardHas3Flush && madeType==='NUTS'){
+      madeType='STRONG';pairSubType+='(三花面降级)';
+      console.log('[V2.9.676牌力] 顺子在三花面降级NUTS→STRONG');
+    }
   }else if(madeHand2==='set'){
     // set+板面4同花(可能被同花beat)→STRONG
     // V2.9.572 根因⑤: 板面3同花(三花听牌面,翻/转)→再来一花即beat set→STRONG不再NUTS;
@@ -8294,6 +8300,12 @@ function handClassify(hole,comm){
         console.log('[V2.9.665牌力] 底两对降级STRONG→MEDIUM(hero='+_tpHeroPair+'<board单张='+_tpMaxBoardSingle+')');
       }else{
         madeType='STRONG';pairSubType='两对(手牌参与)';
+      }
+      // V2.9.676 FIX(P0): 两对在三花面的降级——顶两对在三花面也很脆弱
+      // 实证: 两对在三花面容易被同花beat，应该降级为MEDIUM
+      if(_boardHas3Flush && madeType==='STRONG'){
+        madeType='MEDIUM';pairSubType+='(三花面降级)';
+        console.log('[V2.9.676牌力] 两对在三花面降级STRONG→MEDIUM');
       }
     }else{
       // 板面1对+手牌没参与→其实只有1对
@@ -8388,13 +8400,44 @@ function handClassify(hole,comm){
     _maxComm=_maxComm.length>0?Math.max.apply(null,_maxComm):-1;
     if(_maxComm<12){madeType="DRAW";outs=3;isOvercard=true;pairSubType='Ace-high超牌';}
   }
-  // V2.9.161: 其他超牌(K/Q-high on low board)
-  if(madeType==="AIR"&&!isOvercard&&commCount>=3&&commCount<5){ // V2.9.602: 同上,K/Q超牌河牌不标听牌
+  // V2.9.676 FIX(P0): 超牌DRAW逻辑过于激进——单纯高牌不应标记为DRAW
+  // 实证: KcTc@Jd5s8s、Jc8c@KhTdKd、Kh8h@9c5c5d都被错误标记为DRAW
+  // 这些牌没有同花听牌(花色<4)、没有顺子听牌(间隔太大)，只是单纯高牌
+  // 修复: 超牌只有在有实际outs(后门听牌)时才标记DRAW，否则保持AIR
+  if(madeType==="AIR"&&!isOvercard&&commCount>=3&&commCount<5){
     var _bestHole=holeRanks.length>0?Math.max.apply(null,holeRanks):-1;
     var _maxComm2=comm.filter(function(c){return c;}).map(function(c){return RV[c.rank];});
     _maxComm2=_maxComm2.length>0?Math.max.apply(null,_maxComm2):-1;
     if(_bestHole>_maxComm2&&_bestHole>=10){
-      madeType="DRAW";outs=3;isOvercard=true;pairSubType=(_bestHole>=12?'A':'K')+'-high超牌';
+      // 检查是否有实际outs(同花/顺子听牌)
+      var _hasRealOuts=flushDraw||isOpenEnd||isGutshot;
+      // 检查后门听牌(翻牌才有后门)
+      var _hasBackdoor=false;
+      if(commCount===3){
+        // 后门同花: 手牌2张同花 + 公共牌至少1张同花
+        if(hole.length>=2&&hole[0]&&hole[1]&&hole[0].suit===hole[1].suit){
+          var _holeSuit=hole[0].suit;
+          var _commMatchSuits=comm.filter(function(c){return c&&c.suit===_holeSuit;}).length;
+          if(_commMatchSuits>=1)_hasBackdoor=true;
+        }
+        // 后门顺子: 手牌2张间隔<=3 + 公共牌在手牌范围附近
+        if(!_hasBackdoor&&hole.length>=2&&hole[0]&&hole[1]){
+          var _holeRanks2=holeRanks.slice().sort(function(a,b){return a-b;});
+          var _gap=_holeRanks2[1]-_holeRanks2[0];
+          if(_gap<=3){
+            var _minHole=_holeRanks2[0],_maxHole=_holeRanks2[1];
+            var _commNear=comm.filter(function(c){return c;}).some(function(c){
+              var r=RV[c.rank];return r>=_minHole-2&&r<=_maxHole+2;
+            });
+            if(_commNear)_hasBackdoor=true;
+          }
+        }
+      }
+      // 有实际outs或后门听牌才标记DRAW
+      if(_hasRealOuts||_hasBackdoor){
+        madeType="DRAW";outs=3;isOvercard=true;pairSubType=(_bestHole>=12?'A':'K')+'-high超牌';
+      }
+      // 否则保持AIR，不标记为DRAW
     }
   }
   // V2.9.48-fix: 公共牌对子面，没有手牌参与→检查是否有顺子听牌
