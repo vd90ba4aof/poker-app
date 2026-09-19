@@ -8331,6 +8331,25 @@ function handClassify(hole,comm){
         if(topPairR>=minCommRank){madeType='MEDIUM';pairSubType='中对';}
         else{madeType='MEDIUM';pairSubType='底对';}
       }
+      // V2.9.676 FIX(P0): 三花面对子降级——9d9c在4c Tc 3c面被判MEDIUM导致错误call all-in
+      // 实证: 9d9c在三花面eq=53.4%实际只有30-35%，中对在三花面极其脆弱
+      // 逻辑: 三花面+手牌未完全阻断(0-1张该花色) → 中对/底对降级为AIR
+      // 例外: 顶对顶踢(TPTK)在三花面仍保持MEDIUM(有踢脚价值)
+      if(_boardHas3Flush && madeType==='MEDIUM'){
+        // 找出三花面的花色
+        var _flush3Suit=null;
+        for(var _bs3k in _boardSuits){if(_boardSuits[_bs3k]>=3){_flush3Suit=_bs3k;break;}}
+        if(_flush3Suit){
+          // 检查手牌是否完全阻断该花色(持有2张)
+          var _holeFlushCount=0;
+          hole.filter(function(c){return c;}).forEach(function(c){if(c.suit===_flush3Suit)_holeFlushCount++;});
+          // 未完全阻断(0-1张) → 降级中对/底对
+          if(_holeFlushCount<2){
+            madeType='AIR';pairSubType+='(三花面降级)';
+            console.log('[V2.9.676牌力] 三花面对子降级MEDIUM→AIR(手牌'+_holeFlushCount+'张'+_flush3Suit+'阻断)');
+          }
+        }
+      }
     }else{
       // 有对子但手牌没参与也不走上面的逻辑→fallback
       madeType='AIR';pairSubType='无对';
