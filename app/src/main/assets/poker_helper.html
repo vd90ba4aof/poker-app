@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.687',
+  CURRENT_VERSION:'2.9.688',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2946,7 +2946,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.687';
+var APP_VERSION = '2.9.688';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3160,7 +3160,9 @@ function _getBaseline(){
 }
 
 function _oppDev(stat,actual,gto,sd){
-  if(actual<0||!sd||sd===0)return 0;
+  // V2.9.688 FIX(P0): actual>100视为无效数据(百分比物理上限100)——防御脏profile流入,
+  //   实证: vpip=1220%产生dev=149→假触发"价值下注加大"
+  if(actual<0||actual>100||!sd||sd===0)return 0;
   return(actual-gto)/sd;
 }
 
@@ -6171,8 +6173,13 @@ var DRTA={
     if(street==='preflop'&&(action==='call'||action==='bet'||action==='raise'||action==='reraise')){
       // V2.9.672 FIX(P1) BUG7: VPIP计数器无去重→每手牌多次record()导致VPIP=286.7%(86/30手)
       //   修复: 用_vpipKey去重,每手preflop最多+1次(与_saw_flop去重逻辑一致)
-      var _vpipKey=(G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'';
-      if(t._vpipKey!==_vpipKey){t.vpip++;t._vpipKey=_vpipKey;}
+      // V2.9.688 FIX(P0): 去重键改用Kotlin手牌锁+硬上限——旧键依赖实时G.hole内容,
+      //   视觉识别闪烁导致key反复变化→同手重复计数。
+      //   实证(poker_log_20260920): t.vpip=64/t.hands=9=711%(物理上限100%),
+      //   getProfile().vpip=1220%流入_quantExploitAdjust→假触发"价值下注加大"(手牌5d4d实测)
+      //   修复: ①键优先G._handLockKey(全手稳定,仅换手更新) ②硬上限t.vpip<t.hands(每手最多计1次)
+      var _vpipKey=G._handLockKey||((G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'');
+      if(t._vpipKey!==_vpipKey&&t.vpip<t.hands){t.vpip++;t._vpipKey=_vpipKey;}
     }
     if(isFacingBet)t._bet_faced++;
     if(t.hands%3===0)this.save();
@@ -6229,7 +6236,9 @@ var DRTA={
       rangeDist:{wide:0.20,medium:0.40,tight:0.40}
     };
     if(t.hands<3)return p;
-    p.vpip=Math.round(t.vpip/t.hands*100);
+    // V2.9.688 FIX(P0): clamp上限100——兼容存量脏数据(旧版去重失效已写入的t.vpip虚高值),
+    //   防止>100%的VPIP流入classify(必误判fish)和_quantExploitAdjust(假触发剥削)
+    p.vpip=Math.min(100,Math.round(t.vpip/t.hands*100));
     p.pfr=Math.round(t.pfr/t.hands*100);
     p.af=parseFloat((t.bet_count/Math.max(t.call_count,1)).toFixed(2));
     p.fold_to_bet=t._bet_faced>0?Math.round(t._fold_to_bet/t._bet_faced*100):50;
@@ -8365,6 +8374,10 @@ function handClassify(hole,comm){
   else if(pairCount2[0]>=2&&pairCount2[1]>=2)madeHand2='twoPair';
   else if(pairCount2[0]>=2)madeHand2='pair';
   var madeType='high';var pairSubType='';var _downgradedBy3Flush=false;
+  // V2.9.688 FIX(P1): 区分降级来源——对子面/连牌面降级(684/680/681)与三花面降级(676/678)分标志。
+  //   三花面降级: 同花听牌仍合法(679原则:补牌=同花完成牌); 对子/连牌面降级: 同花听牌也不复活(684原则)。
+  //   旧代码用!_boardHasPair&&!_boardIsConnected拦"板面特征"误伤未降级的高张+同花听牌(如AsQs@77x被剥夺DRAW)
+  var _downgradedByBoardHazard=false;
   // V2.9.152: 湿面降级——set/straight/flush在湿面不一定是NUTS
   // 检测板面湿面条件
   var _boardSuits={};
@@ -8508,11 +8521,11 @@ function handClassify(hole,comm){
       if(pairSubType.indexOf('底两对')===0){
         if(_boardHasPair){
           madeType='AIR';pairSubType+='(对子面降级)';
-          _downgradedBy3Flush=true;
+          _downgradedBy3Flush=true;_downgradedByBoardHazard=true;
           console.log('[V2.9.684牌力] 底两对在对子面降级MEDIUM→AIR('+pairSubType+')');
         }else if(_boardIsConnected){
           madeType='AIR';pairSubType+='(连牌面降级)';
-          _downgradedBy3Flush=true;
+          _downgradedBy3Flush=true;_downgradedByBoardHazard=true;
           console.log('[V2.9.684牌力] 底两对在连牌面降级MEDIUM→AIR('+pairSubType+')');
         }
       }
@@ -8575,7 +8588,7 @@ function handClassify(hole,comm){
       // 根因: 对子面+中对/底对=极弱，容易被葫芦beat，且对手范围偏强
       if((pairSubType==='中对'||pairSubType==='底对')&&_boardHasPair){
         madeType='AIR';pairSubType+='(对子面降级)';
-        _downgradedBy3Flush=true;  // V2.9.680: 对子面降级也阻止DRAW升级
+        _downgradedBy3Flush=true;_downgradedByBoardHazard=true;  // V2.9.680: 对子面降级也阻止DRAW升级
         console.log('[V2.9.680牌力] 中对/底对在对子面降级MEDIUM→AIR('+pairSubType+')');
       }
       // V2.9.681 FIX(P0): 中对/底对在连牌面(3+张连牌)降级为AIR
@@ -8583,7 +8596,7 @@ function handClassify(hole,comm){
       // 连牌面+中对/底对=对手范围偏强(顺子可能性高)
       if(madeType==='MEDIUM'&&(pairSubType==='中对'||pairSubType==='底对')&&_boardIsConnected){
         madeType='AIR';pairSubType+='(连牌面降级)';
-        _downgradedBy3Flush=true;  // V2.9.681: 连牌面降级也阻止DRAW升级
+        _downgradedBy3Flush=true;_downgradedByBoardHazard=true;  // V2.9.681: 连牌面降级也阻止DRAW升级
         console.log('[V2.9.681牌力] 中对/底对在连牌面降级MEDIUM→AIR('+pairSubType+')');
       }
       // V2.9.676 FIX(P0): 三花面对子降级——9d9c在4c Tc 3c面被判MEDIUM导致错误call all-in
@@ -8677,7 +8690,11 @@ function handClassify(hole,comm){
     // 实证: 7♠6♠在7-7-8-9面（对子+连牌），降级AIR后不应复活为DRAW
     // 三花面：同花听牌仍然合法，允许升级
     // 对子面/连牌面：同花听牌也极弱，不复活
-    if(flushDraw && !_boardHasPair && !_boardIsConnected){
+    // V2.9.688 FIX(P1): 守卫从"板面特征"改为"降级状态"——旧条件!_boardHasPair&&!_boardIsConnected
+    //   误伤未降级的AIR(如AsQs高张+坚果同花听牌@7-7-2面被剥夺DRAW资格;684实证案例7♠6♠本无
+    //   同花听牌,只支持拦顺子复活)。改为仅拦"因对子/连牌面降级"的牌;三花面降级仍允许同花
+    //   听牌复活(679原则:补牌=同花完成牌)
+    if(flushDraw && !_downgradedByBoardHazard){
       madeType='DRAW';
       if(isOpenEnd){outs=15;}      // 同花+两端顺
       else if(isGutshot){outs=12;} // 同花+卡顺
@@ -10633,7 +10650,11 @@ function applyEquityGuard(action,eq,reliability){
     if(eq<25&&(a==='raise'||a==='raise_big'||a==='allin'))return 'fold';
   }else{
     // 高可靠: 只保底线
-    if(eq<40&&(a==='raise'||a==='raise_big'))return 'fold';
+    // V2.9.688 FIX(P0): 40→35,解除与applyExploit对手类型降级的边界耦合。
+    //   实证(poker_log_20260920手牌9): 5d4d UTG GTO RFI(20%)命中eq41→applyExploit(fish,raise-5%)
+    //   降为38.95→旧阈值<40推翻为fold——GTO混合开池被一刀切拦截,reason显示eq41却弃牌(显示与行为矛盾)。
+    //   applyExploit最大降12%(maniac raise),35阈值容忍降级余量,仍拦eq<35真弱牌(RFI表几乎不给这种牌频率)
+    if(eq<35&&(a==='raise'||a==='raise_big'))return 'fold';
     if(a==='allin'&&eq<65){if(eq>=50)return 'call';return 'fold';}
   }
   return a;
