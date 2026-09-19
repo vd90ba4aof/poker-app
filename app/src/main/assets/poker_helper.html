@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.678',
+  CURRENT_VERSION:'2.9.679',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.678';
+var APP_VERSION = '2.9.679';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8390,12 +8390,24 @@ function handClassify(hole,comm){
     outs=2;
     if(bonusOuts>0){outs+=bonusOuts;hasComboDraw=true;}
   }
-  if(madeType==='AIR'&&!_downgradedBy3Flush&&(flushDraw||isOpenEnd||isGutshot)){
-    madeType='DRAW';
-    if(isOpenEnd){outs=flushDraw?15:8;}      // V2.9.602: 听花+两端顺=15outs(9+8-重叠2张同花补牌),旧8+9=17双计
-    else if(isGutshot){outs=flushDraw?12:4;}  // V2.9.602: 听花+卡顺=12outs(9+4-重叠1),旧4+9=13双计
-    else if(flushDraw){outs=9;}
-    if((isOpenEnd||isGutshot)&&flushDraw)hasComboDraw=true;
+  if(madeType==='AIR'){
+    // V2.9.678 FIX(P0): 三花面降级后，同花听牌仍然合法，但顺子听牌是tainted outs
+    // 实证: As7c在7s-8s-Js-4d面，7对降级AIR，但仍有同花听牌（4张黑桃）
+    //   如果阻止所有DRAW升级，会误杀合法同花听牌
+    //   但纯顺子听牌（如7c5c在7s-8s-Jc-4s）在三花面是tainted outs
+    if(flushDraw){
+      // 同花听牌在三花面仍然合法，允许升级
+      madeType='DRAW';
+      if(isOpenEnd){outs=15;}      // 同花+两端顺
+      else if(isGutshot){outs=12;} // 同花+卡顺
+      else{outs=9;}                // 纯同花
+      if((isOpenEnd||isGutshot)&&flushDraw)hasComboDraw=true;
+    } else if(!_downgradedBy3Flush && (isOpenEnd||isGutshot)){
+      // 没有同花听牌时，三花面降级阻止顺子听牌升级
+      madeType='DRAW';
+      if(isOpenEnd){outs=8;}
+      else if(isGutshot){outs=4;}
+    }
   }
   // V2.9.161: Ace-high超牌=3outs但不标记isGutshot(根修误判)
   var isOvercard=false;
