@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.673',
+  CURRENT_VERSION:'2.9.674',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.673';
+var APP_VERSION = '2.9.674';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3742,13 +3742,13 @@ function decidePreflop(k){
           var _fcGap=Math.abs(_fcI1-_fcI2)-1;
           var _fcHasA=(_fcsr1==='A'||_fcsr2==='A');
           var _fcMinR=Math.min(_fcI1,_fcI2);
-          _fcSuitedOK=_fcHasA||(_fcMinR>=5)||(_fcGap<=1);
+          _fcSuitedOK=_fcHasA||(_fcMinR>=4)||(_fcGap<=2); // V2.9.674: 放宽suited质量——minRank>=5→4(T+),gap<=1→2(允许Q6s/J7s等)
         }
         var _fcQualOK=(_fcPair||_fcOffBW||(_fcSuited&&_fcSuitedOK));
         if(_fcQualOK){
           var _fcPo=bet/Math.max(pot+bet,1)*100;
-          // V2.9.662: 基准门槛从50%降到47%——面对2.5x open底池赔率~29%,47%=+18%缓冲合理
-          var _fcTh=47+Multiway.callThresholdAdj();
+          // V2.9.674: 基准门槛47→44——实测81%fold率证明47%仍过紧,44%≈底池赔率+15%缓冲仍合理
+          var _fcTh=44+Multiway.callThresholdAdj();
           if(G.act>=4)_fcTh-=3;  // V2.9.666: 补齐第二路径的多人池放宽(原遗漏)
           if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fcTh+=3;
           // SPR筹码深度调整(同limp兜底V2.9.660逻辑)
@@ -3829,12 +3829,12 @@ function decidePreflop(k){
           var _fc2Gap=Math.abs(_fc2I1-_fc2I2)-1;
           var _fc2HasA=(_fc2sr1==='A'||_fc2sr2==='A');
           var _fc2MinR=Math.min(_fc2I1,_fc2I2);
-          _fc2SuitedOK=_fc2HasA||(_fc2MinR>=5)||(_fc2Gap<=1);
+          _fc2SuitedOK=_fc2HasA||(_fc2MinR>=4)||(_fc2Gap<=2); // V2.9.674: 放宽suited质量(同第一路径)
         }
         var _fc2QualOK=(_fc2Pair||_fc2OffBW||(_fc2Suited&&_fc2SuitedOK));
         if(_fc2QualOK){
           var _fc2Po=bet/Math.max(pot+bet,1)*100;
-          var _fc2Th=47+Multiway.callThresholdAdj(); // V2.9.662: 50→47
+          var _fc2Th=44+Multiway.callThresholdAdj(); // V2.9.674: 47→44(同第一路径)
           // V2.9.672: 放宽GTO表——vs fish/calling_station降低FlatCall门槛5%
           //   日志实证: 17手fold因"不在3B范围",其中多数是中等强度手牌(Axs/Kxs/小对)
           //   fish对手特征: call多bluff少→中等牌showdown价值高→应放宽防守范围
@@ -7883,7 +7883,7 @@ function getOppPos(){
   try{
     if(G._raiserRole&&G._raiserRole!=='unknown')return G._raiserRole;
   }catch(e){}
-  return 'utg'; // V2.9.664: 最保守默认——假设early position raiser(范围最紧)
+  return 'mp'; // V2.9.674: utg→mp, 修正对手位置默认值——utg映射为UTG1表最紧导致大量手牌不在3B范围,mp更均衡覆盖
 }
 function postflopIP(pos){var _pfOrdPF={sb:1,bb:2,utg:3,utg1:4,mp:5,mp1:6,hj:7,co:8,btn:9};return(_pfOrdPF[pos]||5)>=7;}
 function calcSPR(){var h=G.hole.filter(function(c){return c;}).length;if(h<2)return 20;var effStk=G.stk;var p=G.pot>0?G.pot:1;return effStk/p;}
