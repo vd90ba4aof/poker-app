@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.682',
+  CURRENT_VERSION:'2.9.683',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.682';
+var APP_VERSION = '2.9.683';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -2986,7 +2986,7 @@ var _3B={
     from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},"44":{a:'c',f:.4},"33":{a:'c',f:.35},"22":{a:'c',f:.3},ATs:{a:'c',f:.8},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.5},JTs:{a:'c',f:.7},T9s:{a:'c',f:.7},KQs:{a:'c',f:.5},KQo:{a:'c',f:.4},KJo:{a:'c',f:.35},QJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJo:{a:'c',f:.45},ATo:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.35},"76s":{a:'c',f:.3},"65s":{a:'c',f:.25},"54s":{a:'c',f:.2}},
     from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},KQs:{a:'3b',f:.3},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},"66":{a:'c',f:.4},"55":{a:'c',f:.3},ATo:{a:'c',f:.6},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},KTs:{a:'c',f:.5},KJs:{a:'c',f:.4},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},QJo:{a:'c',f:.3},JTs:{a:'c',f:.5},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},"87s":{a:'c',f:.3},AJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJs:{a:'c',f:.5},ATs:{a:'c',f:.4},A6s:{a:'c',f:.25},"44":{a:'c',f:.25},"33":{a:'c',f:.2},"22":{a:'c',f:.2},KQo:{a:'c',f:.3},QJs:{a:'c',f:.4}},
     from_BB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},AQo:{a:'3b',f:.3},AJs:{a:'3b',f:.2},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},A2s:{a:'3b',f:.2},KQs:{a:'3b',f:.3},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},"44":{a:'c',f:.35},"33":{a:'c',f:.3},"22":{a:'c',f:.25},ATs:{a:'c',f:.8},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.45},A6s:{a:'c',f:.35},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},K9s:{a:'c',f:.4},QJs:{a:'c',f:.6},Q9s:{a:'c',f:.3},JTs:{a:'c',f:.7},J9s:{a:'c',f:.4},T9s:{a:'c',f:.5},T8s:{a:'c',f:.3},"98s":{a:'c',f:.4},"87s":{a:'c',f:.3},"76s":{a:'c',f:.25},"65s":{a:'c',f:.2},"54s":{a:'c',f:.15},AJo:{a:'c',f:.35},KQo:{a:'c',f:.3},KJo:{a:'c',f:.25},QJo:{a:'c',f:.2}},
-    from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.3},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},AQo:{a:'c',f:.5},AJs:{a:'c',f:.5},KQs:{a:'c',f:.4},QJs:{a:'c',f:.3},JTs:{a:'c',f:.3}},
+    from_UTG1:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.3},A4s:{a:'3b',f:.2},TT:{a:'c',f:.7},"99":{a:'c',f:.6},"88":{a:'c',f:.5},"77":{a:'c',f:.4},AQo:{a:'c',f:.6},AJs:{a:'c',f:.6},AJo:{a:'c',f:.5},ATs:{a:'c',f:.5},ATo:{a:'c',f:.4},KQs:{a:'c',f:.5},KQo:{a:'c',f:.4},KJs:{a:'c',f:.4},KJo:{a:'c',f:.3},KTs:{a:'c',f:.3},QJs:{a:'c',f:.4},QJo:{a:'c',f:.3},JTs:{a:'c',f:.4},JTo:{a:'c',f:.25},T9s:{a:'c',f:.3}},
     from_HJ:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.6},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.4},A4s:{a:'3b',f:.3},TT:{a:'c',f:.8},"99":{a:'c',f:.7},"88":{a:'c',f:.6},AQo:{a:'c',f:.5},AJs:{a:'c',f:.6},KQs:{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4}}
   },
   vs_BTN:{
@@ -4064,10 +4064,51 @@ function postflopSceneNorm(rawScene,bet,stk){
 // 杜绝"go()按单挑cbet范围Worker算一遍 + SE按行动线多对手范围UI主线程同步重算一遍"的口径分裂与卡顿。
 // sceneIn 已按SE规则归一(check / raise / allin); nActive=含我方在内的活跃人数。
 
-// V2.9.682 FIX: 多人池范围收窄——多人池中存活对手范围更紧,移除弱牌避免MC权益膨胀
+// V2.9.683 FIX: 多人池范围收窄——多人池中存活对手范围更紧,移除弱牌避免MC权益膨胀
 function _narrowRangeMultiway(baseArr,nOpp){
   if(!baseArr||baseArr.length===0||nOpp<2)return baseArr;
   try{
+    // V2.9.683 FIX: 检测是否已被行动线收窄(范围<50手),降低多人池收窄力度避免双重收窄
+    var alreadyNarrowed = baseArr.length < 50;
+    if(alreadyNarrowed){
+      // 已收窄过: 仅额外移除10%最弱牌
+      var scored=[];
+      for(var i=0;i<baseArr.length;i++){
+        var key=String(baseArr[i]);
+        var score=0;
+        var isPair=key.length===2;
+        var r0=RV[key[0]],r1=RV[key[1]];
+        var gap=(r0!==undefined&&r1!==undefined)?Math.abs(r0-r1):9;
+        var suited=key.indexOf('s')>=0;
+        var hi=key[0];
+        if(isPair){
+          score=10+r0;
+        }else if(suited&&'AKQ'.indexOf(hi)>=0&&gap<=2){
+          score=15+r0-gap;
+        }else if(suited&&'AKQ'.indexOf(hi)>=0){
+          score=12+r0-gap*0.5;
+        }else if(suited&&gap<=2&&r0>=RV['8']){
+          score=10+r0-gap;
+        }else if(suited&&gap<=3){
+          score=6+r0-gap*0.5;
+        }else{
+          score=5+r0-gap*0.8;
+          if(hi==='A') score+=4;
+          if(hi==='K') score+=2;
+        }
+        scored.push({key:key,score:score});
+      }
+      scored.sort(function(a,b){return b.score-a.score;});
+      var keepCount=Math.max(10,Math.round(baseArr.length*0.9));  // 保留90%
+      keepCount=Math.min(keepCount,scored.length);
+      var result=[];
+      for(var j=0;j<keepCount;j++){
+        result.push(scored[j].key);
+      }
+      console.log('[MW范围收窄-已收窄] nOpp='+nOpp+' '+baseArr.length+'→'+result.length+'手(保留90%)');
+      return result;
+    }
+    // 未收窄过: 执行完整多人池收窄
     // 评分函数:对子高分,suited broadway中高分,suited连张中分,offsuit低分
     var scored=[];
     for(var i=0;i<baseArr.length;i++){
@@ -4094,16 +4135,18 @@ function _narrowRangeMultiway(baseArr,nOpp){
         // 其他suited
         score=6+r0-gap*0.5;
       }else{
-        // offsuit
-        score=2+r0-gap*0.3;
+        // V2.9.683 FIX: offsuit提高base分,加大gap惩罚,A-high blocker额外加分
+        score=5+r0-gap*0.8;  // 原: 2+r0-gap*0.3
+        if(hi==='A') score+=4;  // A-high blocker价值高
+        if(hi==='K') score+=2;  // K-high blocker次之
       }
       scored.push({key:key,score:score});
     }
     // 按分数降序排序
     scored.sort(function(a,b){return b.score-a.score;});
-    // 保留数量:每多一对手移除20%,最少保留10手,最多移除60%
+    // V2.9.683 FIX: 保留数量:每多一对手移除20%,最少保留10手
+    // 删除Math.min硬封顶,恢复动态缩放
     var keepCount=Math.max(10,Math.round(baseArr.length*(1-(nOpp-1)*0.2)));
-    keepCount=Math.min(keepCount,Math.round(baseArr.length*0.4)); // 最多保留40%
     keepCount=Math.min(keepCount,scored.length);
     var result=[];
     for(var j=0;j<keepCount;j++){
@@ -4123,7 +4166,7 @@ function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive){
     var line=(sceneIn==='check')?'cbet':(bc.length===5?'barrel_river':bc.length===4?'barrel_turn':'cbet');
     var wet=(bTexture&&bTexture.wetness>=2)?'wet':'dry';
     var range=getOppRange('postflop',line,wet);
-    // V2.9.682 FIX: 多人池范围收窄——移除弱牌避免MC权益膨胀
+    // V2.9.683 FIX: 多人池范围收窄——移除弱牌避免MC权益膨胀
     range=_narrowRangeMultiway(range,_nOpp);
     var iter, isRiver=(bc.filter(function(c){return c;}).length===5);
     if(isRiver){
@@ -4962,7 +5005,7 @@ function _turnFullEnumerateEV(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sp
       var bTexture=boardTexture(bc);
       var _oppLineEnum=(scene==='check')?'cbet':'raise';  // V2.9.601: check=对手过牌=范围弱,与主路径L3418同语义用cbet宽基线(旧错用barrel_turn极化→eq低估)
       var oppRange=getOppRange('postflop',_oppLineEnum,bTexture.wetness>=2?'wet':'dry');
-      // V2.9.682 FIX: 兜底路径也做多人池范围收窄(与postflopEqSpec同口径)
+      // V2.9.683 FIX: 兜底路径也做多人池范围收窄(与postflopEqSpec同口径)
       oppRange=_narrowRangeMultiway(oppRange,(_nOpp&&_nOpp>=1)?_nOpp:1);
       if(!oppRange||oppRange.length===0)return null;
       var mcI=2000;
@@ -8420,8 +8463,17 @@ function handClassify(hole,comm){
         else if(bestKicker>=10){madeType='STRONG';pairSubType='顶对顶踢';}
         else{madeType='MEDIUM';pairSubType=bestKicker>=7?'顶对中踢':'顶对弱踢';}
       }else{
-        if(topPairR>=minCommRank){madeType='MEDIUM';pairSubType='中对';}
-        else{madeType='MEDIUM';pairSubType='底对';}
+        // V2.9.683 FIX: pocket pair below board cards = bluff catcher, not AIR/MEDIUM
+        // TT@Q-J-3-K: pocket pair below all board cards, beats pure bluffs, should be MEDIUM
+        var _isPocketPair = hole.length>=2 && hole[0] && hole[1] && hole[0].rank===hole[1].rank;
+        if(_isPocketPair && topPairR < minCommRank){
+          // Pocket pair below all board cards: bluff catcher
+          madeType='MEDIUM';pairSubType='口袋对bluff catcher(低于板面)';
+        }else if(topPairR>=minCommRank){
+          madeType='MEDIUM';pairSubType='中对';
+        }else{
+          madeType='MEDIUM';pairSubType='底对';
+        }
       }
       // V2.9.680 FIX(P0): 中对/底对在paired board(对子面)降级为AIR
       // 实证: 7c5s在6c-4h-6h-7h-4c面(6-6对子面)→底对7→MEDIUM→call all-in→-19.1BB
