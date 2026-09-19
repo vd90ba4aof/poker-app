@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.688',
+  CURRENT_VERSION:'2.9.689',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -1945,7 +1945,11 @@ var OppProfiler={
   _updateTypes:function(){
     for(var nk in this._profiles){
       var p=this._profiles[nk];
-      if(p.hands<2)continue;
+      // V2.9.689 FIX(P1): 2→5手最低样本门槛——2手进池(2/2=vpip100%)即判fish,
+      //   自动写入G.opp后触发687翻前放宽(跟注频率×2.0/3bet×1.5)——2手证据撑不起
+      //   翻前范围大幅放宽。5手70%+进池才是可用信号(与DRTA的V2.9.66"hands<10锁unknown"
+      //   同哲学,OppProfiler按座追踪收敛更快,取5手中庸)。
+      if(p.hands<5)continue;
       
       var vpip=p.entered/p.hands;
       var foldRate=p.folded/Math.max(p.entered,1);
@@ -2946,7 +2950,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.688';
+var APP_VERSION = '2.9.689';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3180,7 +3184,9 @@ function _quantExploitAdjust(freq, act, oppProfile, boardTexture){
     adj.note = 'vpip'+oppProfile.vpip+'→价值下注加大';
   }
 
-  var pfrRatio = oppProfile.vpip>0 ? oppProfile.pfr/oppProfile.vpip : 0.5;
+  // V2.9.689 FIX(P1): pfrRatio>1为物理不可能(pfr⊆vpip)→脏数据,跳过该剥削分支。
+  //   实证(poker_log_20260920): pfr=133%/vpip=100%→ratio=1.33>0.75假触发"vs激进→小尺寸"。
+  var pfrRatio = (oppProfile.vpip>0&&oppProfile.pfr<=oppProfile.vpip) ? oppProfile.pfr/oppProfile.vpip : 0.5;
   if(pfrRatio>0.75 && act==='raise'){
     adj.freq = Math.min(0.95, freq*1.15);
     adj.sizingMult = 0.85;
@@ -3983,6 +3989,7 @@ function decidePreflop(k){
     if(_cappedPot<pot){console.log('[V2.9.625主池cap] pot '+pot+'→'+_cappedPot+' (stk='+stk+' inPot='+_inPotForCap+')');}
     var callThresh=allinBet>0?Math.round(allinBet/(_cappedPot+allinBet)*100):50;  // V2.9.585+V2.9.625: 用cappedPot计算真实赔率
     var _preAiRatio=pot>0?allinBet/(_cappedPot+allinBet):0;
+    var _rawPotOdds=callThresh;  // V2.9.689 FIX(P0): 保存钳制前的原始底池赔率——B闸绕过判断必须用真实赔率
     // V2.9.622 FIX(P0, 实机日志2026-09-12 6h4s stk24BB面8BB全押eq31%赔率38%却用25%门槛跟):
     //   Math.min(callThresh+3,25)把赔率门槛封顶在25%——赔率要求38%时门槛被压到25%,
     //   31%>25%通过但31%<38%赔率=纯负EV。改为Math.max保证门槛永远不低于赔率要求,
@@ -3990,7 +3997,13 @@ function decidePreflop(k){
     callThresh=_preAiRatio>=0.5?Math.max(callThresh,45):Math.max(callThresh,25);
     // V2.9.592 FIX(P1, 实机日志2026-09-08 A7o stk61BB面61BB全押eq41%用25%地板跟):
     //   25%小jam地板为短码推弃设计;深码跟全押套牢大额,分级收紧门槛(复用L3191 _oppEffBB):>40BB→40%,>80BB→45%,>120BB→50%。
-    if(_oppEffBB>120){callThresh=Math.max(callThresh,50);}else if(_oppEffBB>80){callThresh=Math.max(callThresh,45);}else if(_oppEffBB>40){callThresh=Math.max(callThresh,40);}
+    // V2.9.689 FIX(P1): 收紧仅限真实套牢(allinBet>=hero码量40%)——旧代码不看jam尺寸,
+    //   54筹码小jam(200码深只冒27%码量)也被套45%门槛→MC eq43%被拦而赔率只需18.4%
+    //   →巨池小jam过度弃牌(V2.9.687声称的K7o场景仍未打通)。592实证(A7o面61BB全押
+    //   =100%码量套牢)不受影响,仍分级收紧。
+    if(allinBet>=stk*0.4){
+      if(_oppEffBB>120){callThresh=Math.max(callThresh,50);}else if(_oppEffBB>80){callThresh=Math.max(callThresh,45);}else if(_oppEffBB>40){callThresh=Math.max(callThresh,40);}
+    }
     // V2.9.625 FIX(P0, 豪哥原则): 投机牌翻前全压无潜力可兑现,A/B闸扩展覆盖所有非极短码场景
     // 原条件(_oppEffBB>40||ratio>=0.5)只覆盖深码/大jam,漏掉短码多人池跑马(如2BB 3way jam)
     // 新条件:>15BB(非极短码) 或 大jam(注池比>=0.5) 或 多人池(3way+),15BB以下仍走Nash路径
@@ -4004,13 +4017,16 @@ function decidePreflop(k){
     //   V2.9.687: 15%→25%,覆盖更多+EV场景(如K7o eq43%面对18.5%赔率)
       var _aiPair=(k.length===2&&k[0]===k[1]);
       var _aiTwoBroad=(!_aiPair&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
-      var _aiPotOddsLow=callThresh<25;  // V2.9.687: 15%→25%
+      var _aiPotOddsLow=_rawPotOdds<25;  // V2.9.687: 15%→25%; V2.9.689 FIX(P0): 改用_rawPotOdds(未钳制)
+      //   旧代码用钳制后的callThresh判断(callThresh>=25恒成立→_aiPotOddsLow恒false),
+      //   V2.9.655/687的"低赔率绕过B-gate"通道从未生效=死代码,实证: K7o eq43%面对18.5%赔率
+      //   仍被B-gate弃牌(审计复现测试F3)。修复后: 原始赔率<25%→跳过B-gate走A闸纯数学决策。
       if(!_aiPair&&!_aiTwoBroad&&!_aiPotOddsLow){
       console.log('[V2.9.625全押硬闸] '+k+' 翻前全压非强牌(非对子非双J+) fold (oppEff='+_oppEffBB+'BB ratio='+_preAiRatio.toFixed(2)+' inPot='+((typeof G._inPotPlayers!=='undefined')?G._inPotPlayers:'?')+')');
       return _fold(allinEq,'[V2.9.625全押硬闸] '+k+' 翻前全压牌力不足弃',spr);
       }
       if(_aiPotOddsLow&&!_aiPair&&!_aiTwoBroad){
-        console.log('[V2.9.655全押硬闸] '+k+' 跳过B-gate(底池赔率'+callThresh+'%<15%→纯数学决策) eq='+Math.round(allinEq)+'%');
+        console.log('[V2.9.689全押硬闸] '+k+' 跳过B-gate(原始底池赔率'+_rawPotOdds+'%<25%→纯数学决策) eq='+Math.round(allinEq)+'%');
       }
     // A闸-eq真实化: 查表值替换为mcVsRange对实际开牌范围+实际进池人数的蒙特卡洛胜率(复用翻后同款函数,不拍新范围表)。
     //   强牌(TT+/AQ+)HU仍65%+正常跟;多人池弱牌eq按人数客观回落。异常try-catch降级查表值。
@@ -6107,8 +6123,13 @@ var DRTA={
     // V2.9.671 FIX(P0): hands计数器去重——只在preflop街首次调用时递增
     // 根因: record()在preflop/flop/turn/river每个街都被调用,旧代码每次t.hands++
     // →一手牌打到河牌会+4→hands虚高→vpip%计算错误(日志显示145%)
+    // V2.9.689 FIX(P0): hands去重键升级为手牌锁——旧键依赖实时G.hole内容,
+    //   视觉识别闪烁(同一手牌hole牌面反复变化)导致key反复变化→同手重复计数。
+    //   实证(poker_log_20260920): drtaTracker.hands=30但vpip=60(200%)/pfr=40(133%),
+    //   物理上限100%→hands本身也在虚增(每手多次++)。与688的vpip键统一:
+    //   键优先G._handLockKey(全手稳定,仅换手更新),fallback实时hole拼接。
     if(street==='preflop'){
-      var _handKey=(G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'';
+      var _handKey=G._handLockKey||((G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'');
       if(t._lastCountedHand!==_handKey){
         t.hands++;
         t._lastCountedHand=_handKey;
@@ -6123,7 +6144,14 @@ var DRTA={
     
     if(action==='bet'||action==='raise'||action==='reraise'){
       agg=2;t.bet_count++;
-      if(street==='preflop'&&(action==='raise'||action==='reraise'))t.pfr++;
+      // V2.9.689 FIX(P0): pfr计数器去重——旧代码无任何去重,一手牌preflop多次record()
+      //   (视觉闪烁/scene演进重复触发)时pfr重复++→pfr=133%(pfr40/hands30,物理上限100%)。
+      //   实证(poker_log_20260920_061045): drtaTracker.pfr=40, hands=30。
+      //   修复: 与vpip同款手牌锁键+硬上限(t.pfr<t.hands,每手最多计1次)。
+      if(street==='preflop'&&(action==='raise'||action==='reraise')){
+        var _pfrKey=G._handLockKey||((G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'');
+        if(t._pfrKey!==_pfrKey&&t.pfr<t.hands){t.pfr++;t._pfrKey=_pfrKey;}
+      }
       // V2.9.58: 3bet追踪
       // V2.9.642 FIX(S3): 移除action='raise'的_threebet_opp++——open raise不是3bet机会。
       //   根因: inferOpponentAction把scene='raise'映射为action='raise',
@@ -6239,7 +6267,10 @@ var DRTA={
     // V2.9.688 FIX(P0): clamp上限100——兼容存量脏数据(旧版去重失效已写入的t.vpip虚高值),
     //   防止>100%的VPIP流入classify(必误判fish)和_quantExploitAdjust(假触发剥削)
     p.vpip=Math.min(100,Math.round(t.vpip/t.hands*100));
-    p.pfr=Math.round(t.pfr/t.hands*100);
+    // V2.9.689 FIX(P1): pfr同步clamp上限100——688只clamp了vpip,pfr漏网。
+    //   实证(poker_log_20260920): pfr=133%流入pfrRatio分支(133/100=1.33>0.75)
+    //   →假触发"vs激进→小尺寸"剥削调整。
+    p.pfr=Math.min(100,Math.round(t.pfr/t.hands*100));
     p.af=parseFloat((t.bet_count/Math.max(t.call_count,1)).toFixed(2));
     p.fold_to_bet=t._bet_faced>0?Math.round(t._fold_to_bet/t._bet_faced*100):50;
     p.recent_agg=parseFloat((t.recent_agg.reduce(function(a,b){return a+b;},0)/Math.max(t.recent_agg.length,1)).toFixed(2));
@@ -6364,6 +6395,16 @@ var DRTA={
       if(d){
         var loaded=JSON.parse(d);
         for(var k in loaded)this.tracker[k]=loaded[k];
+        // V2.9.689 FIX(P1): 脏数据检测自愈——历史版本去重缺失导致localStorage持久化了
+        //   物理不可能的计数(vpip/pfr>hands,每手每指标最多+1)。
+        //   实证(poker_log_20260920_061045): vpip=60/hands=30(200%),pfr=40/30(133%)
+        //   →getProfile流入_quantExploitAdjust产生假对手画像→错误剥削调整。
+        //   修复: 加载时检测到脏数据→整表重置(宁可重新采样,不用被污染的统计)。
+        var t=this.tracker;
+        if((t.vpip>t.hands)||(t.pfr>t.hands)){
+          console.log('[V2.9.689DRTA] 检测到脏数据(vpip='+t.vpip+',pfr='+t.pfr+',hands='+t.hands+')→重置追踪器');
+          this.reset();
+        }
       }
     }catch(e){}
   },
@@ -7801,7 +7842,13 @@ var SafetyGuard={
 
 
 // V2.9.30: DRTA自动采集 - 从场景推导对手动作
-var _lastRecordedKey=''; // 防止同一手牌同一场景重复记录
+// V2.9.689 FIX(P0): 单槽去重改集合去重——旧_lastRecordedKey只记最后一条,
+//   场景识别闪烁交替(raise↔reraise反复切换)时每次切换都被当成新记录→
+//   同一手牌同场景重复计数。实证(poker_log_20260920): bet_count=54/30手,
+//   vpip=200%,pfr=133%(物理上限100%)。
+//   修复: seen-set按(手牌锁+街+场景)全量去重,一手牌内每组合最多记1次;
+//   set超200条周期清空防内存泄漏。
+var _recordedKeySet={};var _recordedKeyCount=0;
 function inferOpponentAction(scene,street){
   if(scene==='reraise')return{action:'reraise',isFacingBet:true};
   if(scene==='raise')return{action:'raise',isFacingBet:true};
@@ -7815,12 +7862,15 @@ function autoRecordOpponent(scene,street){
   if(!G.hole[0]||!G.hole[1])return;
   // V2.9.588 FIX(B2-2): 去重key加入street——否则一手牌flop记一次后，turn/river的对手动作
   //   因key相同被去重吞掉（B2-1修好街名后此bug显性化，必须联动）。
-  var key=G.phase+'_'+street+'_'+scene+'_'+G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit;
-  if(key===_lastRecordedKey)return;
+  // V2.9.689: key加入手牌锁(G._handLockKey)——不同手牌同hole内容时也不会误去重。
+  var _lockId=G._handLockKey||((G.hole&&G.hole[0]&&G.hole[1])?(G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit):'');
+  var key=_lockId+'_'+G.phase+'_'+street+'_'+scene+'_'+G.hole[0].rank+G.hole[0].suit+G.hole[1].rank+G.hole[1].suit;
+  if(_recordedKeySet[key])return;
   var inferred=inferOpponentAction(scene,street);
   if(inferred){
     DRTA.record(inferred.action,street,inferred.isFacingBet);
-    _lastRecordedKey=key;
+    _recordedKeySet[key]=true;_recordedKeyCount++;
+    if(_recordedKeyCount>200){_recordedKeySet={};_recordedKeyCount=0;}
   }
 }
 
@@ -8440,7 +8490,23 @@ function handClassify(hole,comm){
   }else if(madeHand2==='flush'){
     // 同花+板面有对子→可能被葫芦beat→STRONG
     if(_boardHasPair){madeType='STRONG';}
-    else{madeType='NUTS';}
+    else{
+      // V2.9.689 FIX(P0): 非坚果同花不再判NUTS——旧代码无对面同花一律NUTS。
+      //   实证(审计测试): KsQs@4s8sJs(K-high同花)判NUTS,但对手As2s~AsTs=A-high同花完胜;
+      //   QsTs@4s8sJs同理。NUTS分类下游触发"commit全下无犹豫"/check-raise满池/慢打建池等
+      //   最激进线(10+消费点),被A-high同花清空整栈。
+      //   修复: 仅坚果同花(持有该花色A)判NUTS,其余STRONG。
+      var _flushSuitH=null;
+      var _fsCnt={};
+      cards.forEach(function(c){if(c)_fsCnt[c.suit]=(_fsCnt[c.suit]||0)+1;});
+      for(var _fsk in _fsCnt){if(_fsCnt[_fsk]>=5)_flushSuitH=_fsk;}
+      var _hasNutFlushH=false;
+      hole.filter(function(c){return c;}).forEach(function(c){
+        if(c.suit===_flushSuitH&&c.rank==='A')_hasNutFlushH=true;
+      });
+      madeType=_hasNutFlushH?'NUTS':'STRONG';
+      if(!_hasNutFlushH)pairSubType+='(非坚果同花)';
+    }
   }else if(madeHand2==='straight'){
     // 顺子+板面有对子(可能被葫芦)或非坚果顺(可能被更高顺)→STRONG
     if(_boardHasPair||_isNonNutStraight){madeType='STRONG';}
@@ -8502,7 +8568,15 @@ function handClassify(hole,comm){
           if(_br2>_tpMaxBoardSingle)_tpMaxBoardSingle=_br2;
         }
       }
-      if(_tpHeroPair<_tpMaxBoardSingle){
+      if(boardOnlyPairs.length>=1&&_tpHeroPair<boardOnlyPairs[0]){
+        // V2.9.689 FIX(P0): 板对+低对两对误判STRONG——
+        //   实证(poker_log_20260920_061045[38]): 7h5h@QcQs5s→两对QQ+55判STRONG,
+        //   但任何口袋对66+都构成更高两对(QQ+66>QQ+55)→实战eq仅28.4%!
+        //   口袋对同理: 77@QQ5面=QQ+77,被88+支配。旧代码只查板面单张(Q成对不算单张)
+        //   →_tpMaxBoardSingle=5<7→漏判。hero对子>板对(如QQ@55x=QQ+55顶两对)保持STRONG。
+        madeType='MEDIUM';pairSubType='板对+低对(hero对<板对,被口袋对支配)';
+        console.log('[V2.9.689牌力] 板对+低对降级STRONG→MEDIUM(hero对='+_tpHeroPair+'<板对='+boardOnlyPairs[0]+')');
+      }else if(_tpHeroPair<_tpMaxBoardSingle){
         // V2.9.665: 底两对(hero最高对 < board最高单张)→MEDIUM
         madeType='MEDIUM';pairSubType='底两对(hero对<板面单张)';
         console.log('[V2.9.665牌力] 底两对降级STRONG→MEDIUM(hero='+_tpHeroPair+'<board单张='+_tpMaxBoardSingle+')');
@@ -8552,7 +8626,12 @@ function handClassify(hole,comm){
       var nonPairCommRanks=commCards2.map(function(c){return RV[c.rank];}).filter(function(r){return r!==topPairR;});
       var maxCommRank=nonPairCommRanks.length>0?Math.max.apply(null,nonPairCommRanks):-1;
       var minCommRank=nonPairCommRanks.length>0?Math.min.apply(null,nonPairCommRanks):-1;
-      var nonPairVals=rankVals.filter(function(v){return v!==topPairR;});
+      // V2.9.689 FIX(P0): 顶对踢脚只看手牌——旧代码从rankVals(手2+板5全部牌)取值,
+      //   板面的K/Q被误当hero踢脚→所有顶对恒判"顶对顶踢"STRONG。
+      //   实证(poker_log_20260920_061045): Ad6d@5dAh3hKs2h(踢脚6)判STRONG顶对顶踢
+      //   →河牌三红心面面对半池raise(被同花支配风险); KcTh@5cKdQc7c6d(踢脚T)同理。
+      //   修复: 踢脚=手牌中非对子rank的最大值(板面张是共享踢脚,不作hero区分度)。
+      var nonPairVals=holeRanks.filter(function(v){return v!==topPairR;});
       var bestKicker=nonPairVals.length>0?Math.max.apply(null,nonPairVals):0;
       if(maxCommRank<0){
         if(topPairR>=10)madeType='STRONG';else madeType='MEDIUM';
@@ -8583,6 +8662,19 @@ function handClassify(hole,comm){
           madeType='MEDIUM';pairSubType='底对';
         }
       }
+      // V2.9.689 FIX(P0): 顶对顶踢/超对在三花面不再免疫——翻后威胁适用所有牌型。
+      //   实证(poker_log_20260920_061045): [52] KcTh@5cKdQc7c6d河牌3梅花→顶对K(踢脚T)
+      //   判STRONG→任何两张梅花支配hero(即使hero持Kc也只阻断1张);
+      //   [0] Ad6d@5dAh3hKs2h河牌3红心同理(hero 0张红心阻断)。
+      //   旧676降级只拦madeType==='MEDIUM'(中对/底对),STRONG顶对/超对完全漏网。
+      //   规则依据: 对子类手牌最多持1张该花色(持2张已是同花,走flush分支)
+      //   →顶对/超对永远无法阻断三花面,被成花支配风险恒存→降级MEDIUM。
+      //   注意: 两对在三花面已有V2.9.676独立降级(两对分支内),此处只管对子。
+      if(_boardHas3Flush && madeType==='STRONG' && (pairSubType==='顶对顶踢'||pairSubType==='超对')){
+        madeType='MEDIUM';pairSubType+='(三花面降级)';
+        _downgradedBy3Flush=true;
+        console.log('[V2.9.689牌力] 顶对/超对/强两对在三花面降级STRONG→MEDIUM('+pairSubType+')');
+      }
       // V2.9.680 FIX(P0): 中对/底对在paired board(对子面)降级为AIR
       // 实证: 7c5s在6c-4h-6h-7h-4c面(6-6对子面)→底对7→MEDIUM→call all-in→-19.1BB
       // 根因: 对子面+中对/底对=极弱，容易被葫芦beat，且对手范围偏强
@@ -8603,7 +8695,12 @@ function handClassify(hole,comm){
       // 实证: 9d9c在三花面eq=53.4%实际只有30-35%，中对在三花面极其脆弱
       // 逻辑: 三花面+手牌未完全阻断(0-1张该花色) → 中对/底对降级为AIR
       // 例外: 顶对顶踢(TPTK)在三花面仍保持MEDIUM(有踢脚价值)
-      if(_boardHas3Flush && madeType==='MEDIUM'){
+      // V2.9.689 FIX(P1): 实现上述"顶对例外"——旧代码madeType==='MEDIUM'不过滤subType,
+      //   顶对弱踢/中踢/bluff catcher全被误降AIR(与注释声明的TPTK例外矛盾)。
+      //   且689 FIX-4把顶对顶踢/超对从STRONG降到MEDIUM后,不过滤的旧检查会把它们
+      //   二次降级成AIR→三花面所有对子全灭,过度惩罚。现在: 中对/底对→AIR,
+      //   顶对(任意踢)/超对→MEDIUM(由eq守卫按真实赔率决策call/fold)。
+      if(_boardHas3Flush && madeType==='MEDIUM' && (pairSubType==='中对'||pairSubType==='底对')){
         // 找出三花面的花色
         var _flush3Suit=null;
         for(var _bs3k in _boardSuits){if(_boardSuits[_bs3k]>=3){_flush3Suit=_bs3k;break;}}
@@ -8617,6 +8714,21 @@ function handClassify(hole,comm){
             _downgradedBy3Flush=true;  // V2.9.678: 标记已降级，防止后续DRAW覆盖
             console.log('[V2.9.676牌力] 三花面对子降级MEDIUM→AIR(手牌'+_holeFlushCount+'张'+_flush3Suit+'阻断)');
           }
+        }
+      }
+      // V2.9.689 FIX(P1): 中对/底对在A高面+后门花威胁降级AIR——
+      //   实证(poker_log_20260920_061045[44]最后一手): Ks9s@6h9cAc(翻牌)→中对99判MEDIUM,
+      //   零威胁提示。实际: A面中被Ax支配(AK/AQ/AJ/A6全beat)+2梅花后门花
+      //   +K/Q/J/T转牌全是超张→eq约30%。用户明确指出: 翻牌中对A必须考虑同花威胁及其他威胁。
+      //   修复: 翻牌(cc=3)中对/底对(对子rank<T,本引擎RV: T=8) + 板面有A + 板面2张同花(后门花)
+      //   →降级AIR(仅bluff-catcher价值)。转牌后(cc>=4)后门花威胁大减,保持MEDIUM由eq守卫兜底。
+      if(madeType==='MEDIUM'&&(pairSubType==='中对'||pairSubType==='底对')&&topPairR<8&&cc===3&&commRankCounts['A']>0&&!_boardHas3Flush){
+        var _bdFlushThreat=false;
+        for(var _bs4k in _boardSuits){if(_boardSuits[_bs4k]>=2){_bdFlushThreat=true;break;}}
+        if(_bdFlushThreat){
+          madeType='AIR';pairSubType+='(A面后门花降级)';
+          _downgradedBy3Flush=true;_downgradedByBoardHazard=true;
+          console.log('[V2.9.689牌力] 中/底对在A面+后门花降级MEDIUM→AIR('+pairSubType+')');
         }
       }
     }else{
@@ -8696,9 +8808,25 @@ function handClassify(hole,comm){
     //   听牌复活(679原则:补牌=同花完成牌)
     if(flushDraw && !_downgradedByBoardHazard){
       madeType='DRAW';
-      if(isOpenEnd){outs=15;}      // 同花+两端顺
-      else if(isGutshot){outs=12;} // 同花+卡顺
-      else{outs=9;}                // 纯同花
+      // V2.9.689 FIX(P1): 复活路径outs污染折减——主DRAW路径(V2.9.684)对三花面非坚果
+      //   同花听牌已做9→6折减,但本复活路径(三花面降级对子+hero持1张该花色=4-to-flush
+      //   复活)未同步。实证: 9h9d@Kh5h2h→中对三花降级AIR→复活9outs,但AhXh对手已成型
+      //   同花且hero 9h成花后仍被A支配→outs虚高致过度跟注。
+      //   修复: 与684同规则——不持该花色A(非坚果)时 9→6, 15→12, 12→9。
+      var _revTaint=false;
+      if(_boardHas3Flush){
+        var _revSuit=null;
+        for(var _bs5k in _boardSuits){if(_boardSuits[_bs5k]>=3){_revSuit=_bs5k;break;}}
+        if(_revSuit){
+          var _revNut=false;
+          hole.filter(function(c){return c;}).forEach(function(c){if(c.suit===_revSuit&&c.rank==='A')_revNut=true;});
+          if(!_revNut)_revTaint=true;
+        }
+      }
+      if(isOpenEnd){outs=_revTaint?12:15;}      // 同花+两端顺
+      else if(isGutshot){outs=_revTaint?9:12;} // 同花+卡顺
+      else{outs=_revTaint?6:9;}                // 纯同花
+      if(_revTaint)console.log('[V2.9.689牌力] 三花面复活DRAW outs污染折减(非坚果同花听:9/15/12→6/12/9)');
       if((isOpenEnd||isGutshot)&&flushDraw)hasComboDraw=true;
     } else if(!_downgradedBy3Flush && (isOpenEnd||isGutshot)){
       // 没有同花听牌时，三花面降级阻止顺子听牌升级
@@ -10638,7 +10766,10 @@ function applyEquityGuard(action,eq,reliability){
   if(reliability==='low'){
     if(a==='allin'){if(eq>=80)return 'raise';if(eq>=50)return 'call';return 'fold';}
     if(a==='raise_big'){if(eq>=75)return 'raise';if(eq>=55)return 'call';return 'fold';}
-    if(a==='raise'&&eq<55){if(eq>=40)return 'weak_call';return 'fold';}
+    // V2.9.689 FIX(P1): 40→35,与高可靠分支688修复同源——applyExploit最大降12%
+    //   (maniac raise),raw eq 45被降到33-40区间时旧40阈值推翻引擎raise为fold;
+    //   35容忍降级余量,eq<35低可靠仍拦(实证同poker_log手牌9边界矛盾问题)。
+    if(a==='raise'&&eq<55){if(eq>=35)return 'weak_call';return 'fold';}
     if(a==='weak_call'){if(eq>=52)return 'call';return 'fold';}
     if(a==='call'&&eq<35)return 'fold';
     if(eq<25&&a!=='fold')return 'fold';
@@ -10646,7 +10777,9 @@ function applyEquityGuard(action,eq,reliability){
     if(a==='raise_big'&&eq<70){if(eq>=55)return 'raise';return 'call';}
     if(a==='allin'&&eq<75){if(eq>=60)return 'raise';if(eq>=45)return 'call';return 'fold';}
     if(a==='weak_call'&&eq<45)return 'fold';
-    if(a==='raise'&&eq<40){if(eq>=30)return 'call';return 'fold';}
+    // V2.9.689 FIX(P1): 40→35边界同源修复——剥削降级后eq 35-40区间的raise
+    //   旧代码一律压成call,与高可靠分支行为不一致;35以上保持引擎决策。
+    if(a==='raise'&&eq<35){if(eq>=30)return 'call';return 'fold';}
     if(eq<25&&(a==='raise'||a==='raise_big'||a==='allin'))return 'fold';
   }else{
     // 高可靠: 只保底线
