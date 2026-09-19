@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.685',
+  CURRENT_VERSION:'2.9.686',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2946,7 +2946,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.685';
+var APP_VERSION = '2.9.686';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3869,6 +3869,8 @@ function decidePreflop(k){
           if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fc2Th+=3; // V2.9.662: 5→3
           if(spr>25)_fc2Th-=7;
           else if(spr<10)_fc2Th+=7;
+          // V2.9.686 FIX(P2): fish/calling_station对手翻后支付意愿强,平跟防御可放宽5%
+          if(oppType==='fish'||oppType==='calling_station')_fc2Th-=5;
           _fc2Th=Math.max(_fc2Po+3,Math.min(65,_fc2Th));
           if(eq>=_fc2Th&&eq>=_fc2Po){
             var _exFC2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
@@ -4588,11 +4590,13 @@ function decidePostflop(k,_pfInj){
     }
     // 免费牌(scene==='check')或数据矛盾(bet=0): eq≥50价值下注,否则过牌(旧postF口径)
     if(scene==='check'||bet<=0){
-      if(eq>=50){
+      // V2.9.686 FIX(P1): fish/calling_station对手跟注范围宽,价值下注阈值从50%降至42%
+      var _valueTh=(oppType==='fish'||oppType==='calling_station')?42:50;
+      if(eq>=_valueTh){
         var _vbSz=Math.round(Math.min(pot*0.55,stk));
         if(_vbSz>=1){
           var _exV=applyExploit(eq,'raise',oppType,{bet:0,pot:pot});
-          return{a:'raise',v:_vbSz,r:'GTO收口 价值下注(eq'+Math.round(eq)+'%≥50%)',eq:_exV.eq,c:eq>=65?'h':'m',sizing:_vbSz,scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
+          return{a:'raise',v:_vbSz,r:'GTO收口 价值下注(eq'+Math.round(eq)+'%≥'+_valueTh+'%)',eq:_exV.eq,c:eq>=65?'h':'m',sizing:_vbSz,scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
         }
       }
       var _exK=applyExploit(eq,'check',oppType,{bet:0,pot:pot});
@@ -5258,6 +5262,13 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk,eq){
     else if(_sprCur2<=15){_sprAdjSafe={fcb:0.92,cbet:0.95,bluff:1.08};}
     else{_sprAdjSafe={fcb:0.85,cbet:0.9,bluff:1.15};}
     adjF=adjF*_sprAdjSafe.fcb;
+    // V2.9.686 FIX(P0): fish/calling_station对手cbet bluff频率极低,应更多call抓诈
+    var _oppTypeLocal=(typeof oppType!=='undefined'?oppType:(G.opp||'unknown'));
+    if(_oppTypeLocal==='fish'||_oppTypeLocal==='calling_station'){
+      var _fishCallBoost=0.12;
+      adjC=Math.min(0.95,adjC+_fishCallBoost);
+      adjF=Math.max(0.05,adjF-_fishCallBoost);
+    }
     // rev12修复POST-14: 调整链末端统一归一化
     var _sumEA=adjC+adjR+adjF;
     if(_sumEA>0.01){adjC/=_sumEA;adjR/=_sumEA;adjF/=_sumEA;}
@@ -5386,10 +5397,15 @@ function ExploitAdjuster(freq,action,hcKey,oppType,street,scene){
         oppCB=t._cbet/t._cbet_opp;
         console.log('[ExploitAdjuster] DRTA回退: cbet率='+oppCB.toFixed(2)+' ('+t._cbet+'/'+t._cbet_opp+')');
       }
-      // fold-to-cbet率: 英雄fold cbet次数 / 面对cbet次数
-      if(t._face_cbet>=1){
-        ftCB=t._fold_cbet/t._face_cbet;
-        console.log('[ExploitAdjuster] DRTA回退: fold-to-cbet率='+ftCB.toFixed(2)+' ('+t._fold_cbet+'/'+t._face_cbet+')');
+      // V2.9.686 FIX(P1): 原代码用Hero的fold-to-cbet率(t._fold_cbet/t._face_cbet)作为ftCB,
+      //   但ftCB语义是"对手面对cbet的弃牌率",Hero数据与此无关。改为用对手cbet率推断:
+      //   对手高频cbet(>60%)→范围宽→ftCB低(对手不轻易弃牌); 对手低频cbet(<30%)→范围强→ftCB高
+      if(t._cbet_opp>=2){
+        var _oppCBRate=t._cbet/t._cbet_opp;
+        if(_oppCBRate>0.6)ftCB=0.35;      // 对手高频cbet→范围宽→不太会弃牌
+        else if(_oppCBRate>0.4)ftCB=0.50;  // 中频
+        else ftCB=0.65;                     // 低频cbet→范围强→可能弃牌(但样本少,保守)
+        console.log('[ExploitAdjuster] DRTA回退: ftCB推断='+ftCB.toFixed(2)+' (oppCB='+_oppCBRate.toFixed(2)+')');
       }
       // AF: 全局攻击性因子(已在DRTA.tracker.af中)
       if(t.af!==undefined&&t.af!==null){
@@ -5407,8 +5423,14 @@ function ExploitAdjuster(freq,action,hcKey,oppType,street,scene){
     if(action==='raise'&&scene==='facing_cbet'&&oppCB>.7){adj=Math.min(.4,adj*1.8);label='过度CBet剥削';}
     if(action==='fold'&&oppAF<1&&scene==='facing_raise'){adj=Math.min(.95,adj*1.3);label='被动对手剥削';}
     if(oppType==='nit'&&(action==='bet'||action==='raise')&&hcKey>=13){adj=Math.min(.9,adj*1.5);label='nit诈唬剥削';}
-    if((oppType==='calling_station'||oppType==='fish')&&hcKey>=13){adj=adj*0.2;label='跟注站不诈唬';}
-    if((oppType==='calling_station'||oppType==='fish')&&hcKey<=4){adj=Math.min(.95,adj*1.3);label='跟注站价值加码';}
+    // V2.9.686 FIX(P0): 扩展fish/calling_station剥削范围——原代码仅调整hcKey<=4和>=13,
+    //   MEDIUM(5-8)和DRAW(9-12)完全无调整,导致面对被动鱼对手时价值下注不足、半诈唬过多
+    if(oppType==='calling_station'||oppType==='fish'){
+      if(hcKey<=4){adj=Math.min(.95,adj*1.3);label='跟注站价值加码';}
+      else if(hcKey<=8){adj=Math.min(.95,adj*1.15);label='fish价值扩大';}
+      else if(hcKey<=12){adj=adj*0.5;if(!label)label='fish减少半诈唬';}
+      else{adj=adj*0.2;label='跟注站不诈唬';}
+    }
     if(_exploitHistory.bluffAttempts>=3){var br=_exploitHistory.bluffWins/_exploitHistory.bluffAttempts;if(br<.3&&(action==='bet'||action==='raise')&&hcKey>=13){adj=adj*0.3;label='bluff被catch减频';}}
     if(_exploitHistory.valueCalls>=5){var vr=_exploitHistory.valueWins/_exploitHistory.valueCalls;if(vr>.8&&hcKey<=4){adj=Math.min(.98,adj*1.15);label='价值尺度加码';}}
     if(_exploitHistory.foldToTotal>=5){var fr2=_exploitHistory.foldToFaced/_exploitHistory.foldToTotal;if(fr2>.6&&action==='fold'){adj=adj*0.7;label='过度fold修正';}}
