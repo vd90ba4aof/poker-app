@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.683',
+  CURRENT_VERSION:'2.9.684',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.683';
+var APP_VERSION = '2.9.684';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -4280,11 +4280,11 @@ function decidePostflop(k,_pfInj){
         var _spMed=_spConn>=1||_spMaxF>=3;
         if(_spHigh){
           _aiThresh=Math.max(_aiThresh,55);
-          if(hClass&&hClass.key!=='NUTS'){hClass={key:'MEDIUM',name:'中对',detail:'小对连牌面降级'};}
+          if(hClass&&hClass.name!=='NUTS'){hClass={name:'MEDIUM',desc:'中对',detail:'小对连牌面降级',outs:hClass.outs||0,isOvercard:false};}
           console.log('[SP-AI] 小对'+_spRank+_spRank+' 高协调 门槛>=55% eq='+Math.round(eq)+'%');
         }else if(_spMed){
           _aiThresh=Math.max(_aiThresh,_aiThresh+8);
-          if(hClass&&hClass.key==='STRONG'){hClass={key:'MEDIUM',name:'中对',detail:'小对协调面降级'};}
+          if(hClass&&hClass.name==='STRONG'){hClass={name:'MEDIUM',desc:'中对',detail:'小对协调面降级',outs:hClass.outs||0,isOvercard:false};}
           console.log('[SP-AI] 小对'+_spRank+_spRank+' 中协调 门槛='+_aiThresh+'% eq='+Math.round(eq)+'%');
         }
       }
@@ -8430,6 +8430,20 @@ function handClassify(hole,comm){
         madeType='MEDIUM';pairSubType+='(三花面降级)';
         console.log('[V2.9.676牌力] 两对在三花面降级STRONG→MEDIUM');
       }
+      // V2.9.684 FIX(P0): 底两对在对子面/连牌面降级为AIR
+      // 实证: 底两对在对子面(如6-6-3-T面)极弱,容易被葫芦beat
+      // 底两对在连牌面(如7-8-9-T面)极弱,容易被顺子beat
+      if(pairSubType.indexOf('底两对')===0){
+        if(_boardHasPair){
+          madeType='AIR';pairSubType+='(对子面降级)';
+          _downgradedBy3Flush=true;
+          console.log('[V2.9.684牌力] 底两对在对子面降级MEDIUM→AIR('+pairSubType+')');
+        }else if(_boardIsConnected){
+          madeType='AIR';pairSubType+='(连牌面降级)';
+          _downgradedBy3Flush=true;
+          console.log('[V2.9.684牌力] 底两对在连牌面降级MEDIUM→AIR('+pairSubType+')');
+        }
+      }
     }else{
       // 板面1对+手牌没参与→其实只有1对
       madeType='MEDIUM';pairSubType='板面对+差踢';
@@ -8459,7 +8473,16 @@ function handClassify(hole,comm){
         if(topPairR>=10)madeType='STRONG';else madeType='MEDIUM';
       }else if(topPairR>=maxCommRank){
         var isOverpair=hole.length>=2&&hole[0]&&hole[1]&&hole[0].rank===hole[1].rank&&topPairR>maxCommRank;
-        if(isOverpair){madeType='STRONG';pairSubType='超对';}
+        if(isOverpair){
+          madeType='STRONG';pairSubType='超对';
+          // V2.9.684 FIX(P1): 双对子面超对降级为MEDIUM
+          // 实证: JJ@8-8-7-7面，超对JJ只能beat bluff，77/88都在对手范围
+          // 双对子面(boardOnlyPairs>=2)+超对=极弱，降级MEDIUM
+          if(boardOnlyPairs.length>=2){
+            madeType='MEDIUM';pairSubType+='(双对子面降级)';
+            console.log('[V2.9.684牌力] 双对子面超对降级STRONG→MEDIUM('+pairSubType+')');
+          }
+        }
         else if(bestKicker>=10){madeType='STRONG';pairSubType='顶对顶踢';}
         else{madeType='MEDIUM';pairSubType=bestKicker>=7?'顶对中踢':'顶对弱踢';}
       }else{
@@ -8524,8 +8547,50 @@ function handClassify(hole,comm){
   if(madeType==='DRAW'){
     if(isOpenEnd){outs=flushDraw?15:8;}      // V2.9.602: 听花+两端顺=15outs(9+8-重叠2张同花补牌),旧8+9=17双计
     else if(isGutshot){outs=flushDraw?12:4;}  // V2.9.602: 听花+卡顺=12outs(9+4-重叠1),旧4+9=13双计
-    else if(flushDraw){outs=9;}
-    if((isOpenEnd||isGutshot)&&flushDraw)hasComboDraw=true;
+    else if(flushDraw){
+      outs=9;
+      // V2.9.684 FIX(P1): 三花面tainted outs——flush draw在3-flush board可能被对手更高同花beat
+      // 实证: 8h5h@Kc-7c-4c面,9 outs假设所有同花牌都是clean,但对手可能已有更高同花
+      // 修复: 三花面+非坚果同花听牌(不持有该花色A)→outs从9降到6-7
+      if(_boardHas3Flush && !flushMade){
+        // 找出三花面的花色
+        var _flush3Suit2=null;
+        for(var _bs3k2 in _boardSuits){if(_boardSuits[_bs3k2]>=3){_flush3Suit2=_bs3k2;break;}}
+        if(_flush3Suit2){
+          // 检查是否持有该花色A(坚果同花听牌)
+          var _hasNutFlushDraw=false;
+          hole.filter(function(c){return c;}).forEach(function(c){
+            if(c.suit===_flush3Suit2 && c.rank==='A') _hasNutFlushDraw=true;
+          });
+          if(!_hasNutFlushDraw){
+            // 非坚果同花听牌: outs从9降到6(减去3张可能被beat的outs)
+            outs=6;
+            console.log('[V2.9.684牌力] 三花面非坚果同花听牌: 9outs→6outs(tainted outs)');
+          }
+        }
+      }
+    }
+    if((isOpenEnd||isGutshot)&&flushDraw){
+      hasComboDraw=true;
+      // V2.9.684 FIX(P1): 组合听牌在三花面也需要调整tainted outs
+      // 组合听牌(同花+顺子)在三花面,如果同花不是坚果,outs也要减少
+      if(_boardHas3Flush && !flushMade){
+        var _flush3Suit3=null;
+        for(var _bs3k3 in _boardSuits){if(_boardSuits[_bs3k3]>=3){_flush3Suit3=_bs3k3;break;}}
+        if(_flush3Suit3){
+          var _hasNutFlushDraw3=false;
+          hole.filter(function(c){return c;}).forEach(function(c){
+            if(c.suit===_flush3Suit3 && c.rank==='A') _hasNutFlushDraw3=true;
+          });
+          if(!_hasNutFlushDraw3){
+            // 组合听牌: 原本15/12 outs, 减少3张tainted outs
+            if(isOpenEnd) outs=12; // 15→12
+            else if(isGutshot) outs=9; // 12→9
+            console.log('[V2.9.684牌力] 三花面组合听牌(非坚果): outs减少3张(tainted outs)');
+          }
+        }
+      }
+    }
   }
   if(madeType==='MEDIUM'||madeType==='STRONG'){
     var bonusOuts=0;
