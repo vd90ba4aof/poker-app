@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.675',
+  CURRENT_VERSION:'2.9.676',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.675';
+var APP_VERSION = '2.9.676';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3982,7 +3982,9 @@ function decidePreflop(k){
       var _aiN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
       var _aiOpp=Math.max(1,_aiN-1);
       if(_aiHole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'){
-      var _aiRange=gO(getOppPos());  // V2.9.658: 统一用getOppPos()获取对手位置(单一真相源)
+      var _aiRange=gT(getOppPos());  // V2.9.676 FIX(P0): 全押MC用3bet/jam范围(gT)而非开池范围(gO)。
+      //   旧代码gO(MP)=56手→KJo eq47%，实际对手jam范围gT(MP)=21手→KJo eq35-38%。
+      //   导致边缘牌被剥削call。gT覆盖TT+/AKs/AQs/AJs/ATs/AKo/AQo/AJo/ATo/KQo等强牌。
       var _aiMs=mcVsRange(_aiHole,[],_aiRange,1500,_aiOpp);
       if(_aiMs&&typeof _aiMs.eq==='number'&&_aiMs.eq>0){
       console.log('[V2.9.625全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
@@ -12335,7 +12337,8 @@ function onVisionResult(data){
       }
     }
     if(G.phase==='pre' && _pfHasCall && !_pfHasCheck){
-      var _pfBetBB=_pfCallAmt>0 && bbValue>0 ? Math.max(1,Math.round(_pfCallAmt/bbValue)) : 1;
+      // V2.9.676 FIX(P0): 与L12666统一0.5BB精度
+      var _pfBetBB=_pfCallAmt>0 && bbValue>0 ? Math.max(0.5,Math.round((_pfCallAmt/bbValue)*2)/2) : 1;
       if(G.bet!==_pfBetBB){
         console.log('[V2.9.571屏幕真相] 翻前有跟注按钮(额='+_pfCallAmt+')但G.bet='+G.bet+'→纠正为'+_pfBetBB+'BB (bbValue='+bbValue+')');
         G.bet=_pfBetBB;
@@ -12349,7 +12352,8 @@ function onVisionResult(data){
     //   物理闸拦截check→fold(3次HIGH错误铁证)。
     //   修复: 翻后同样用按钮物理信号纠正bet(翻前已有的逻辑扩展到翻后)。
     if(G.phase!=='pre' && _pfHasCall && !_pfHasCheck && G.bet===0){
-      var _postBetBB=_pfCallAmt>0 && bbValue>0 ? Math.max(1,Math.round(_pfCallAmt/bbValue)) : 1;
+      // V2.9.676 FIX(P0): 与L12666统一0.5BB精度
+      var _postBetBB=_pfCallAmt>0 && bbValue>0 ? Math.max(0.5,Math.round((_pfCallAmt/bbValue)*2)/2) : 1;
       console.log('[V2.9.647屏幕真相] 翻后有跟注按钮(额='+_pfCallAmt+')但G.bet=0→纠正为'+_postBetBB+'BB (bbValue='+bbValue+')');
       G.bet=_postBetBB;
       if(G.scene==='check'){G.scene='bet';}  // 场景同步: 有跟注无让牌=面对下注
@@ -12658,7 +12662,10 @@ function onVisionResult(data){
     // V2.9.566 FIX(P0): to_call=0时必须显式清零G.bet——旧逻辑仅在_rawBet>0时赋值，
     // 0值帧保留上一手残留（v565日志铁证：Qc3c全下4682chips=23BB残留到下一手8hQh，
     // 空按钮帧经"按钮为空但G.bet>0→bet场景"误判面对下注，且toCall=23绕开Kotlin free-check保护致盲fold）
-    G.bet= _rawBet>0 ? Math.round(_rawBet/bbValue) : 0;
+    // V2.9.676 FIX(P0): bet统一0.5BB精度——与pot/stk(L12656-12657)保持一致。
+    //   旧Math.round()致4300chips/200BB=21.5→22BB，与stk同筹码量却显示21.5BB，
+    //   下游callThresh/主池cap均受影响。改为Math.round(x*2)/2保留0.5BB。
+    G.bet= _rawBet>0 ? Math.round((_rawBet/bbValue)*2)/2 : 0;
     console.log("[V2.9.527 数据链路修复] bbValue="+bbValue+"(_bbSource) pot: "+_rawPot+"chips→"+G.pot+"BB | stk: "+_rawChips+"chips→"+G.stk+"BB | bet: "+_rawBet+"chips→"+G.bet+"BB");
   } else {
     console.log("[V2.9.564 DIAG_SKIP] bbValue超出安全范围, 块被跳过! bbValue="+bbValue);
@@ -12680,7 +12687,8 @@ function onVisionResult(data){
       }
     }
     if(_pf2Call && !_pf2Check){
-      var _pf2Bet=_pf2Amt>0&&bbValue>0?Math.max(1,Math.round(_pf2Amt/bbValue)):1;
+      // V2.9.676 FIX(P0): 与L12661统一0.5BB精度，避免Math.round(21.5)=22
+      var _pf2Bet=_pf2Amt>0&&bbValue>0?Math.max(0.5,Math.round((_pf2Amt/bbValue)*2)/2):1;
       if(G.bet!==_pf2Bet){console.log('[V2.9.571后置真相] 归一化后G.bet='+G.bet+'但屏幕有跟注(额'+_pf2Amt+')→终裁'+_pf2Bet+'BB');G.bet=_pf2Bet;}
     } else if(_pf2Check && !_pf2Call && G.bet>0){
       console.log('[V2.9.571后置真相] 归一化后G.bet='+G.bet+'但屏幕让牌免费→终裁0');G.bet=0;
