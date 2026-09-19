@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.684',
+  CURRENT_VERSION:'2.9.685',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -1777,6 +1777,9 @@ var OppProfiler={
           _facedRiverCBet:0, _foldToRiverCBet:0, // 面对河牌CBet/弃牌
           _cbetFlop:0, _cbetTurn:0, _cbetRiver:0, // 对手CBet各街
           _raiseFlop:0, _raiseTurn:0, _raiseRiver:0, // 对手加注各街
+          // V2.9.684: VPIP/PFR/Call统计追踪（修复统计字段缺失）
+          _vpip:0, _pfr:0, _cbetFlopOpp:0, // 入池/翻前加注/面对CBet机会
+          _callFlop:0, _callTurn:0, _callRiver:0, // 各街跟注次数
           // V2.9.142: bet sizing tells
           _betSizes:{small:0,medium:0,large:0,huge:0},
           _betSizeShowdown:{small:{n:0,w:0},medium:{n:0,w:0},large:{n:0,w:0},huge:{n:0,w:0}}
@@ -1796,7 +1799,6 @@ var OppProfiler={
         p.entered++;
       }
       // bet增加→加注
-      // bet增加→加注
       if(s.bet>0&&p._lastBet>0&&s.bet>p._lastBet){
         p._raiseCount++;
       }
@@ -1804,6 +1806,28 @@ var OppProfiler={
       if(!(s.bet>0&&p._lastBet>0&&s.bet>p._lastBet)&&(s.action==='raise'||s.action==='allin')&&!p._raiseMarkedThisHand){
         p._raiseCount++;
         p._raiseMarkedThisHand=true;
+      }
+      // V2.9.684: VPIP/PFR/Call统计追踪（修复统计字段缺失）
+      // VPIP: 入池（call/raise/allin）
+      if((s.action==='call'||s.action==='raise'||s.action==='allin')&&!p._vpipCountedThisHand){
+        p._vpip++;
+        p._vpipCountedThisHand=true;
+      }
+      // PFR: 翻前加注
+      if((street==='preflop'||street==='pre')&&s.action==='raise'&&!p._pfrCountedThisHand){
+        p._pfr++;
+        p._pfrCountedThisHand=true;
+      }
+      // CBet机会: 翻牌圈作为非PFR面对PFR
+      if(street==='flop'&&p._wasPFRThisHand&&!p._cbetFlopOppCounted){
+        p._cbetFlopOpp++;
+        p._cbetFlopOppCounted=true;
+      }
+      // Call统计: 各街跟注
+      if(s.action==='call'){
+        if(street==='flop')p._callFlop++;
+        else if(street==='turn')p._callTurn++;
+        else if(street==='river')p._callRiver++;
       }
       // V2.9.105: 翻前3bet频率追踪
       if(street==='preflop'||street==='pre'){
@@ -2874,18 +2898,6 @@ var HandStateMachine=(function(){
   }
 
 
-  // ====== 青云独有: SQUEEZE挤压表 ======
-  var _SQUEEZE={
-    vs_UTG1_vs_caller:{
-      BTN:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.8},AKs:{a:'sq',f:.7},AKo:{a:'sq',f:.6},A5s:{a:'sq',f:.4},A4s:{a:'sq',f:.3},KQs:{a:'sq',f:.2},JJ:{a:'c',f:.7},TT:{a:'c',f:.6},AQs:{a:'c',f:.5},AQo:{a:'c',f:.4}},
-      SB:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.7},AKs:{a:'sq',f:.6},AKo:{a:'sq',f:.5},A5s:{a:'sq',f:.3},JJ:{a:'c',f:.5},TT:{a:'c',f:.4},AQs:{a:'c',f:.4}}
-    },
-    vs_MP_vs_caller:{
-      BTN:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.9},JJ:{a:'sq',f:.5},AKs:{a:'sq',f:.8},AKo:{a:'sq',f:.7},AQs:{a:'sq',f:.5},A5s:{a:'sq',f:.5},A4s:{a:'sq',f:.4},KQs:{a:'sq',f:.3},TT:{a:'c',f:.7},AQo:{a:'c',f:.5},AJs:{a:'c',f:.3}},
-      SB:{AA:{a:'sq',f:1},KK:{a:'sq',f:1},QQ:{a:'sq',f:.8},AKs:{a:'sq',f:.7},AKo:{a:'sq',f:.6},A5s:{a:'sq',f:.4},JJ:{a:'c',f:.5},AQs:{a:'c',f:.4}}
-    }
-  };
-
   // ====== 青云独有: V2.9.190 锦标赛ICM压力计算 ======
   function _icmPressure(heroStack, avgStack, totalPlayers, playersLeft, inMoney){
     try{
@@ -2934,7 +2946,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.684';
+var APP_VERSION = '2.9.685';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3555,7 +3567,7 @@ function decidePreflop(k){
     if(freq===undefined||freq===0){
       // V2.9.628: AK硬底规则 — 翻前手牌含A和K，无人加注(只需跟注大盲)，强制跟注看牌
       var _hasA=k.indexOf('A')>=0,_hasK=k.indexOf('K')>=0;
-      if(_hasA&&_hasK&&bet>0&&bet<=bigBlind){
+      if(_hasA&&_hasK&&bet>0&&bet<=(G._lockedBB||1)){
         return{a:'call',v:bet,r:'AK硬底跟注(翻前无人加注,仅付大盲)',eq:eq,c:'m',scene:'跟注',spr:spr,_se:true,_seFreq:1};
       }
       // V2.9.645: bet=0免费过牌场景→check,绝不fold
@@ -3697,17 +3709,18 @@ function decidePreflop(k){
           var _spIdx=_spRank.indexOf(k.charAt(0));
           if(_spIdx<=4)_limpSmallPair=true;  // 22-66
         }
+        // limp场景: 用eq+赔率+手牌质量三重门槛判断是否跟注
+        // V2.9.655 FIX: 底池赔率公式修正 bet/(pot+bet*2)→bet/(pot+bet),旧公式双重计算bet
+        //   旧: pot=2.5 bet=1 → 1/(2.5+2)=22.2%; 正确: 1/(2.5+1)=28.6%
+        var _limpPo=bet/Math.max(pot+bet,1)*100;  // V2.9.655: 修正底池赔率公式
+        var _limpTh=45+Multiway.callThresholdAdj(); // V2.9.652: 40→45,收紧
+        // V2.9.684 FIX(P0): 小对子limp调整移到声明之后(原var hoisting导致+=NaN)
         if(_limpSmallPair){
           // 小对子: 短码(SPR<15)直接收紧——中了set也赢不够
           if(spr<15)_limpTh+=8;
           // 深码时隐含赔率足够,但eq门槛仍需+3%补偿88%miss率
           else _limpTh+=3;
         }
-        // limp场景: 用eq+赔率+手牌质量三重门槛判断是否跟注
-        // V2.9.655 FIX: 底池赔率公式修正 bet/(pot+bet*2)→bet/(pot+bet),旧公式双重计算bet
-        //   旧: pot=2.5 bet=1 → 1/(2.5+2)=22.2%; 正确: 1/(2.5+1)=28.6%
-        var _limpPo=bet/Math.max(pot+bet,1)*100;  // V2.9.655: 修正底池赔率公式
-        var _limpTh=45+Multiway.callThresholdAdj(); // V2.9.652: 40→45,收紧
         if(G.act>=4)_limpTh-=3;  // V2.9.666: 补齐第二路径的多人池放宽(原遗漏)
         // V2.9.660: 筹码深度调整——深码隐含赔率高,投机牌应放宽;短码隐含赔率低,应收紧
         //   理论依据: 小对/同花/顺子等投机牌的价值主要来自翻后中nuts时赢大池(隐含赔率)
@@ -5312,21 +5325,21 @@ function _facingCR(k,hcKey,btKey,betSz,pot,eq,street){
     if(sum>0.01){adjC/=sum;adjR/=sum;adjF/=sum;}else{adjC=e.c;adjR=e.rr;adjF=e.f;}
     var r=Math.random();
     var spr=_sprCur3;
-    if(r<e.rr){
+    if(r<adjR){
       var rrSz=Math.round(Math.max(betSz*2.5,pot*2));
       rrSz=Math.min(rrSz,G.stk||100000);
-      return{a:'raise',v:rrSz,r:'GTO 面CR reraise '+btKey+'/'+hcKey+'('+Math.round(e.rr*100)+'%)',eq:eq||0,c:'h',sizing:rrSz,scene:'面对CR',_se:true,_seFreq:e.rr};
+      return{a:'raise',v:rrSz,r:'GTO 面CR reraise '+btKey+'/'+hcKey+'('+Math.round(adjR*100)+'%)',eq:eq||0,c:'h',sizing:rrSz,scene:'面对CR',_se:true,_seFreq:adjR};
     }
-    if(r<e.rr+e.c){
+    if(r<adjR+adjC){
       // V2.9.572 P0(根因④): 面CR call前pot odds硬校验
       var _fcrCallReq=Math.max(1,betSz)/Math.max(pot+betSz,1);
       if(eq!==undefined&&eq!==null&&eq>=0&&eq/100<_fcrCallReq-0.05){
         console.log('[SE] 面CR call pot odds拦截: eq='+Math.round(eq)+'%<需'+Math.round(_fcrCallReq*100)+'% hc='+hcKey+' call→fold');
-        return _fold(eq||0,'面CR fold(odds) '+btKey+'/'+hcKey+' eq='+Math.round(eq)+'%<'+Math.round(_fcrCallReq*100)+'%('+Math.round(e.f*100)+'%)',spr);
+        return _fold(eq||0,'面CR fold(odds) '+btKey+'/'+hcKey+' eq='+Math.round(eq)+'%<'+Math.round(_fcrCallReq*100)+'%('+Math.round(adjF*100)+'%)',spr);
       }
-      return{a:'call',r:'GTO 面CR call '+btKey+'/'+hcKey+'('+Math.round(e.c*100)+'%)',eq:eq||0,c:'m',scene:'面对CR',spr:spr,_se:true,_seFreq:e.c};
+      return{a:'call',r:'GTO 面CR call '+btKey+'/'+hcKey+'('+Math.round(adjC*100)+'%)',eq:eq||0,c:'m',scene:'面对CR',spr:spr,_se:true,_seFreq:adjC};
     }
-    return _fold(eq||0,'面CR fold '+btKey+'/'+hcKey+'('+Math.round(e.f*100)+'%)',spr);
+    return _fold(eq||0,'面CR fold '+btKey+'/'+hcKey+'('+Math.round(adjF*100)+'%)',spr);
   }
 
 function _donkDecision(k,hcKey,btKey,ip,pot,_oppType2,_sprAdj2,_is3bP2,_isMW2,_street2,eq){
@@ -5594,6 +5607,14 @@ var RangeVsRange=(function(){
   // 补全公共牌到5张
   function completeBoard(board, myHole, oppHole){
     var used=new Set();
+    function mark(cards){
+      if(!cards)return;
+      for(var i=0;i<cards.length;i++){
+        if(cards[i]&&cards[i].rank&&cards[i].suit){
+          used.add(cards[i].rank+cards[i].suit);
+        }
+      }
+    }
     mark(board);mark(myHole);mark(oppHole);
     
     var deck=[];
@@ -8601,11 +8622,11 @@ function handClassify(hole,comm){
   }
   if(madeType==='AIR'){
     // V2.9.678 FIX(P0): 三花面降级后，同花听牌仍然合法，但顺子听牌是tainted outs
-    // 实证: As7c在7s-8s-Js-4d面，7对降级AIR，但仍有同花听牌（4张黑桃）
-    //   如果阻止所有DRAW升级，会误杀合法同花听牌
-    //   但纯顺子听牌（如7c5c在7s-8s-Jc-4s）在三花面是tainted outs
-    if(flushDraw){
-      // 同花听牌在三花面仍然合法，允许升级
+    // V2.9.684 FIX(P1): 对子面/连牌面降级后，同花听牌也应被阻止
+    // 实证: 7♠6♠在7-7-8-9面（对子+连牌），降级AIR后不应复活为DRAW
+    // 三花面：同花听牌仍然合法，允许升级
+    // 对子面/连牌面：同花听牌也极弱，不复活
+    if(flushDraw && !_boardHasPair && !_boardIsConnected){
       madeType='DRAW';
       if(isOpenEnd){outs=15;}      // 同花+两端顺
       else if(isGutshot){outs=12;} // 同花+卡顺
@@ -9897,7 +9918,7 @@ function decide(){
           _colorInfo:{colorKey:actionToColor(_fbA),color:ColorStrategy.COLORS[actionToColor(_fbA)],signalType:'CRASH'}};
       }
     }catch(_fbErr){console.log('[decide兜底] Fallback也失败: '+_fbErr.message);}
-    return {a:'fold',r:'[出错]'+e.message,eq:0,c:'l',hClass:{name:'?',desc:'?',outs:0},scene:'?',spr:0,sprAdvice:'',bTexture:null,io:null,_colorInfo:{colorKey:'FOLD',color:'#FF5252',signalType:'NONE'}};
+    return {a:'fold',r:'[出错]'+e.message,eq:0,c:'l',hClass:{name:'?',desc:'?',outs:0},scene:'?',spr:0,sprAdvice:'',bTexture:null,io:null,_colorInfo:{colorKey:'FOLD',color:ColorStrategy.COLORS['FOLD'],signalType:'NONE'}};
   }
 }
 function _decideInner(){
@@ -10093,7 +10114,6 @@ function _decideInner(){
       var _raiseSz=result.v||Math.round(_pot*0.66);
       var _evs=EVCalc.calc(_eq,_pot,_bet,_raiseSz,_oppType,cc===5?'river':cc===4?'turn':cc===3?'flop':'preflop',_diIP,_spr);
       result._evs=_evs;
-      result._evBest=EVCalc.best(_evs);
     }catch(e){}
     // V2.9.123: EVCalc决策护栏——数学验证策略建议，负EV时降级
     // V2.9.144 P4: 阈值从-2放宽到-4——考虑隐含赔率MC无法计算的部分
@@ -10668,13 +10688,6 @@ function show(r){
     var _showProfile=DRTA.getProfile();
     var _tiltDisp=TiltDetector.getTiltDisplay(TiltDetector.detectTilt(_showProfile));
     if(_tiltDisp)h+='<div style="font-size:9px;padding:2px 8px;border-radius:8px;margin-top:2px;display:inline-block;background:rgba(255,69,0,.15);color:#ff4500">'+_tiltDisp+'</div>';
-    // V2.9.129: SelfTiltGuard 自己Tilt早期预警(命名空间隔离,不动V2.9.60对手Tilt)
-    if(r._selfTilt){
-      var _st=r._selfTilt;
-      var _stBg=_st.level===3?'rgba(255,0,0,.20)':(_st.level===2?'rgba(255,140,0,.20)':'rgba(255,215,0,.15)');
-      var _stColor=_st.level===3?'#ff2020':(_st.level===2?'#ff8c00':'#ffd700');
-      h+='<div style="font-size:10px;padding:3px 8px;border-radius:8px;margin-top:2px;display:inline-block;background:'+_stBg+';color:'+_stColor+';font-weight:bold">'+_st.icon+' 自己Tilt'+(_st.summary?'('+_st.summary+')':'')+(_st.banner?' — '+_st.banner:'')+'</div>';
-    }
     // V2.9.61: 反剥削状态显示
     var _ceDisp=CounterExploit.getDisplay(CounterExploit.detect(_showProfile));
     if(_ceDisp)h+='<div style="font-size:9px;padding:2px 8px;border-radius:8px;margin-top:2px;display:inline-block;background:rgba(0,191,255,.12);color:#00bfff">'+_ceDisp+'</div>';
@@ -10685,6 +10698,13 @@ function show(r){
       h+='<div style="font-size:10px;padding:3px 8px;border-radius:8px;margin-top:2px;display:inline-block;background:rgba(100,180,255,.12);color:#64b4ff">📊 范围: <span style="color:#ff6b6b">宽'+Math.round(_rd.wide*100)+'%</span> <span style="color:#ffd93d">中'+Math.round(_rd.medium*100)+'%</span> <span style="color:#6bcf7f">紧'+Math.round(_rd.tight*100)+'%</span></div>';
     }
   }
+  // V2.9.129: SelfTiltGuard 自己Tilt早期预警 - 独立于DRTA显示
+  if(r._selfTilt){
+    var _st=r._selfTilt;
+    var _stBg=_st.level===3?'rgba(255,0,0,.20)':(_st.level===2?'rgba(255,140,0,.20)':'rgba(255,215,0,.15)');
+    var _stColor=_st.level===3?'#ff2020':(_st.level===2?'#ff8c00':'#ffd700');
+    h+='<div style="font-size:10px;padding:3px 8px;border-radius:8px;margin-top:2px;display:inline-block;background:'+_stBg+';color:'+_stColor+';font-weight:bold">'+_st.icon+' 自己Tilt'+(_st.summary?'('+_st.summary+')':'')+(_st.banner?' — '+_st.banner:'')+'</div>';
+  }
   if(r.hClass&&r.hClass.name!=='PRE'){
     var plan=planStreets(r.hClass,r.eq||50,r.scene,G.opp,G.spr);
     h+='<div class="r-plan">🛤️ '+plan.v+'</div>';
@@ -10693,8 +10713,8 @@ function show(r){
     var sa=r.sprAdvice||getSPRAdvice(r.spr);
     h+='<div class="r-spr '+sa.color+'">SPR:'+r.spr.toFixed(1)+' '+sa.label+(sa.zone?' ['+sa.zone+']':'')+'</div>';
   }
-  if(r.evs){
-    var evData=r.evs.evs||r.evs;
+  if(r._evs){
+    var evData=r._evs.evs||r._evs;
     var evEntries=Object.entries(evData).filter(function(e){return typeof e[1]==='number';}).sort(function(a,b){return b[1]-a[1];});
     if(evEntries.length>0){
       var bestEv=evEntries[0];
@@ -10704,7 +10724,9 @@ function show(r){
   }
   if(r.eq!==undefined){
     // V2.9.53: 河牌显示"精确胜率"标识
-    var isRiver=(r.scene==='河牌');
+    // V2.9.684 FIX: scene是英文字符串,改用comm数量判断是否河牌
+    var _cc=G.comm?G.comm.filter(function(c){return c;}).length:0;
+    var isRiver=(_cc===5);
     var eqLabel=isRiver?'🎯精确胜率':'胜率';
     h+='<div class="r-ev-sm">'+eqLabel+': '+r.eq.toFixed(1)+'%'+(r.po!==undefined?' | 需'+r.po.toFixed(0)+'%':'')+'</div>';
   }
