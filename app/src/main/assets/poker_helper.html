@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.676',
+  CURRENT_VERSION:'2.9.677',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.676';
+var APP_VERSION = '2.9.677';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3417,8 +3417,11 @@ function decidePreflop(k){
   // 对手码深感知: 取池内最浅对手码深, 池里有人短码按有效码深打
   var _oppEffBB=_myEffBB;
   try{var _os=G.oppSeats||[];for(var _oi=0;_oi<_os.length;_oi++){var _oc=parseInt(_os[_oi]&&_os[_oi].chips)||0;var _of=(_os[_oi]&&_os[_oi].active!==false&&_os[_oi].action!=='fold');if(_oc>0&&_of){var _ebb=Math.round(_oc/_blindBB);if(_ebb<_oppEffBB)_oppEffBB=_ebb;}}}catch(eOe){}
-  // 码深分档
-  var _depthTier=_oppEffBB<=15?'nash':(_oppEffBB<=40?'short':(_oppEffBB>=150?'deep':'standard'));
+  // V2.9.677 FIX(P0): 码深分档取min(我方,对手)——有效码深决定翻后可玩性
+  //   旧代码仅用_oppEffBB: 我方5BB对手50BB→'standard'→投机牌bonus保留→翻后无法实现隐含赔率
+  //   修复: 有效码深=min(我方,对手), 短码方限制了翻后最大可赢量
+  var _effStackBB=Math.min(_myEffBB,_oppEffBB);
+  var _depthTier=_effStackBB<=15?'nash':(_effStackBB<=40?'short':(_effStackBB>=150?'deep':'standard'));
 
   // V3.24→rev10→V2.9.556: 纳什push/fold — 对手码深<=15BB触发, 直读不再用stk绝对值
   var _nashEffBBpre=_oppEffBB;
