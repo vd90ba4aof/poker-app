@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.680',
+  CURRENT_VERSION:'2.9.681',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.680';
+var APP_VERSION = '2.9.681';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8208,6 +8208,23 @@ function handClassify(hole,comm){
   comm.filter(function(c){return c;}).forEach(function(c){_boardRanks[c.rank]=(_boardRanks[c.rank]||0)+1;});
   var _boardHasPair=false;
   for(var _br in _boardRanks){if(_boardRanks[_br]>=2)_boardHasPair=true;}
+  // V2.9.681: 连牌面检测——公共牌有3+张连牌(如7-8-9, T-J-Q)
+  // 连牌面+中对/底对=极弱，容易被顺子beat
+  var _boardIsConnected=false;
+  var _boardRankVals=comm.filter(function(c){return c;}).map(function(c){return RV[c.rank];});
+  var _boardUniq=[];
+  _boardRankVals.forEach(function(v){if(_boardUniq.indexOf(v)===-1)_boardUniq.push(v);});
+  _boardUniq.sort(function(a,b){return b-a;});
+  var _boardUniqAce=_boardUniq.slice();
+  if(_boardUniq.indexOf(12)>=0)_boardUniqAce.push(-1);
+  _boardUniqAce.sort(function(a,b){return b-a;});
+  // 检查是否有3+张连牌(降序排列后差值为2)
+  for(var _ci=0;_ci<=_boardUniqAce.length-3;_ci++){
+    if(_boardUniqAce[_ci]-_boardUniqAce[_ci+2]===2){
+      _boardIsConnected=true;
+      break;
+    }
+  }
   // 非坚果顺检测: hero的顺子最高rank < 板面可能的最大顺顶
   var _isNonNutStraight=false;
   if(madeHand2==='straight'){
@@ -8356,6 +8373,14 @@ function handClassify(hole,comm){
         madeType='AIR';pairSubType+='(对子面降级)';
         _downgradedBy3Flush=true;  // V2.9.680: 对子面降级也阻止DRAW升级
         console.log('[V2.9.680牌力] 中对/底对在对子面降级MEDIUM→AIR('+pairSubType+')');
+      }
+      // V2.9.681 FIX(P0): 中对/底对在连牌面(3+张连牌)降级为AIR
+      // 实证: 中对/底对在连牌面(如7-8-9, T-J-Q)极弱，容易被顺子beat
+      // 连牌面+中对/底对=对手范围偏强(顺子可能性高)
+      if(madeType==='MEDIUM'&&(pairSubType==='中对'||pairSubType==='底对')&&_boardIsConnected){
+        madeType='AIR';pairSubType+='(连牌面降级)';
+        _downgradedBy3Flush=true;  // V2.9.681: 连牌面降级也阻止DRAW升级
+        console.log('[V2.9.681牌力] 中对/底对在连牌面降级MEDIUM→AIR('+pairSubType+')');
       }
       // V2.9.676 FIX(P0): 三花面对子降级——9d9c在4c Tc 3c面被判MEDIUM导致错误call all-in
       // 实证: 9d9c在三花面eq=53.4%实际只有30-35%，中对在三花面极其脆弱
