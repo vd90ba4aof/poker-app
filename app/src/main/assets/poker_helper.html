@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.674',
+  CURRENT_VERSION:'2.9.675',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.674';
+var APP_VERSION = '2.9.675';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3620,13 +3620,20 @@ function decidePreflop(k){
     //   根因: opp_seats无bet数据→raiser检测失败→vs_MP.from_MP不存在→直接安全fold。
     //   修复: raiser=unknown时,尝试vs_UTG1.from_XX(最保守)作为fallback表,而非直接fold。
     //   这样中等强度手牌(AJs/ATs/KQs等)能从UTG1表中找到跟注条目,不再一律fold。
-    if(!posTable&&raiserRole==='unknown'){
-      var _fbKey='vs_UTG1';
-      var _fbTb=_3B[_fbKey];
-      if(_fbTb&&_fbTb[fromKey]){
-        posTable=_fbTb[fromKey];
-        entry=posTable?posTable[k]:null;
-        console.log('[SE] raiser=unknown→fallback vs_UTG1.from_'+p5+' (保守raiser表)');
+    // V2.9.674 FIX: 扩展fallback逻辑——不仅处理raiserRole='unknown',还要处理posTable不存在的任何情况
+    //   根因: getOppPos()默认值从'utg'改为'mp'后,hero在MP位置+对手未知→vs_MP.from_MP不存在
+    //   修复: 只要posTable不存在就尝试fallback,优先vs_UTG1(最保守),其次vs_CO(中等),最后vs_BTN(最宽松)
+    if(!posTable){
+      var _fbKeys=['vs_UTG1','vs_CO','vs_BTN'];
+      for(var _fi=0;_fi<_fbKeys.length;_fi++){
+        var _fbKey=_fbKeys[_fi];
+        var _fbTb=_3B[_fbKey];
+        if(_fbTb&&_fbTb[fromKey]){
+          posTable=_fbTb[fromKey];
+          entry=posTable?posTable[k]:null;
+          console.log('[SE] '+vsKey+'.'+fromKey+'不存在→fallback '+_fbKey+'.'+fromKey+' (raiser='+raiserRole+')');
+          break;
+        }
       }
     }
     // V2.9.652 FIX(P0): _isLimp检测在pot>3BB时失效——pot=11BB的2BB下注被误判为limp!
