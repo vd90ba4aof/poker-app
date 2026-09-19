@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.679',
+  CURRENT_VERSION:'2.9.680',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2934,7 +2934,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.679';
+var APP_VERSION = '2.9.680';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3725,7 +3725,8 @@ function decidePreflop(k){
       // V2.9.662: Flat Call防御优化——降低门槛+放宽K9o+offsuit+阻止升级
       //   优化依据: V2.9.661首测通过率仅4%(1/23),100%翻前call正确率=策略过紧铁证
       //   调整: 基准50%→47%, OOP缓冲5%→3%, 新增K9o+offsuit质量标准
-      else if(bet>0){
+      // V2.9.680 FIX: 添加位置检查，UTG/MP禁止FlatCall（同第二路径L3818）
+      else if(bet>0&&_limpPosOK){
         // 手牌质量标准(比limp兜底略宽——新增K9o+offsuit,面对raise中等Kx可防守)
         var _fcSuited=(k.length>=2&&k.charAt(k.length-1)==='s');
         var _fcPair=(k.length>=2&&k.charAt(0)===k.charAt(1));
@@ -3776,7 +3777,8 @@ function decidePreflop(k){
     }
     if(!entry){
       // V2.9.645: limp场景兜底——小金额下注不在3B范围也可跟注
-      if(_isLimp){
+      // V2.9.680 FIX: 添加位置检查，UTG/MP禁止limp兜底（同第一路径L3652）
+      if(_isLimp&&_limpPosOK){
         // V2.9.655 FIX: 底池赔率公式修正(同第一路径)
         var _limpPo2=bet/Math.max(pot+bet,1)*100;
         var _limpTh2=45+Multiway.callThresholdAdj(); // V2.9.652: 40→45,收紧
@@ -3814,7 +3816,8 @@ function decidePreflop(k){
         }
       }
       // V2.9.662: Flat Call防御优化(同第一路径)——基准47%+OOP3%+K9o+offsuit
-      else if(bet>0){
+      // V2.9.680 FIX: 添加位置检查，UTG/MP禁止FlatCall（同第一路径L3652）
+      else if(bet>0&&_limpPosOK){
         var _fc2Suited=(k.length>=2&&k.charAt(k.length-1)==='s');
         var _fc2Pair=(k.length>=2&&k.charAt(0)===k.charAt(1));
         var _fc2OffBW=false;
@@ -8189,7 +8192,7 @@ function handClassify(hole,comm){
   else if(pairCount2[0]>=3)madeHand2='set';
   else if(pairCount2[0]>=2&&pairCount2[1]>=2)madeHand2='twoPair';
   else if(pairCount2[0]>=2)madeHand2='pair';
-  var madeType='high';var pairSubType='';
+  var madeType='high';var pairSubType='';var _downgradedBy3Flush=false;
   // V2.9.152: 湿面降级——set/straight/flush在湿面不一定是NUTS
   // 检测板面湿面条件
   var _boardSuits={};
@@ -8346,11 +8349,18 @@ function handClassify(hole,comm){
         if(topPairR>=minCommRank){madeType='MEDIUM';pairSubType='中对';}
         else{madeType='MEDIUM';pairSubType='底对';}
       }
+      // V2.9.680 FIX(P0): 中对/底对在paired board(对子面)降级为AIR
+      // 实证: 7c5s在6c-4h-6h-7h-4c面(6-6对子面)→底对7→MEDIUM→call all-in→-19.1BB
+      // 根因: 对子面+中对/底对=极弱，容易被葫芦beat，且对手范围偏强
+      if((pairSubType==='中对'||pairSubType==='底对')&&_boardHasPair){
+        madeType='AIR';pairSubType+='(对子面降级)';
+        _downgradedBy3Flush=true;  // V2.9.680: 对子面降级也阻止DRAW升级
+        console.log('[V2.9.680牌力] 中对/底对在对子面降级MEDIUM→AIR('+pairSubType+')');
+      }
       // V2.9.676 FIX(P0): 三花面对子降级——9d9c在4c Tc 3c面被判MEDIUM导致错误call all-in
       // 实证: 9d9c在三花面eq=53.4%实际只有30-35%，中对在三花面极其脆弱
       // 逻辑: 三花面+手牌未完全阻断(0-1张该花色) → 中对/底对降级为AIR
       // 例外: 顶对顶踢(TPTK)在三花面仍保持MEDIUM(有踢脚价值)
-      var _downgradedBy3Flush=false;  // V2.9.678: 防止三花面降级被后续DRAW升级覆盖
       if(_boardHas3Flush && madeType==='MEDIUM'){
         // 找出三花面的花色
         var _flush3Suit=null;
@@ -8487,7 +8497,9 @@ function handClassify(hole,comm){
       }
     }
     if(_bdOuts>0){
-      if(madeType==='AIR'){madeType='DRAW';}
+      // V2.9.680 FIX: 后门听牌升级也需要检查_downgradedBy3Flush
+      // 三花面/对子面降级的手牌不应被后门听牌救回DRAW
+      if(madeType==='AIR'&&!_downgradedBy3Flush){madeType='DRAW';}
       outs+=_bdOuts;
       if(_bdDesc.length>0)pairSubType=(pairSubType?pairSubType+'+':'')+_bdDesc.join('+');
     }
