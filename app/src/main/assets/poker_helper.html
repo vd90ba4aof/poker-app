@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.691',
+  CURRENT_VERSION:'2.9.692',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2950,7 +2950,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.691';
+var APP_VERSION = '2.9.692';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -5515,6 +5515,24 @@ function _facingCR(k,hcKey,btKey,betSz,pot,eq,street){
         return _fold(eq||0,'面CR fold(odds) '+btKey+'/'+hcKey+' eq='+Math.round(eq)+'%<'+Math.round(_fcrCallReq*100)+'%('+Math.round(adjF*100)+'%)',spr);
       }
       return{a:'call',r:'GTO 面CR call '+btKey+'/'+hcKey+'('+Math.round(adjC*100)+'%)',eq:eq||0,c:'m',scene:'面对CR',spr:spr,_se:true,_seFreq:adjC};
+    }
+    // V2.9.692 FIX(P6): 面CR fold支路权益硬闸——与 _facingCBet(P5) 同类缺陷。
+    //   根因: fold 支路原为纯频率掷骰 `return _fold(...)`, 无任何 eq 校验;
+    //         _FCR 表 STRONG(hcKey=4) 的 f 值高达 0.30(btKey=4), 比 _FCB 更激进。
+    //   实证(修复前, N=600): AA超对 eq≈88% 被弃 11.2%~12.2%; 两对 eq≈88% 被弃 5.3%~6.7%。
+    //   注意: _hc2key() 返回【数字】(0=NUTS/4=STRONG/6=MEDIUM/9-12=DRAW/15=AIR), 不能按字符串比较。
+    if(eq!==undefined&&eq!==null&&eq>=0){
+      var _fcrFoldReq=Math.max(1,betSz)/Math.max(pot+betSz,1);
+      var _fcrEq=eq/100;
+      var _fcrHcNum=(typeof hcKey==='number')?hcKey:parseInt(hcKey,10);
+      if(isNaN(_fcrHcNum))_fcrHcNum=15;
+      var _fcrStrongHand=(_fcrHcNum<=4);
+      var _fcrGateA=(_fcrEq>=_fcrFoldReq+0.15);
+      var _fcrGateB=(_fcrStrongHand&&_fcrEq>=_fcrFoldReq);
+      if(_fcrGateA||_fcrGateB){
+        console.log('[V2.9.692面CR] fold支路权益硬闸('+(_fcrGateA?'闸A权益':'闸B牌力')+'): eq='+Math.round(eq)+'% 需'+Math.round(_fcrFoldReq*100)+'% hc='+hcKey+' + '+btKey);
+        return{a:'call',r:'GTO 面CR call(权益硬闸) '+btKey+'/'+hcKey+' eq='+Math.round(eq)+'%',eq:eq||0,c:'m',scene:'面对CR',spr:spr,_se:true,_seFreq:adjC};
+      }
     }
     return _fold(eq||0,'面CR fold '+btKey+'/'+hcKey+'('+Math.round(adjF*100)+'%)',spr);
   }
