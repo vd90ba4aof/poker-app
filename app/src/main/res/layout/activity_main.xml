@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.699 · 翻前/翻后策略威胁反推5项:被支配broadway折价(KJo/AJo vs前位open不再100%平跟)·小对子set实现折损eq×0.7(码深成为set mine决定变量:短码弃/深码跟)·两同花+邻张面升semi-wet(8c7c2d类对手同花听牌空间不再低估)·威胁降级hazard透传+CBet尺寸控池降档(降级牌威胁面不再80%pot敞口)·坚果听牌面deny-equity收费×1.15(set@同花连张面30%→80%) | 反推依据:v698威胁认知实测5缺口,99项回归全绿"
+        android:text="V2.9.700 稳定分发版 · 引擎v698威胁认知(翻后全谱威胁:同花/顺子/公对/葫芦反超deny+键级修正)×决策v699策略反推5项(被支配broadway折价·小对子set折损eq×0.7·两同花+邻张面升semi-wet·威胁降级hazard透传+CBet控池降档·坚果听牌面deny-equity收费) | 复检修正2项(河牌街数守卫·深码折价×2) | 99项回归+26项升级验证+125项全量复检全绿"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

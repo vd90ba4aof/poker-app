@@ -117,7 +117,10 @@ ok(entryRate(v2b, 300) > 0.5, 'V2b KQo(折价+6,eq55)保留call能力', entryRat
 // (getOppPos读G._raiserRole, mock需显式设置后位raiser——v699验证场景修正)
 const v2c = preflopDist('KJo', { pos: 'bb', scene: 'raise', bet: 3, pot: 4.5, stk: 100, raiserRole: 'btn' });
 console.log('  KJo@BB vs BTN open(后位不折价): call=' + Math.round((v2c.call || 0) / 3) + '%');
-ok(entryRate(v2c, 300) > 0.3, 'V2c KJo vs后位raiser不被过度折价(后位范围宽支配浓度低)', entryRate(v2c, 300).toFixed(2));
+// V2.9.700断言校准: 大样本实测(N=2000)真实入池率29.6%~30.1%——KJo@BB vs BTN是30/70混合防守策略(概率性),
+// 300reps抽样σ≈2.6%, 原阈值>0.30贴着均值(偏离0.15σ, 失败率≈55%, v699复检通过属抽样侥幸)。
+// 校准为>0.22(=均值-2.9σ, 失败率<0.2%), 与V1前位折价态(实测0.0%确定性)保持区分度。引擎逻辑零改动。
+ok(entryRate(v2c, 300) > 0.22, 'V2c KJo vs后位raiser不被过度折价(后位范围宽支配浓度低, 实测混合~30%)', entryRate(v2c, 300).toFixed(2));
 
 console.log('\n【PF-2】小对子set实现折损 (修复前: 44@limp 30BB/200BB 均100% call无码深响应)');
 const v3s = preflopDist('44', { pos: 'co', scene: 'raise', bet: 2, pot: 3.5, stk: 30, reps: 200 });
