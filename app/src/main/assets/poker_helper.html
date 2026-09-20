@@ -1393,7 +1393,7 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.697';
+var ENGINE_VERSION='2.9.698';
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
@@ -4327,7 +4327,7 @@ function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive){
     // 'raise'线=JJ+/同花高张/98s+连张/A2s-A5s诈唬代理(极化建模)。连牌面不切:顺子组合无键级稀释,eq已真实。
     try{if(sceneIn!=='check'&&bTexture&&bTexture.hasMonotone&&line==='cbet')line='raise';}catch(_twE){}
     var wet=(bTexture&&bTexture.wetness>=2)?'wet':'dry';
-    var range=getOppRange('postflop',line,wet);
+    var range=getOppRange('postflop',line,wet,bc);
     // V2.9.683 FIX: 多人池范围收窄——移除弱牌避免MC权益膨胀
     range=_narrowRangeMultiway(range,_nOpp);
     var iter, isRiver=(bc.filter(function(c){return c;}).length===5);
@@ -8684,7 +8684,12 @@ function handClassify(hole,comm){
     if(_heroStraightTop<_maxBoardRank)_isNonNutStraight=true;
     // FIX-7(审计): 精确判据——孤立高牌不可能参与更高顺(如89@567KQ, K/Q构不成顺)
     // 对手更高顺需: 存在顺窗口W(顶>hero顺顶)且W中>=3个rank已在板面(对手2张补齐剩余)
-    if(_isNonNutStraight){
+    // V2.9.698 FIX(D1审计): 守卫短路修复——原FIX-7仅在"板面最高>hero顺顶"时执行,漏检
+    //   "更高顺的高牌来自对手手牌"的情形: 如hero 54@9876(hero顺顶9=板面最高,守卫false
+    //   →不扫描→误判NUTS), 而对手任意Tx持牌即成T-9-8-7-6更高顺。修复: 无条件执行窗口
+    //   扫描——该判据本身完备(窗口顶>hero顶+板面≥3张), 同时覆盖孤立高牌误报(BUG#7历史)
+    //   与对手补牌漏检(D1)两个方向。坚果Broadway顺(顺顶=A)无更高窗口, 不受影响。
+    {
       _isNonNutStraight=false;
       var _boardRV=comm.filter(function(c){return c;}).map(function(c){return RV[c.rank];});
       for(var _swTop=Math.max(_heroStraightTop+1,4);_swTop<=12;_swTop++){
@@ -8994,6 +8999,24 @@ function handClassify(hole,comm){
         _downgradedBy3Flush=true;_downgradedByBoardHazard=true;  // V2.9.681: 连牌面降级也阻止DRAW升级
         console.log('[V2.9.681牌力] 中对/底对在连牌面降级MEDIUM→AIR('+pairSubType+')');
       }
+      // V2.9.698 FIX(D5审计): 顶对/超对@连牌面降级STRONG→MEDIUM——对手已成顺/顺听威胁认知。
+      //   实测AQ@Q-T-9: 对手范围已成顺7.8%+两对6.7%+set2.4%(直接威胁16.9%), eq虚高6-16pp
+      //   且决策层无降级(681只降中/底对)→STRONG→深码raise偏激进。对齐三花面689降级语义:
+      //   降MEDIUM不降AIR(顶对仍有摊牌价值), 由eq守卫按真实赔率决策call/fold/raise。
+      //   判据说明: 不用_boardIsConnected(严格三连跨度=2, QT9缺口面漏判), 用与eq层
+      //   _threatReweight(V2.9.698)一致的"缺口连"判据——任意3张uniq rank跨度≤4即存在
+      //   5张连续窗口含之, 对手2张可补成顺(如QT9面对手KJ/J8/98, KQ9面对手JT)。
+      if(madeType==='STRONG' && (pairSubType==='顶对顶踢'||pairSubType==='超对')){
+        var _d5Gap=false;
+        for(var _d5i=0;_d5i+2<_boardUniq.length;_d5i++){
+          if(_boardUniq[_d5i]-_boardUniq[_d5i+2]<=4){_d5Gap=true;break;}
+        }
+        if(_d5Gap){
+          madeType='MEDIUM';pairSubType+='(连牌面降级)';
+          _downgradedByBoardHazard=true;
+          console.log('[V2.9.698牌力] 顶对/超对在连牌面降级STRONG→MEDIUM('+pairSubType+')');
+        }
+      }
       // V2.9.676 FIX(P0): 三花面对子降级——9d9c在4c Tc 3c面被判MEDIUM导致错误call all-in
       // 实证: 9d9c在三花面eq=53.4%实际只有30-35%，中对在三花面极其脆弱
       // 逻辑: 三花面+手牌未完全阻断(0-1张该花色) → 中对/底对降级为AIR
@@ -9284,7 +9307,7 @@ function compareEVs(eq,pot,betToCall,raiseSz){var results={};var eq01=eq/100;if(
 // rev11修复POST-6: 旧getOppRange只识别'cbet',其余action全返回gO宽开池范围——
 // barrel/raise/donk线路共用同一宽范围,对手连开两枪的范围里仍计入大量空气,bluff捕获和value判断全偏。
 // 按行动线静态收窄(无蒙特卡洛开销): 在防守基线gC上按手牌结构强度过滤
-function _narrowRangeByLine(baseArr, line, wetness){
+function _narrowRangeByLine(baseArr, line, wetness, comm){
   try{
     if(!baseArr||!baseArr.length)return baseArr;
     if(line==='cbet')return baseArr;  // flop面对cbet:防守宽范围不变
@@ -9319,19 +9342,52 @@ function _narrowRangeByLine(baseArr, line, wetness){
         keep.push(key);
       }
     }
+    // V2.9.698 FIX(D2审计): 板面交互校正——范围过滤原为纯键级(TT+等rank过滤), 与公牌零交互:
+    //   实测 river 6c7d7h8s9c(公对77+连张)面, barrel_river的TT+过滤把66/77/88/99(FH/quads线)
+    //   全部剔除 → 对手范围葫芦=0组合 → hero顺子eq虚高15.2pp(92.1% vs 补回后77.0%)。
+    //   修复: 公对面时把"持板对rank的键"(A8s/87s等=trips/FH线)与"该rank的pocket键"
+    //   (88=FH/quads线)加回keep——对手在公对面持续下注的正是这些牌。
+    try{
+      if(comm&&comm.length&&(line==='barrel_river'||line==='barrel_turn'||line==='raise')){
+        var _c2=comm.filter(function(x){return x&&x.rank;});
+        var _rc={};for(var _ri=0;_ri<_c2.length;_ri++)_rc[_c2[_ri].rank]=(_rc[_c2[_ri].rank]||0)+1;
+        for(var _prk in _rc){
+          if(_rc[_prk]>=2){
+            var _pk=_prk+_prk;                                   // pocket键(如board 88→'88')
+            if(baseArr.indexOf(_pk)>=0&&keep.indexOf(_pk)<0)keep.push(_pk);
+            for(var _bi=0;_bi<baseArr.length;_bi++){             // 持板对rank的键(trips线)
+              var _bk=String(baseArr[_bi]);
+              if(_bk.indexOf(_prk)>=0&&keep.indexOf(_bk)<0)keep.push(_bk);
+            }
+          }
+        }
+      }
+    }catch(_d2e){}
     // 兜底:过滤后为空(极端情况)回退原范围,不返回空数组
     if(keep.length<8)return baseArr;
     return keep;
   }catch(e){return baseArr;}
 }
-function getOppRange(phase,action,bTexture){
+function getOppRange(phase,action,bTexture,comm){
   if(phase==='preflop'){
     return gO(getOppPos());
   }
   var wetness=bTexture?bTexture.wetness:0;
   // action 即行动线key: 'cbet'(flop防守宽) / 'barrel_turn' / 'barrel_river' / 'raise'(极化)
   var base=gC(getOppPos());
-  return _narrowRangeByLine(base, action, wetness);
+  // V2.9.698 FIX(D3审计): 平跟范围强牌回收——CB表假设"QQ+/AK必3bet"全部剥离强牌,
+  //   实测CB9.btn(51键)无AA/KK/AKs/AKo/QQ、CB2.btn(55键)仅AKo → 对手平跟陷阱线在
+  //   翻后eq中不存在, hero顶对/set的被支配威胁系统性缺失(set88@K82 eq 95.7% vs 真实82-88%,
+  //   两对K8@K82 91.9% vs 62-70%)。保守注入QQ/AKs/AKo三键(BB/深码常见flat陷阱线;
+  //   AA/KK仍视为3bet线不注入, 避免过度悲观)。_narrowRangeByLine按行动线自然收窄,
+  //   注入仅在对手平跟进池(postflop)时生效, preflop(gO 3bet线)不受影响。
+  try{
+    var _flatNuts=['QQ','AKs','AKo'];
+    for(var _fn=0;_fn<_flatNuts.length;_fn++){
+      if(base.indexOf(_flatNuts[_fn])<0)base=base.concat(_flatNuts[_fn]);
+    }
+  }catch(_d3e){}
+  return _narrowRangeByLine(base, action, wetness, comm);
 }
 function planStreets(hClass,eq,scene,opp,spr){
   // V2.9.59: SPR感知街道规划——不同深度策略不同
@@ -12139,17 +12195,38 @@ function _threatReweight(oppHands,comm){
     if(cOK.length<3)return oppHands;
     var sc={};for(var i=0;i<cOK.length;i++)sc[cOK[i].suit]=(sc[cOK[i].suit]||0)+1;
     var thr=null;for(var s in sc){if(sc[s]>=3&&sc[s]<5){thr=s;break;}}
-    if(!thr)return oppHands;
+    // V2.9.698 FIX(D4审计): 公对面威胁维度——对手持板对rank(8x=trips/FH线)×2、
+    //   pocket=板对rank(88=FH/quads线)×3、双公对面pocket×4。
+    //   根因: 实测顺子T9@flop678 eq92.4% → turn落7成6778(对手pocket已成FH)eq93.0%几乎无感,
+    //   对手已成FH组合(2.2%)权重=1, 行动条件化完全缺失(对手在公对面持续投钱的trips/FH
+    //   浓度应显著高于静态展开)。同花威胁优先级最高(先判), 公对/连牌为else分支。
+    var rc={};for(var b1=0;b1<cOK.length;b1++)rc[cOK[b1].rank]=(rc[cOK[b1].rank]||0)+1;
+    var pairRanks=[];for(var r1 in rc){if(rc[r1]>=2)pairRanks.push(r1);}
+    // V2.9.698 FIX(D5审计): 连牌面顺子维度——板面任意3张uniq rank落在跨度≤4的窗口
+    //   (即存在5张连续窗口含这3张, 对手2张可补成顺)时, 对手已成顺组合×2。
+    //   实测顶对AQ@QT9: 对手范围已成顺7.8%+两对6.7%+set2.4%(直接威胁16.9%)无加权
+    //   → eq虚高6-16pp。已顺组合用eH精确判定(与MC同口径), 一次性预处理成本<5%。
+    var bRV=[];for(var b3=0;b3<cOK.length;b3++){if(RV[cOK[b3].rank]!==undefined)bRV.push(RV[cOK[b3].rank]);}
+    var bUniq=[];bRV.forEach(function(v){if(bUniq.indexOf(v)<0)bUniq.push(v);});
+    bUniq.sort(function(a,b){return a-b;});
+    var connWin=false;
+    for(var wi=0;wi+2<bUniq.length;wi++){if(bUniq[wi+2]-bUniq[wi]<=4){connWin=true;break;}}
+    if(!thr&&!pairRanks.length&&!connWin)return oppHands;
     var hiRV=0;for(var b2=0;b2<cOK.length;b2++){var rv2=RV[cOK[b2].rank];if(rv2!==undefined&&rv2>hiRV)hiRV=rv2;}
     var out=[];
     for(var j=0;j<oppHands.length;j++){
       var h=oppHands[j];
-      var c0h=h[0]&&h[0].suit===thr,c1h=h[1]&&h[1].suit===thr;
+      var c0h=thr&&h[0]&&h[0].suit===thr,c1h=thr&&h[1]&&h[1].suit===thr;
       if(c0h&&c1h){out.push(h,h,h,h);}
       else if(c0h||c1h){
         if(sc[thr]>=4){out.push(h,h,h,h);}
         else{var hv2=Math.max(RV[h[0].rank]||-1,RV[h[1].rank]||-1);if(hv2>=hiRV-2)out.push(h,h);else out.push(h);}
-      }else{out.push(h);}
+      }
+      else if(pairRanks.length&&h[0].rank===pairRanks[0]&&h[1].rank===pairRanks[0]){out.push(h,h,h,h);}  // pocket=板对: FH/quads线 ×3(双公对×4)
+      else if(pairRanks.length>1&&h[0].rank===pairRanks[1]&&h[1].rank===pairRanks[1]){out.push(h,h,h,h,h);}
+      else if(pairRanks.length&&(h[0].rank===pairRanks[0]||h[0].rank===pairRanks[1]||h[1].rank===pairRanks[0]||h[1].rank===pairRanks[1])){out.push(h,h);}  // 持板对rank单张: trips/FH线 ×2
+      else if(connWin){var _osc=0;try{_osc=eH([].concat(h,cOK));}catch(_oe){}if(Math.floor(_osc/1e10)===4){out.push(h,h);}else out.push(h);}
+      else{out.push(h);}
     }
     return out;
   }catch(e){return oppHands;}

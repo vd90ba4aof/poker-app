@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.697 · 威胁面止损:对手范围组合级重加权(同花威胁×4/坚果听×2修正键级稀释4倍)·威胁面下注→极化范围(中低对不进威胁面大注线) | 实测:set@三同花eq 72.6%→56%(干燥对照92%),中对@三花面全下fold(9d9c实机教训),21/21"
+        android:text="V2.9.698 · 威胁覆盖审计修复5项:非坚果顺守卫短路(对手补牌窗口漏检误判NUTS)·范围过滤板面交互校正(公对面FH/quads键不再被TT+清零)·平跟范围强牌回收(QQ/AKs/AKo)·_threatReweight扩展公对/连牌维度(trips/FH/已成顺组合加权)·顶对超对连牌面降级 | 实测:顺子@6778落公对eq跨街无感→FH条件化,river公对面顺子92%→77%,5轮60+项审计复现"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
