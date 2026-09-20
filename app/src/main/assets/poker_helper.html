@@ -1390,10 +1390,13 @@ function showToast(msg){
   setTimeout(function(){document.body.removeChild(t);},2000);
 }
 
+// V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
+// (build.gradle与UI横幅仍需手动同步, 见审计报告)
+var ENGINE_VERSION='2.9.696';
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.695',
+  CURRENT_VERSION:ENGINE_VERSION,
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2683,6 +2686,16 @@ var FrameDiffEngine={
   getActionLog:function(){return this._al;},
   getLastOppAction:function(){for(var i=this._al.length-1;i>=0;i--){var a=this._al[i];if(a.a==='fold'||a.a==='call'||a.a==='raise')return a.a;}return 'unknown';},
   getOppPostflopAction:function(st){var f=false;var sa=[];for(var i=0;i<this._al.length;i++){var a=this._al[i];if(a.a==='new_street'&&a.st===st)f=true;if(f&&(a.a==='fold'||a.a==='call'||a.a==='raise'))sa.push(a);}return sa.length>0?sa[sa.length-1].a:null;},
+  // V2.9.696 FIX(SR-1a): 本街动作序列(含our_turn)——街语义精确判据的基础
+  // 实测修正: _al中对手动作(带st字段)先于new_street入列(同帧街转换时序), 故以条目自带st
+  //   归属为主、new_street区间为辅; our_turn无st字段, 按当前区间或紧随其后的new_street归属。
+  getStreetActs:function(st){var sa=[],inSt=false,found=false;for(var i=0;i<this._al.length;i++){var a=this._al[i];if(a.a==='new_street'){inSt=(a.st===st);if(inSt)found=true;continue;}if(a.a==='fold'||a.a==='call'||a.a==='raise'){if(a.st===st){sa.push(a.a);found=true;}}else if(a.a==='our_turn'){if(inSt)sa.push(a.a);else{var nx=(i+1<this._al.length)?this._al[i+1]:null;if(nx&&nx.a==='new_street'&&nx.st===st){sa.push(a.a);found=true;}}}}return found?sa:null;},
+  // 对手先于hero行动而下注(领先下注: donk或CBet)。
+  // 实测修正: 筹码差推断把对手下注记为call(动作完成态, d<=tc+p*0.1)或raise(tc滞后帧),
+  //   故call/raise记录均计入"投入"; fold/our_turn视为"非投入"截断。
+  isOppLeadRaise:function(st){var sa=this.getStreetActs(st);if(!sa)return false;for(var i=0;i<sa.length;i++){if(sa[i]==='call'||sa[i]==='raise')return true;if(sa[i]==='our_turn'||sa[i]==='fold')return false;}return false;},
+  // hero已行动(our_turn)后对手加注 = 真check-raise/再加注
+  isOppRaiseAfterHero:function(st){var sa=this.getStreetActs(st);if(!sa)return false;var seen=false;for(var i=0;i<sa.length;i++){if(sa[i]==='our_turn')seen=true;else if(sa[i]==='raise'&&seen)return true;}return false;},
   getOppActionSummary:function(){if(this._al.length===0)return null;var s={total:this._al.length,folds:0,calls:0,raises:0};for(var i=0;i<this._al.length;i++){var a=this._al[i];if(a.a==='fold')s.folds++;else if(a.a==='call')s.calls++;else if(a.a==='raise')s.raises++;}return s;},
   reset:function(){this._fb=[];this._al=[];this._hid='';}
 };
@@ -2950,7 +2963,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.695';
+var APP_VERSION = ENGINE_VERSION;
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -4545,6 +4558,29 @@ function decidePostflop(k,_pfInj){
   }
 
   // ★ V3.11: Flop/River面对下注 — 补全场景覆盖
+  // V2.9.696 FIX(SR-1b/BUG#8): hero PFR面对对手donk的防御路由(原V3.12块为死代码, 且其在
+  //   scene==='raise'(hero面对下注)调用_donkDecision(hero主动donk攻击决策, 适用scene==='check',
+  //   参见Turn probe的正确用法)属语义错位, 不予复活)。
+  //   新判据: hero为翻前最后加注者(didPFR且!G._facing3bet——open未被3bet/hero加注后被call)
+  //   + 对手本街先于hero行动而下注(isOppLeadRaise, call/raise记录均计入——分类噪声鲁棒)
+  //   = hero面对donk → _facingCBet(isDonk=true): 其isDonk形参的"donk范围偏两极→更call"
+  //   调整(行内 adjC+adjF*0.25)自V3.12以来首次实际生效。
+  var _isDonk=false;
+  try{
+    // η补丁: !ActionLine.getStreetAction(street) — 本街hero未行动过(donk=对手在hero任何
+    //   行动前领先下注); hero已cbet/check过的街对手再加注属CR路径, 不进donk防御。
+    //   (实测D5: call flop donk后面对turn barrel, 紧邻归属会混入flop街末OT致误判,
+    //    ActionLine闸按hero真实行动精确区分)
+    if(didPFR && !G._facing3bet && scene==='raise' && street!=='preflop' && !ActionLine.getStreetAction(street) && typeof FrameDiffEngine!=='undefined' && FrameDiffEngine.isOppLeadRaise){
+      _isDonk = FrameDiffEngine.isOppLeadRaise(street);
+    }
+  }catch(e){}
+  if(_isDonk && (street==='flop'||street==='river') && typeof _facingCBet==='function'){
+    try{
+      var _dkR=_facingCBet(k,hcKey,btKey,ip,bet,pot,street,true,eq);
+      if(_dkR&&_dkR.a){return _dkR;}
+    }catch(e){}
+  }
   if(!didPFR && scene==='raise' && (street==='flop'||street==='river') && typeof _facingCBet==='function'){
     try{
       var _fcbR=_facingCBet(k,hcKey,btKey,ip,bet,pot,street,false,eq);
@@ -4555,34 +4591,21 @@ function decidePostflop(k,_pfInj){
   // ★ V3.12: 面对Check-Raise (我们CBet后被反加)
   if(didPFR && typeof _facingCR==='function'){
     try{
-      // FIX-8(审计): scene==='reraise'在自动链路永不出现(vision只产出check/bet/allin)
-      // → V2.9.692 P6权益硬闸修复从未生效。补: FrameDiff检测对手本街raise(=被CR/再加注)也进入
+      // FIX-8(审计V2.9.695): scene==='reraise'在自动链路永不出现(vision只产出check/bet/allin)
+      // → V2.9.692 P6权益硬闸修复从未生效。补: FrameDiff检测对手本街raise也进入
+      // FIX-13(审计V2.9.696): 修正FIX-8的donk误路由——对手'raise'含donk(先行动下注)与真CR(hero行动后加注)
+      //   两种, 仅后者应进_facingCR。改用isOppRaiseAfterHero精确判据, donk回退收口(与695前一致)
+      // η补丁: 加ActionLine闸(本街hero行动过) — 实测D5: call flop下注后面对turn barrel时,
+      //   FDE紧邻归属会把flop街末OT混入turn序列致isOppRaiseAfterHero误true; hero本街
+      //   未行动过则不可能是'被CR'(CR=hero下注/行动后对手反加), ActionLine按hero真实决策记录精确闸断
       var _fcrEnter=(scene==='reraise');
-      if(!_fcrEnter&&scene==='raise'&&typeof FrameDiffEngine!=='undefined'&&FrameDiffEngine.getOppPostflopAction){
-        var _oppRA=FrameDiffEngine.getOppPostflopAction(street);
-        if(_oppRA==='raise')_fcrEnter=true;
+      if(!_fcrEnter&&scene==='raise'&&typeof FrameDiffEngine!=='undefined'&&FrameDiffEngine.isOppRaiseAfterHero){
+        if(FrameDiffEngine.isOppRaiseAfterHero(street)&&ActionLine.getStreetAction(street))_fcrEnter=true;
       }
       if(_fcrEnter){
         var _fcrR=_facingCR(k,hcKey,btKey,bet,pot,eq,street);
         if(_fcrR&&_fcrR.a){return _fcrR;}
       }
-    }catch(e){}
-  }
-
-  // ★ V3.12: Donk Bet (对手OOP主动下注)
-  // V3.32: 用FrameDiffEngine检测donk（_facedDonk无人设置，死flag）
-  var _isDonk=false;
-  try{
-    if(!didPFR && scene==='raise' && street!=='preflop'){
-      var _fdA=typeof FrameDiffEngine!=='undefined'?FrameDiffEngine.getOppPostflopAction(street):null;
-      // 翻牌圈对手先下注=donk; 或ActionLine记录对手先行动
-      _isDonk = (_fdA&&_fdA==='bet') || G._facedDonk===true;
-    }
-  }catch(e){}
-  if(!didPFR && scene==='raise' && typeof _donkDecision==='function' && _isDonk){
-    try{
-      var _donkR=_donkDecision(k,hcKey,btKey,ip,pot,oppType,null,_is3betPot,_isMultiway,street,eq);
-      if(_donkR&&_donkR.a){return _donkR;}
     }catch(e){}
   }
 

@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.695 · 引擎审计修复7项:连牌面set降级生效·Worker缓存生效·多人tie按份额计 | 修正:outs双计·坚果顺误降·CR赔率闸·位置范围映射"
+        android:text="V2.9.696 · 街语义统一:donk防御路由复活(hero PFR面对对手donk首次有专门防御)·CR判据精确化(hero行动后加注才进面CR表)·版本号单一来源(ENGINE_VERSION) | 实测:街动作序列判据23/23"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
