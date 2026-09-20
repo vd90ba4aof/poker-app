@@ -1393,7 +1393,7 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.698';
+var ENGINE_VERSION='2.9.699';
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
@@ -3240,13 +3240,16 @@ function _snapToGGTiers(pct){
   return 0.33;
 }
 
-function _pickSizing(sizingObj, bTexture, spr){
+function _pickSizing(sizingObj, bTexture, spr, hazard){
   var pct;
   if(typeof sizingObj==='object' && sizingObj.d!==undefined){
     var cat=bTexture.category||'dry';
     var wet=bTexture.wetness||0;
     if(cat==='paired'||cat==='static') pct=sizingObj.p;
-    else if(wet>=2) pct=sizingObj.w;
+    // V2.9.699 FIX(POST-1): 威胁暴露降档——hero牌被板面威胁降级(hazard, v698 D5连牌面/
+    //   对子面/三花面降级)时, 湿面尺寸从w档降p档: 降级牌在威胁面被raise时损失最大化,
+    //   控池档减少被加注时的敞口+保留薄价值。坚果(hcKey≤1)不降(由POST-2升档接管)。
+    else if(wet>=2) pct=(hazard&&sizingObj.p!==undefined)?sizingObj.p:sizingObj.w;
     else pct=sizingObj.d;
   } else {
     pct = sizingObj; // fallback to number
@@ -3435,6 +3438,29 @@ var PreflopLeakGuard={
 };
 
 // ====== 翻前决策 (保持V2.9.215) ======
+// V2.9.699 FIX(PF-1): 被支配broadway折价——v698威胁认知(D3)反推到翻前决策层
+// 依据: v698 D3修复确认对手平跟范围含QQ/AKs/AKo(D3注入回收), 对手3bet范围含AA/KK/AK/AQ——
+//   前位(UTG1/MP)raiser强牌浓度高, KJo/KTo/QJo/QTo/JTo/AJo等offsuit非对broadway被支配
+//   (reverse implied odds: 顶对摊牌赢小池, 被支配时输大池), 而FlatCall门槛用的查表eq均值
+//   不反映此结构性风险。实测(审计preflop_postflop_gap_audit): KJo@MP vs open FlatCall 100%
+//   call(eq50%≥需47%)——GTO应混合偏fold。
+// 规则(只作用于被动防守FlatCall阈值, 只收紧): offsuit非对broadway vs 前位raiser——
+//   QJo/QTo/JTo +10(被几乎所有broadway支配); KQo/KJo/KTo +6(被AK/AA/KK支配);
+//   AJo +6(被AQ/AK/AA支配, AQo+不受); 后位raiser(CO/BTN/SB/BB)范围宽支配浓度低不加。
+function _dominatorTh(k,rP5){
+  try{
+    if(!k||typeof k!=='string'||k.length<2)return 0;
+    if(['UTG1','MP'].indexOf(rP5)<0)return 0;
+    if(k.indexOf('o')<0||k.length!==3)return 0;  // 仅offsuit非对(suited有同花价值,对子有set价值,不受此折价)
+    var _r1=k.charAt(0),_r2=k.charAt(1);
+    if(_r1===_r2)return 0;
+    var _BW=['A','K','Q','J','T'];
+    if(_BW.indexOf(_r1)<0||_BW.indexOf(_r2)<0)return 0;
+    if(_r1==='A')return (_r2==='J')?6:0;
+    if(_r1==='K')return 6;
+    return 10;
+  }catch(e){return 0;}
+}
 function decidePreflop(k){
   // V3.9/V2.9.632: 入参防护 — 手牌非法返回null,入口归一后由decide()下游统一安全fold(NO_DATA),不再回落旧引擎
   if(!k||typeof k!=='string'||k.length<2){return null;}
@@ -3851,9 +3877,14 @@ function decidePreflop(k){
         if(spr>25)_limpTh-=7;
         else if(spr<10)_limpTh+=7;
         _limpTh=Math.max(20,Math.min(70,_limpTh)); // 安全闸: 不低于20%(底池赔率兜底),不高于70%
-        if(_limpQualityOK&&eq>=_limpTh&&eq>=_limpPo){
+        // V2.9.699 FIX(PF-2): 小对子set实现折损×0.7——查表eq虚高(假设showdown直比)淹没v672码深
+        //   校准(实测44@CO 30BB/200BB均100%call无响应)。折损后码深成为决定变量:
+        //   30BB: 51%<53(spr<15+8)→弃; 200BB: 51%≥38(深码-7)→跟。set mine正确形态。
+        var _limpEq=(_limpSmallPair)?eq*0.7:eq;
+        if(_limpSmallPair&&_limpEq<eq)console.log('[V2.9.699set折损] '+k+' limp兜底 eq'+Math.round(eq)+'%×0.7='+Math.round(_limpEq)+'%(小对子翻后实现折损)');
+        if(_limpQualityOK&&_limpEq>=_limpTh&&_limpEq>=_limpPo){
           var _exLimp=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
-          return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_limpPo)+'%('+rP5+'无表)',eq:_exLimp.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLimp.exploit,_se:true,_seFreq:1,_limpFallback:true};
+          return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(_limpEq)+'%≥需'+Math.round(_limpPo)+'%('+rP5+'无表'+(_limpEq<eq?'·set折损':'')+')',eq:_exLimp.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_limpEq,pot,bet,0),exploit:_exLimp.exploit,_se:true,_seFreq:1,_limpFallback:true};
         }
       }
       // V2.9.662: Flat Call防御优化——降低门槛+放宽K9o+offsuit+阻止升级
@@ -3896,14 +3927,26 @@ function decidePreflop(k){
           var _fcTh=44+Multiway.callThresholdAdj();
           if(G.act>=4)_fcTh-=3;  // V2.9.666: 补齐第二路径的多人池放宽(原遗漏)
           if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fcTh+=3;
+          // V2.9.699 FIX(PF-1): 被支配broadway折价——前位raiser强牌浓度高(D3反推),
+          //   offsuit broadway被支配的reverse implied odds入阈值(实测KJo@MP 100%call过松)
+          var _fcDom=_dominatorTh(k,rP5);
+          if(_fcDom>0){_fcTh+=_fcDom;console.log('[V2.9.699被支配] '+k+' vs '+rP5+' FlatCall阈值+'+_fcDom+'(offsuit broadway被前位强牌支配)');}
           // SPR筹码深度调整(同limp兜底V2.9.660逻辑)
           if(spr>25)_fcTh-=7;
           else if(spr<10)_fcTh+=7;
           // 安全闸: 不低于底池赔率+3%(最小+EV边缘),不高于65%(避免要求过离谱)
           _fcTh=Math.max(_fcPo+3,Math.min(65,_fcTh));
-          if(eq>=_fcTh&&eq>=_fcPo){
+          // V2.9.699 FIX(PF-2): 小对子set实现折损——查表eq假设showdown直比高估小对子
+          //   (88%翻牌miss被迫弃牌, 仅~12%中set实现价值; v698威胁认知反推: 对手只在中牌时支付)。
+          //   eq折算×0.7(实现率), 使码深成为set mine的决定变量: 短码阈值升高弃/深码仍可call。
+          var _fcEq=eq;
+          if(_fcPair&&k.length===2&&'23456'.indexOf(k.charAt(0))>=0&&k.charAt(0)===k.charAt(1)){
+            _fcEq=eq*0.7;
+            console.log('[V2.9.699set折损] '+k+' FlatCall eq'+Math.round(eq)+'%×0.7='+Math.round(_fcEq)+'%(小对子翻后实现折损)');
+          }
+          if(_fcEq>=_fcTh&&_fcEq>=_fcPo){
             var _exFC=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
-            return{a:'call',v:bet,r:'FlatCall防御 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_fcPo)+'%('+rP5+'无表)',eq:_exFC.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exFC.exploit,_se:true,_seFreq:1,_flatCall:true};
+            return{a:'call',v:bet,r:'FlatCall防御 '+k+' eq'+Math.round(_fcEq)+'%≥需'+Math.round(_fcPo)+'%('+rP5+'无表'+(_fcEq<eq?'·set折损':'')+(_fcDom>0?'·被支配折价':'')+')',eq:_exFC.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_fcEq,pot,bet,0),exploit:_exFC.exploit,_se:true,_seFreq:1,_flatCall:true};
           }
         }
       }
@@ -3944,9 +3987,13 @@ function decidePreflop(k){
           _lq2sOK=_hA2||(_mR2>=5)||(_g2<=1);
         }
         var _limpQ2=(_lq2p||_lq2ob||(_lq2s&&_lq2sOK));
-        if(_limpQ2&&eq>=_limpTh2&&eq>=_limpPo2){
+        // V2.9.699 FIX(PF-2): 小对子set实现折损×0.7(同第一路径;本路径独立判定22-66)
+        var _limp2Small=(_lq2p&&k.length===2&&'23456'.indexOf(k.charAt(0))>=0);
+        var _limp2Eq=(_limp2Small)?eq*0.7:eq;
+        if(_limp2Small&&_limp2Eq<eq)console.log('[V2.9.699set折损] '+k+' limp兜底 eq'+Math.round(eq)+'%×0.7='+Math.round(_limp2Eq)+'%(小对子翻后实现折损)');
+        if(_limpQ2&&_limp2Eq>=_limpTh2&&_limp2Eq>=_limpPo2){
           var _exLimp2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
-          return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_limpPo2)+'%('+rP5+'不在3B)',eq:_exLimp2.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLimp2.exploit,_se:true,_seFreq:1,_limpFallback:true};
+          return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(_limp2Eq)+'%≥需'+Math.round(_limpPo2)+'%('+rP5+'不在3B'+(_limp2Eq<eq?'·set折损':'')+')',eq:_exLimp2.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_limp2Eq,pot,bet,0),exploit:_exLimp2.exploit,_se:true,_seFreq:1,_limpFallback:true};
         }
       }
       // V2.9.662: Flat Call防御优化(同第一路径)——基准47%+OOP3%+K9o+offsuit
@@ -3988,14 +4035,23 @@ function decidePreflop(k){
           if(oppType==='fish'||oppType==='calling_station')_fc2Th-=5;
           if(G.act>=4)_fc2Th-=3; // 4人以上底池放宽(同limp)
           if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fc2Th+=3; // V2.9.662: 5→3
+          // V2.9.699 FIX(PF-1): 被支配broadway折价(同第一路径,D3反推)
+          var _fc2Dom=_dominatorTh(k,rP5);
+          if(_fc2Dom>0){_fc2Th+=_fc2Dom;console.log('[V2.9.699被支配] '+k+' vs '+rP5+' FlatCall阈值+'+_fc2Dom+'(offsuit broadway被前位强牌支配)');}
           if(spr>25)_fc2Th-=7;
           else if(spr<10)_fc2Th+=7;
           // V2.9.686 FIX(P2): fish/calling_station对手翻后支付意愿强,平跟防御可放宽5%
           if(oppType==='fish'||oppType==='calling_station')_fc2Th-=5;
           _fc2Th=Math.max(_fc2Po+3,Math.min(65,_fc2Th));
-          if(eq>=_fc2Th&&eq>=_fc2Po){
+          // V2.9.699 FIX(PF-2): 小对子set实现折损×0.7(同第一路径)
+          var _fc2Eq=eq;
+          if(_fc2Pair&&k.length===2&&'23456'.indexOf(k.charAt(0))>=0&&k.charAt(0)===k.charAt(1)){
+            _fc2Eq=eq*0.7;
+            console.log('[V2.9.699set折损] '+k+' FlatCall eq'+Math.round(eq)+'%×0.7='+Math.round(_fc2Eq)+'%(小对子翻后实现折损)');
+          }
+          if(_fc2Eq>=_fc2Th&&_fc2Eq>=_fc2Po){
             var _exFC2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
-            return{a:'call',v:bet,r:'FlatCall防御 '+k+' eq'+Math.round(eq)+'%≥需'+Math.round(_fc2Po)+'%('+rP5+'不在3B)',eq:_exFC2.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exFC2.exploit,_se:true,_seFreq:1,_flatCall:true};
+            return{a:'call',v:bet,r:'FlatCall防御 '+k+' eq'+Math.round(_fc2Eq)+'%≥需'+Math.round(_fc2Po)+'%('+rP5+'不在3B'+(_fc2Eq<eq?'·set折损':'')+(_fc2Dom>0?'·被支配折价':'')+')',eq:_exFC2.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_fc2Eq,pot,bet,0),exploit:_exFC2.exploit,_se:true,_seFreq:1,_flatCall:true};
           }
         }
       }
@@ -4678,7 +4734,18 @@ function decidePostflop(k,_pfInj){
       if(_mwAirKill){cbFreq=0;console.log('[MW] flop多人池CBet收紧: 空气hc='+hcKey+' freq→0%');}
       else if(_isMultiway&&hcKey>4){console.log('[MW] flop多人池CBet收紧: freq→'+Math.round(cbFreq*100)+'% hc='+hcKey);}
       if(Math.random()<cbFreq){
-        var cbPct=_pickSizing(cb[1],bTexture,spr);
+        // V2.9.699 FIX(POST-1+POST-2): 尺寸威胁交互——①hero牌被板面威胁降级(hazard)→_pickSizing降p档控池;
+        //   ②坚果/准坚果(hcKey≤1)在有听牌空间面(wetness≥2)→尺寸×1.15升档deny equity
+        //   (对手同花/顺听牌收费, 实测88@8c7c2d set cbet仅30%pot给对手3.3:1便宜赔率→修复后~80%)
+        var cbPct=_pickSizing(cb[1],bTexture,spr,(hClass&&hClass.hazard)?hClass.hazard:null);
+        if(hcKey<=1&&(bTexture.wetness||0)>=2){
+          var _nutPct=Math.min(0.9,cbPct*1.15);
+          console.log('[V2.9.699坚果收费] hc='+hcKey+' wet='+(bTexture.wetness||0)+' 尺寸'+Math.round(cbPct*100)+'%→'+Math.round(_nutPct*100)+'%pot(听牌面deny equity)');
+          cbPct=_nutPct;
+        }
+        if(hClass&&hClass.hazard&&hcKey>4){
+          console.log('[V2.9.699威胁控池] hc='+hcKey+' hazard='+(hClass.hazard||'?')+' 尺寸降p档控池(降级牌威胁面敞口管理)');
+        }
         var cbSz=Math.round(pot*cbPct);cbSz=Math.min(cbSz,stk);
         var exploitR=applyExploit(eq,ip?'bet':'bet',oppType,{bet:bet,pot:pot});
         return{a:'raise',v:cbSz,r:'GTO CBet '+btKey+'/'+hcKey+'('+Math.round(cbFreq*100)+'%)',eq:exploitR.eq,c:eq>=55?'h':eq>=45?'m':'l',sizing:cbSz,scene:'CBet',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:exploitR.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights},_se:true,_seFreq:cbFreq};
@@ -9253,9 +9320,12 @@ function handClassify(hole,comm){
   else if(madeType==='MEDIUM')desc=hasComboDraw?'中对+听牌':(pairSubType||'中对/底对');
   else if(madeType==='DRAW')desc=outs+'outs'+(hasComboDraw?' 组合听牌':(isOpenEnd?' 开放顺听':(isGutshot?' 卡顺听':(flushDraw?' 同花听':'听牌'))));
   else desc=pairSubType||'空气/弱牌';
-  return{name:madeType,desc:desc,outs:outs,isOvercard:!!isOvercard};
+  // V2.9.699 FIX(POST-1): 威胁降级标记透传——_downgradedByBoardHazard/3Flush原为内部变量,
+  //   决策层(_pickSizing尺寸)无法感知"牌力为何降级"(v698 D5连牌面/对子面降级 vs 天然MEDIUM),
+  //   实测AK@连牌面降级后CBet尺寸仍80%pot(被raise损失最大化)。透传hazard字段供尺寸降档。
+  return{name:madeType,desc:desc,outs:outs,isOvercard:!!isOvercard,hazard:(_downgradedByBoardHazard?'board':(_downgradedBy3Flush?'flush':null))};
 }
-function boardTexture(comm){var c=comm.filter(function(card){return card;});if(c.length===0)return{wetness:0,desc:'翻前',hasMonotone:false,hasPaired:false,rangeAdv:'neutral',category:'preflop'};var ranks=c.map(function(card){return card.rank;});var suits=c.map(function(card){return card.suit;}).filter(function(s){return s;});var rankCount={};ranks.forEach(function(r){rankCount[r]=(rankCount[r]||0)+1;});var hasPaired=Object.values(rankCount).some(function(n){return n>=2;});var hasTrips=Object.values(rankCount).some(function(n){return n>=3;});var suitCount={};suits.forEach(function(s){suitCount[s]=(suitCount[s]||0)+1;});var maxSuit=suits.length>0?Math.max.apply(null,Object.values(suitCount)):0;var hasMonotone=maxSuit>=3;var vals=ranks.map(function(r){return RV[r]||0;}).sort(function(a,b){return a-b;});var uniq=[];vals.forEach(function(v){if(uniq.indexOf(v)===-1)uniq.push(v);});uniq.sort(function(a,b){return a-b;});var maxGap=0,connected=0;for(var i=1;i<uniq.length;i++){var gap=uniq[i]-uniq[i-1];if(gap<=2)connected++;if(gap>maxGap)maxGap=gap;}if(uniq.indexOf(12)!==-1&&uniq.indexOf(1)!==-1&&uniq.indexOf(0)!==-1)connected++;var category,wetness;if(hasTrips){category='paired';wetness=3;}else if(hasMonotone&&connected>=2){category='wet';wetness=4;}else if(hasMonotone){category='wet';wetness=4;}else if(hasPaired&&connected>=2){category='semi-wet';wetness=2;}else if(hasPaired){category='paired';wetness=3;}else if(maxSuit>=2&&connected>=2){category='semi-wet';wetness=2;}else if(connected>=2&&maxGap<=3){category='semi-wet';wetness=2;}else if(maxSuit>=2||connected>=1){category='dry';wetness=1;}else{category='static';wetness=0;}var street=c.length===3?'翻牌':c.length===4?'转牌':'河牌';var catNames={'static':'极干','dry':'干燥','semi-wet':'半湿','paired':'对子','wet':'湿面','preflop':'翻前'};var texture={wetness:wetness,desc:street+'('+catNames[category]+')',hasMonotone:hasMonotone,hasPaired:hasPaired,rangeAdv:'neutral',category:category};return texture;}
+function boardTexture(comm){var c=comm.filter(function(card){return card;});if(c.length===0)return{wetness:0,desc:'翻前',hasMonotone:false,hasPaired:false,rangeAdv:'neutral',category:'preflop'};var ranks=c.map(function(card){return card.rank;});var suits=c.map(function(card){return card.suit;}).filter(function(s){return s;});var rankCount={};ranks.forEach(function(r){rankCount[r]=(rankCount[r]||0)+1;});var hasPaired=Object.values(rankCount).some(function(n){return n>=2;});var hasTrips=Object.values(rankCount).some(function(n){return n>=3;});var suitCount={};suits.forEach(function(s){suitCount[s]=(suitCount[s]||0)+1;});var maxSuit=suits.length>0?Math.max.apply(null,Object.values(suitCount)):0;var hasMonotone=maxSuit>=3;var vals=ranks.map(function(r){return RV[r]||0;}).sort(function(a,b){return a-b;});var uniq=[];vals.forEach(function(v){if(uniq.indexOf(v)===-1)uniq.push(v);});uniq.sort(function(a,b){return a-b;});var maxGap=0,connected=0;for(var i=1;i<uniq.length;i++){var gap=uniq[i]-uniq[i-1];if(gap<=2)connected++;if(gap>maxGap)maxGap=gap;}if(uniq.indexOf(12)!==-1&&uniq.indexOf(1)!==-1&&uniq.indexOf(0)!==-1)connected++;var category,wetness;if(hasTrips){category='paired';wetness=3;}else if(hasMonotone&&connected>=2){category='wet';wetness=4;}else if(hasMonotone){category='wet';wetness=4;}else if(hasPaired&&connected>=2){category='semi-wet';wetness=2;}else if(hasPaired){category='paired';wetness=3;}else if(maxSuit>=2&&connected>=2){category='semi-wet';wetness=2;}else if(connected>=2&&maxGap<=3){category='semi-wet';wetness=2;}else if(maxSuit>=2&&connected>=1){category='semi-wet';wetness=2;}/*V2.9.699 FIX(POST-3):两同花+邻张→semi-wet。原判dry(1):对手同花听牌空间(持2张该花9 outs)被低估——实测88@8c7c2d set cbet仅30%pot(d档),给对手听牌3.3:1便宜赔率(同花听只需3:1),deny-equity纯送cheap card。v698威胁认知反推:两tone面+邻张的组合听牌空间应升semi-wet(如8c7c2d/9h8h3d);Ah7h2d(无邻张connected=0)仍dry*/else if(maxSuit>=2||connected>=1){category='dry';wetness=1;}else{category='static';wetness=0;}var street=c.length===3?'翻牌':c.length===4?'转牌':'河牌';var catNames={'static':'极干','dry':'干燥','semi-wet':'半湿','paired':'对子','wet':'湿面','preflop':'翻前'};var texture={wetness:wetness,desc:street+'('+catNames[category]+')',hasMonotone:hasMonotone,hasPaired:hasPaired,rangeAdv:'neutral',category:category};return texture;}
 function calcOuts(hole,comm){var hc=handClassify(hole.filter(function(c){return c;}),comm);return hc.outs||0;}
 // V2.9.105: 精确隐含赔率——成牌后额外赢多少
 var ImpliedOddsCalc={

@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.698 · 威胁覆盖审计修复5项:非坚果顺守卫短路(对手补牌窗口漏检误判NUTS)·范围过滤板面交互校正(公对面FH/quads键不再被TT+清零)·平跟范围强牌回收(QQ/AKs/AKo)·_threatReweight扩展公对/连牌维度(trips/FH/已成顺组合加权)·顶对超对连牌面降级 | 实测:顺子@6778落公对eq跨街无感→FH条件化,river公对面顺子92%→77%,5轮60+项审计复现"
+        android:text="V2.9.699 · 翻前/翻后策略威胁反推5项:被支配broadway折价(KJo/AJo vs前位open不再100%平跟)·小对子set实现折损eq×0.7(码深成为set mine决定变量:短码弃/深码跟)·两同花+邻张面升semi-wet(8c7c2d类对手同花听牌空间不再低估)·威胁降级hazard透传+CBet尺寸控池降档(降级牌威胁面不再80%pot敞口)·坚果听牌面deny-equity收费×1.15(set@同花连张面30%→80%) | 反推依据:v698威胁认知实测5缺口,99项回归全绿"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
