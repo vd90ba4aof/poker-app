@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.690',
+  CURRENT_VERSION:'2.9.691',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2950,7 +2950,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.690';
+var APP_VERSION = '2.9.691';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -3496,8 +3496,41 @@ function decidePreflop(k){
   if(_depthTier==='short'&&k.indexOf('s')>=0&&'23456789T'.indexOf(k[0])>=0&&'23456789T'.indexOf(k[1])>=0)_specBonus=0; // 短码非高牌同花连牌不给投机
   if(_specBonus>0)eq+=_specBonus;
 
+  // ===== V2.9.691 FIX(P2): 码深→入池率显性响应 =====
+  // 根因(实测): V2.9.690 及以前,码深仅通过 _specBonus 影响 eq,但修正量太小(±8点)不足以
+  //   跨越 RFI 掷骰阈值 → 实测投机牌 15BB=65.4% vs 200BB=65.3%,差 -0.1pp = 完全无响应。
+  //   而扑克理论: 深码投机牌(小对子set mine/同花连张/A低同花)隐含赔率更好,应放宽开池;
+  //   短码(≤40BB)投机牌翻后无法兑现潜力,应收紧。
+  // 修复: 引入 _depthRFIMult,在 RFI 频率上显性乘系数(作用于 f_最终,而非 eq中间量)。
+  //   deep(≥150BB): ×1.20 放宽; standard(41-149BB): ×1.00 不变; short(≤40BB): ×0.75 收紧;
+  //   nash(≤15BB): 由 NashPushFold 接管,此处不额外处理(保持×1.00避免双重收紧)。
+  //   仅作用于"可游戏投机牌"(对子/同花/连张),纯高张与垃圾牌不受影响——垃圾牌 RFI 表本身 freq=0/undefined,
+  //   乘以任何系数仍是 0/undefined,不会让垃圾牌入池。
+  var _depthRFIMult=1.0;
+  if(_depthTier==='deep')_depthRFIMult=1.20;
+  else if(_depthTier==='short')_depthRFIMult=0.75;
+  else if(_depthTier==='nash')_depthRFIMult=1.0;
+
   var posMod={utg:-6,utg1:-4.5,mp:-3,mp1:-1.5,hj:1,co:2,btn:6,sb:0,bb:1};
   eq+=(posMod[p]!==undefined?posMod[p]:0);
+  // ===== V2.9.691 FIX(P3): SB 位置补偿（小对子/同花A/同花连张）=====
+  // 根因(实测): SB 已投入 0.5BB 死钱,补齐成本低于其它位置,且 SB 关闭行动有位置优势。
+  //   但实测修正前 22@SB=28% < 22@UTG=24~28%(区间重叠),A2s@SB=54% < A2s@CO=87%,SB 相对后位过紧。
+  // 修复: SB 位置对**明确可游戏**的牌给 +2 eq 补偿(非所有同花——仅小对子/同花A/同花连张),
+  //   避免 SB 变成松叫位。V2.9.691 初版 +3/覆盖全部同花 实测导致 SB 全线 100%(过度),
+  //   收紧为 +2 且限定牌型。
+  if(p==='sb'&&k.length>=2){
+    var _sbPlayable=false;
+    if(k.length===2&&k[0]===k[1])_sbPlayable=true;                          // 任意对子
+    else if(k.indexOf('s')>=0&&k.length===3){
+      var _sbR1=k.charAt(0),_sbR2=k.charAt(1);
+      var _sbRO='23456789TJQKA';
+      var _sbI1=_sbRO.indexOf(_sbR1),_sbI2=_sbRO.indexOf(_sbR2);
+      if(_sbR1==='A')_sbPlayable=true;                                       // 同花A(A2s-A5s 轮子+坚果花潜力)
+      else if(Math.abs(_sbI1-_sbI2)<=2)_sbPlayable=true;                     // 同花连张/隔张
+    }
+    if(_sbPlayable)eq+=2;
+  }
   if(BvBStrategy&&BvBStrategy.eqAdj)eq+=BvBStrategy.eqAdj();
   if(G.ante>0){var _ac=G.ante*(G.tt||6);var _ar=_ac/Math.max(pot,1);var _ab=Math.min(Math.round(_ar*12),5);if(_ab>0)eq+=_ab;}
 
@@ -3572,6 +3605,33 @@ function decidePreflop(k){
       var _lgF1=PreflopLeakGuard.factor(p,k);
       if(_lgF1<1){console.log('[LeakGuard] RFI开池收紧 '+p5+' '+k+' freq '+freq.toFixed(2)+'->'+(freq*_lgF1).toFixed(2)+'(x'+_lgF1+')');freq=freq*_lgF1;}
     }
+    // ===== V2.9.691 FIX(P2): 码深系数应用到 RFI 频率 =====
+    // 位置: LeakGuard 之后、掷骰之前——保证深码放宽/短码收紧真正生效(前面 eq 级修正力度不足,实测无响应)
+    if(typeof freq==='number'&&freq>0){
+      var _freqBeforeDepth=freq;
+      freq=freq*_depthRFIMult;
+      // 上限 0.95 保留 5% 随机化空间(避免100%可预测);下限 0.05 保留微弱跟注窗口
+      if(freq>0.95)freq=0.95;
+      if(freq<0.05&&_depthRFIMult<1)freq=0.05;
+      if(Math.abs(freq-_freqBeforeDepth)>0.001){
+        console.log('[V2.9.691码深] '+p5+' '+k+' depth='+_depthTier+'('+_effStackBB+'BB) RFI频率 '+_freqBeforeDepth.toFixed(2)+'→'+freq.toFixed(2));
+      }
+    }
+    // ===== V2.9.691 FIX(P1): 超强牌硬底——AA/KK/QQ/JJ/AK 不做随机掷骰 =====
+    // 根因(实测): V2.9.690 及以前,AA@UTG 入池率 84%、KK 79%、AKo@MP 83%——
+    //   每 5~6 次有 1 次被 Math.random()>freq 随机丢弃。根因是 freq 经过 _quantExploitAdjust /
+    //   PreflopLeakGuard / _isoMode 等多道"只收紧"修正后 < 1(如 UTG1 位置叠加后可能降到 0.85),
+    //   即使 _RFI.UTG1.AA=1 也会被掷骰丢掉。
+    // 修复: 超强牌(premium)在 RFI 表 freq 存在且 >0 的前提下,跳过掷骰强制动作。
+    //   仅对 AA/KK/QQ/JJ/AK(含s/o)生效——这些牌在任何位置任何码深都是 100% 入池的 GTO 基本盘,
+    //   随机化丢弃只会损失 EV。垃圾牌 freq=undefined/0 不在此列,不受影响。
+    var _isPremium=false;
+    if(k.length===2&&k[0]===k[1]&&'AKQJ'.indexOf(k[0])>=0)_isPremium=true;          // AA/KK/QQ/JJ
+    else if(k.length>=3&&k.indexOf('A')===0&&k.charAt(1)==='K')_isPremium=true;      // AKs/AKo
+    if(_isPremium&&typeof freq==='number'&&freq>0){
+      console.log('[V2.9.691硬底] '+p5+' '+k+' 超强牌跳过掷骰(freq='+freq.toFixed(2)+'→强制1.0)');
+      freq=1.0;
+    }
     if(freq===undefined||freq===0){
       // V2.9.628: AK硬底规则 — 翻前手牌含A和K，无人加注(只需跟注大盲)，强制跟注看牌
       var _hasA=k.indexOf('A')>=0,_hasK=k.indexOf('K')>=0;
@@ -3585,6 +3645,42 @@ function decidePreflop(k){
     // V2.9.645: bet=0免费过牌场景频率未命中→check而非fold
     if(Math.random()>freq){
       if(bet===0)return{a:'check',r:p5+' RFI '+Math.round(freq*100)+'%→check(免费看牌)',eq:eq,c:'m',scene:'看牌',spr:spr,_se:true,_seFreq:freq};
+      // ===== V2.9.691 FIX(P4): limp 池平跟出口(原: 只能 raise 或 fold,实测平跟率恒为 0) =====
+      // 根因(实测): scene='open'/bet>0 分支只有 raise/​_fold 两条出路,除 BB补盲/AK硬底两个特例,
+      //   没有任何 call/limp 出口 → 实测 limp 池平跟率恒为 0%(A5s@UTG {"raise":101,"fold":99} 零 call)。
+      // 修复: 掷骰未命中 raise 时,对"可游戏牌"在小额补齐(bet≤1.5BB,即 limp 池)给平跟看牌机会。
+      // 约束(避免变成松叫):
+      //   ① 仅 limp 池: bet ≤ 1.5BB(面对真实 open raise 不用平跟代替 3bet/fold);
+      //   ② 仅中后位: co/btn/sb(UTG/MP 平跟=泄露信息+被后位挤压,理论上是差打法);
+      //   ③ 仅标准/深码: 有效码深 ≥ 60BB(41-59BB 中短码投机牌隐含赔率仍不足,收紧到 60BB);
+      //   ④ 牌力下限: eq ≥ 50(实测 45 时 76s@CO/22@UTG 等边缘牌全线放行→过度宽松,提到 50);
+      //      且 eq ≥ 底池赔率+6;
+      //   ⑤ 牌型限制: 对子/同花/A高/broadway/连张(纯垃圾 offsuit 不允许);
+      //   ⑥ 频率上限: 平跟只作为 raise 未命中后的补救,本身再乘 0.55 概率闸——
+      //      实测无此闸时 BTN 投机牌入池率 100%(raise+limp 全覆盖),加闸后回归合理区间。
+      if(bet>0&&bet<=1.5&&p!=='bb'&&(p==='co'||p==='btn'||p==='sb')&&_effStackBB>=60){
+        var _lcPair=(k.length===2&&k[0]===k[1]);
+        var _lcSuited=(k.indexOf('s')>=0);
+        var _lcAceHigh=(k.charAt(0)==='A');
+        var _lcPlayable=_lcPair||_lcSuited||_lcAceHigh;
+        if(!_lcPlayable&&k.length>=3){
+          var _lcR1=k.charAt(0),_lcR2=k.charAt(1);
+          var _lcRO='23456789TJQKA';
+          var _lcI1=_lcRO.indexOf(_lcR1),_lcI2=_lcRO.indexOf(_lcR2);
+          if(_lcI1>=8&&_lcI2>=8)_lcPlayable=true;                              // T以上双高张
+          else if(Math.abs(_lcI1-_lcI2)<=2&&Math.min(_lcI1,_lcI2)>=4)_lcPlayable=true;  // 连张/隔张(T+)
+        }
+        var _lcPotOdds=bet/Math.max(pot+bet,1)*100;
+        var _lcTh=50+Multiway.callThresholdAdj();
+        if(spr>25)_lcTh-=3;                                                   // 深码隐含赔率好→略放宽
+        _lcTh=Math.max(_lcPotOdds+6,Math.min(60,_lcTh));
+        // V2.9.691 FIX(过度放宽自纠): 平跟概率闸 0.55——保持平跟为"偶尔看牌"而非主策略
+        if(_lcPlayable&&eq>=_lcTh&&Math.random()<0.55){
+          var _exLC=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
+          console.log('[V2.9.691平跟] '+p5+' '+k+' limp池平跟看牌 eq'+Math.round(eq)+'%≥需'+Math.round(_lcTh)+'%(赔率'+Math.round(_lcPotOdds)+'%)');
+          return{a:'call',v:bet,r:p5+' limp池平跟看牌(eq'+Math.round(eq)+'%≥需'+Math.round(_lcTh)+'%)',eq:_exLC.eq,c:eq>=50?'m':'l',scene:'看牌',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet,0),exploit:_exLC.exploit,_se:true,_seFreq:1,_limpCall:true};
+        }
+      }
       return _fold(eq,p5+' RFI '+Math.round(freq*100)+'%→弃牌',spr);
     }
     var sz=_preflopSizing(p,pot,scene,spr);
