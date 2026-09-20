@@ -3927,13 +3927,16 @@ function decidePreflop(k){
           var _fcTh=44+Multiway.callThresholdAdj();
           if(G.act>=4)_fcTh-=3;  // V2.9.666: 补齐第二路径的多人池放宽(原遗漏)
           if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fcTh+=3;
-          // V2.9.699 FIX(PF-1): 被支配broadway折价——前位raiser强牌浓度高(D3反推),
-          //   offsuit broadway被支配的reverse implied odds入阈值(实测KJo@MP 100%call过松)
-          var _fcDom=_dominatorTh(k,rP5);
-          if(_fcDom>0){_fcTh+=_fcDom;console.log('[V2.9.699被支配] '+k+' vs '+rP5+' FlatCall阈值+'+_fcDom+'(offsuit broadway被前位强牌支配)');}
           // SPR筹码深度调整(同limp兜底V2.9.660逻辑)
           if(spr>25)_fcTh-=7;
           else if(spr<10)_fcTh+=7;
+          // V2.9.699 FIX(PF-1)+复检修正: 被支配broadway折价——位置移至SPR调整后(初版在SPR前,
+          //   实测深码spr>25时+6被-7稀释→KJo@150/200BB回退100%call, 与"深码被支配损失更大"
+          //   的reverse implied odds逻辑相反), 且深码折价×2(被支配损失与码深正相关: 深码能输更多)。
+          //   深码实测: KJo(q50<40+12=52)弃, QJo(48<60)弃, AJo(58>52)/KQo(55>52)保留call——符合GTO形态
+          var _fcDom=_dominatorTh(k,rP5);
+          if(_fcDom>0&&spr>25)_fcDom=_fcDom*2;
+          if(_fcDom>0){_fcTh+=_fcDom;console.log('[V2.9.699被支配] '+k+' vs '+rP5+' FlatCall阈值+'+_fcDom+(spr>25?'(深码×2)':'')+'(offsuit broadway被前位强牌支配)');}
           // 安全闸: 不低于底池赔率+3%(最小+EV边缘),不高于65%(避免要求过离谱)
           _fcTh=Math.max(_fcPo+3,Math.min(65,_fcTh));
           // V2.9.699 FIX(PF-2): 小对子set实现折损——查表eq假设showdown直比高估小对子
@@ -4035,13 +4038,14 @@ function decidePreflop(k){
           if(oppType==='fish'||oppType==='calling_station')_fc2Th-=5;
           if(G.act>=4)_fc2Th-=3; // 4人以上底池放宽(同limp)
           if(p==='utg'||p==='mp'||p==='sb'||p==='bb')_fc2Th+=3; // V2.9.662: 5→3
-          // V2.9.699 FIX(PF-1): 被支配broadway折价(同第一路径,D3反推)
-          var _fc2Dom=_dominatorTh(k,rP5);
-          if(_fc2Dom>0){_fc2Th+=_fc2Dom;console.log('[V2.9.699被支配] '+k+' vs '+rP5+' FlatCall阈值+'+_fc2Dom+'(offsuit broadway被前位强牌支配)');}
           if(spr>25)_fc2Th-=7;
           else if(spr<10)_fc2Th+=7;
           // V2.9.686 FIX(P2): fish/calling_station对手翻后支付意愿强,平跟防御可放宽5%
           if(oppType==='fish'||oppType==='calling_station')_fc2Th-=5;
+          // V2.9.699 FIX(PF-1)+复检修正: 被支配折价移至SPR后+深码×2(同第一路径, 修复深码稀释)
+          var _fc2Dom=_dominatorTh(k,rP5);
+          if(_fc2Dom>0&&spr>25)_fc2Dom=_fc2Dom*2;
+          if(_fc2Dom>0){_fc2Th+=_fc2Dom;console.log('[V2.9.699被支配] '+k+' vs '+rP5+' FlatCall阈值+'+_fc2Dom+(spr>25?'(深码×2)':'')+'(offsuit broadway被前位强牌支配)');}
           _fc2Th=Math.max(_fc2Po+3,Math.min(65,_fc2Th));
           // V2.9.699 FIX(PF-2): 小对子set实现折损×0.7(同第一路径)
           var _fc2Eq=eq;
@@ -9325,7 +9329,7 @@ function handClassify(hole,comm){
   //   实测AK@连牌面降级后CBet尺寸仍80%pot(被raise损失最大化)。透传hazard字段供尺寸降档。
   return{name:madeType,desc:desc,outs:outs,isOvercard:!!isOvercard,hazard:(_downgradedByBoardHazard?'board':(_downgradedBy3Flush?'flush':null))};
 }
-function boardTexture(comm){var c=comm.filter(function(card){return card;});if(c.length===0)return{wetness:0,desc:'翻前',hasMonotone:false,hasPaired:false,rangeAdv:'neutral',category:'preflop'};var ranks=c.map(function(card){return card.rank;});var suits=c.map(function(card){return card.suit;}).filter(function(s){return s;});var rankCount={};ranks.forEach(function(r){rankCount[r]=(rankCount[r]||0)+1;});var hasPaired=Object.values(rankCount).some(function(n){return n>=2;});var hasTrips=Object.values(rankCount).some(function(n){return n>=3;});var suitCount={};suits.forEach(function(s){suitCount[s]=(suitCount[s]||0)+1;});var maxSuit=suits.length>0?Math.max.apply(null,Object.values(suitCount)):0;var hasMonotone=maxSuit>=3;var vals=ranks.map(function(r){return RV[r]||0;}).sort(function(a,b){return a-b;});var uniq=[];vals.forEach(function(v){if(uniq.indexOf(v)===-1)uniq.push(v);});uniq.sort(function(a,b){return a-b;});var maxGap=0,connected=0;for(var i=1;i<uniq.length;i++){var gap=uniq[i]-uniq[i-1];if(gap<=2)connected++;if(gap>maxGap)maxGap=gap;}if(uniq.indexOf(12)!==-1&&uniq.indexOf(1)!==-1&&uniq.indexOf(0)!==-1)connected++;var category,wetness;if(hasTrips){category='paired';wetness=3;}else if(hasMonotone&&connected>=2){category='wet';wetness=4;}else if(hasMonotone){category='wet';wetness=4;}else if(hasPaired&&connected>=2){category='semi-wet';wetness=2;}else if(hasPaired){category='paired';wetness=3;}else if(maxSuit>=2&&connected>=2){category='semi-wet';wetness=2;}else if(connected>=2&&maxGap<=3){category='semi-wet';wetness=2;}else if(maxSuit>=2&&connected>=1){category='semi-wet';wetness=2;}/*V2.9.699 FIX(POST-3):两同花+邻张→semi-wet。原判dry(1):对手同花听牌空间(持2张该花9 outs)被低估——实测88@8c7c2d set cbet仅30%pot(d档),给对手听牌3.3:1便宜赔率(同花听只需3:1),deny-equity纯送cheap card。v698威胁认知反推:两tone面+邻张的组合听牌空间应升semi-wet(如8c7c2d/9h8h3d);Ah7h2d(无邻张connected=0)仍dry*/else if(maxSuit>=2||connected>=1){category='dry';wetness=1;}else{category='static';wetness=0;}var street=c.length===3?'翻牌':c.length===4?'转牌':'河牌';var catNames={'static':'极干','dry':'干燥','semi-wet':'半湿','paired':'对子','wet':'湿面','preflop':'翻前'};var texture={wetness:wetness,desc:street+'('+catNames[category]+')',hasMonotone:hasMonotone,hasPaired:hasPaired,rangeAdv:'neutral',category:category};return texture;}
+function boardTexture(comm){var c=comm.filter(function(card){return card;});if(c.length===0)return{wetness:0,desc:'翻前',hasMonotone:false,hasPaired:false,rangeAdv:'neutral',category:'preflop'};var ranks=c.map(function(card){return card.rank;});var suits=c.map(function(card){return card.suit;}).filter(function(s){return s;});var rankCount={};ranks.forEach(function(r){rankCount[r]=(rankCount[r]||0)+1;});var hasPaired=Object.values(rankCount).some(function(n){return n>=2;});var hasTrips=Object.values(rankCount).some(function(n){return n>=3;});var suitCount={};suits.forEach(function(s){suitCount[s]=(suitCount[s]||0)+1;});var maxSuit=suits.length>0?Math.max.apply(null,Object.values(suitCount)):0;var hasMonotone=maxSuit>=3;var vals=ranks.map(function(r){return RV[r]||0;}).sort(function(a,b){return a-b;});var uniq=[];vals.forEach(function(v){if(uniq.indexOf(v)===-1)uniq.push(v);});uniq.sort(function(a,b){return a-b;});var maxGap=0,connected=0;for(var i=1;i<uniq.length;i++){var gap=uniq[i]-uniq[i-1];if(gap<=2)connected++;if(gap>maxGap)maxGap=gap;}if(uniq.indexOf(12)!==-1&&uniq.indexOf(1)!==-1&&uniq.indexOf(0)!==-1)connected++;var category,wetness;if(hasTrips){category='paired';wetness=3;}else if(hasMonotone&&connected>=2){category='wet';wetness=4;}else if(hasMonotone){category='wet';wetness=4;}else if(hasPaired&&connected>=2){category='semi-wet';wetness=2;}else if(hasPaired){category='paired';wetness=3;}else if(maxSuit>=2&&connected>=2){category='semi-wet';wetness=2;}else if(connected>=2&&maxGap<=3){category='semi-wet';wetness=2;}else if(c.length<5&&maxSuit>=2&&connected>=1){category='semi-wet';wetness=2;}/*V2.9.699 FIX(POST-3)+复检修正:两同花+邻张→semi-wet,仅限flop/turn(c.length<5)——对手还有补牌街,同花听牌空间(持2张该花9 outs)真实存在。实测复检发现初版无街数守卫:河牌面5张公牌邻张几乎必现,2000随机河牌样本dry仅剩0.1%、两花+单邻张河牌14%被误升semi-wet(如Kh9h5c3d2s实际静态面),导致河牌尺寸/表键被湿面逻辑误导。河牌无听牌空间,保持旧判定*/else if(maxSuit>=2||connected>=1){category='dry';wetness=1;}else{category='static';wetness=0;}var street=c.length===3?'翻牌':c.length===4?'转牌':'河牌';var catNames={'static':'极干','dry':'干燥','semi-wet':'半湿','paired':'对子','wet':'湿面','preflop':'翻前'};var texture={wetness:wetness,desc:street+'('+catNames[category]+')',hasMonotone:hasMonotone,hasPaired:hasPaired,rangeAdv:'neutral',category:category};return texture;}
 function calcOuts(hole,comm){var hc=handClassify(hole.filter(function(c){return c;}),comm);return hc.outs||0;}
 // V2.9.105: 精确隐含赔率——成牌后额外赢多少
 var ImpliedOddsCalc={

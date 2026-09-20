@@ -186,6 +186,33 @@ ok(v8sz === null || (v8sz <= 0.4), 'V8 干燥面顶对尺寸保持小注档(≤4
 const hcAK = G_.handClassify([C('A', 's'), C('K', 'd')], [C('Q', 's'), C('7', 'd'), C('2', 'c')]);
 ok(hcAK && !hcAK.hazard, 'V8b 干燥面顶对无hazard(不触发降档)', hcAK && String(hcAK.hazard));
 
+console.log('\n【复检回归】V2.9.699b 两个复检BUG修复验证');
+// BUG-B: 深码折价稀释 — KJo@150/200BB曾回退100%call(折价+6被SPR-7抵消), 修复后折价移位+深码×2
+const v9a = preflopDist('KJo', { pos: 'mp', scene: 'raise', bet: 3, pot: 4.5, stk: 150, reps: 200 });
+const v9b = preflopDist('KJo', { pos: 'mp', scene: 'raise', bet: 3, pot: 4.5, stk: 200, reps: 200 });
+console.log('  KJo@MP深码: 150BB入池=' + Math.round(entryRate(v9a, 200) * 100) + '% / 200BB入池=' + Math.round(entryRate(v9b, 200) * 100) + '%');
+ok(entryRate(v9a, 200) < 0.25 && entryRate(v9b, 200) < 0.25, 'V9 KJo深码(150/200BB)不再回退call(折价×2覆盖深码稀释, 修复前100%)', entryRate(v9a, 200).toFixed(2) + '/' + entryRate(v9b, 200).toFixed(2));
+const v9c = preflopDist('AJo', { pos: 'mp', scene: 'raise', bet: 3, pot: 4.5, stk: 200, reps: 200 });
+const v9d = preflopDist('KQo', { pos: 'mp', scene: 'raise', bet: 3, pot: 4.5, stk: 200, reps: 200 });
+console.log('  AJo@200BB入池=' + Math.round(entryRate(v9c, 200) * 100) + '% / KQo@200BB入池=' + Math.round(entryRate(v9d, 200) * 100) + '%');
+ok(entryRate(v9c, 200) > 0.5 && entryRate(v9d, 200) > 0.4, 'V9b 深码AJo/KQo保留call(折价×2不误伤可玩broadway, 符合GTO形态)', entryRate(v9c, 200).toFixed(2) + '/' + entryRate(v9d, 200).toFixed(2));
+// BUG-A: 河牌街数守卫 — POST-3新分支(两花+恰好单邻张)曾误升河牌semi-wet, 修复后c.length<5守卫
+// (归因说明: 河牌semi-wet占比高主因是v699前旧分支maxSuit>=2&&connected>=2——5张公牌邻张极常见,
+//  属既有行为非本次回归; POST-3新分支在河牌的精确影响面=两花+单邻张+无公对≈2%/2000随机样本)
+const rvA = G_.boardTexture([C('K', 'h'), C('A', 'h'), C('9', 'c'), C('6', 'd'), C('3', 's')]);
+const rvB = G_.boardTexture([C('A', 'h'), C('J', 'h'), C('8', 'c'), C('5', 'd'), C('2', 's')]);
+console.log('  河牌KhAh9c6d3s(两花+单邻张conn=1): wet=' + rvA.wetness + ' ' + rvA.category + ' / 河牌AhJh8c5d2s(conn=1): wet=' + rvB.wetness + ' ' + rvB.category);
+ok(rvA.wetness === 1, 'V10 河牌两花+恰好单邻张保持dry(修复前被新分支误升semi-wet, 河牌无听牌空间)', rvA.category);
+ok(rvB.wetness === 1, 'V10b 河牌AhJh8c5d2s(单邻张conn=1)保持dry', rvB.category);
+const rvE = G_.boardTexture([C('K', 'h'), C('9', 'h'), C('5', 'c'), C('3', 'd'), C('2', 's')]);
+console.log('  河牌Kh9h5c3d2s(两处邻张conn=2, 旧分支): wet=' + rvE.wetness + ' ' + rvE.category + ' (v699前既有行为, 非本次回归)');
+ok(rvE.wetness === 2, 'V10e 河牌connected=2走旧分支semi-wet(v699前既有逻辑保持, 不动历史基线)', rvE.category);
+const rvC = G_.boardTexture([C('9', 'c'), C('8', 'c'), C('A', 'd'), C('4', 'h')]);
+console.log('  turn 9c8cAd4h(4张单邻张): wet=' + rvC.wetness + ' ' + rvC.category);
+ok(rvC.wetness === 2, 'V10c turn两花+单邻张仍升semi-wet(守卫不误伤flop/turn听牌空间判定)', rvC.category);
+const rvD = G_.boardTexture([C('8', 'c'), C('7', 'c'), C('2', 'd')]);
+ok(rvD.wetness === 2, 'V10d 翻牌8c7c2d保持semi-wet(V5原修复不受守卫影响)', rvD.category);
+
 console.log('\n================================================================');
 console.log(' 升级验证: ' + pass + ' 通过, ' + fail + ' 失败');
 console.log('================================================================');
