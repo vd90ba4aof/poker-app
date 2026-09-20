@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.692',
+  CURRENT_VERSION:'2.9.693',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2950,7 +2950,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.692';
+var APP_VERSION = '2.9.693';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8636,8 +8636,32 @@ function handClassify(hole,comm){
     // 例: 54在A23KT→顺顶5但A高顺存在
   }
   if(madeHand2==='sf'||madeHand2==='quads'||madeHand2==='fh'){
-    // 同花顺/四条/葫芦不可能被beat→永远NUTS
-    madeType='NUTS';
+    // V2.9.693 FIX(P7b): 葫芦不再无条件NUTS——"底葫芦"必须降级。
+    //   根因(实机铁证 poker_log_20260920_162923 手1: QhTd @ KsKh7dQcQs, 河牌):
+    //     板面 KsKh7dQcQs, hero=QhTd → QQQ + 板面KK = "QQQ带KK"葫芦,
+    //     但板面 KK 是【公共对子】, 任何持 Kx 的对手都成 KKK+QQ = 比 hero 更大的葫芦;
+    //     持 77 的对手成 777+KK 同样完胜。旧代码把 fh 与 quads/sf 同组一刀切 NUTS,
+    //     导致下游"commit全下无犹豫/满池check-raise/慢打建池"等最激进线被错误触发。
+    //   判据(可证, 非经验值): 找到 hand+board 中成三条的那一门 _fhTripRank;
+    //     若 _fhTripRank < 板面最高rank(_fhBoardMax) → 板面存在更高的一对/三条可能,
+    //     对手可用更高rank构成更大葫芦 → 降级 STRONG。
+    //     _fhTripRank >= _fhBoardMax 时(例如 KsKd @ Kh7d7c, trips=K=板面最高)不可能被更大葫芦beat, 保持 NUTS。
+    if(madeHand2==='fh'){
+      var _fhTripRank=-1;
+      for(var _fr in rankCounts){if(rankCounts[_fr]>=3){_fhTripRank=RV[_fr];break;}}
+      var _fhBoardMax=0;
+      comm.filter(function(c){return c;}).forEach(function(c){if(RV[c.rank]>_fhBoardMax)_fhBoardMax=RV[c.rank];});
+      if(_fhTripRank>=_fhBoardMax){
+        madeType='NUTS';
+      }else{
+        madeType='STRONG';
+        pairSubType='底葫芦(三条'+_fhTripRank+'<板面最高'+_fhBoardMax+')';
+        console.log('[V2.9.693牌力] 底葫芦降级NUTS→STRONG(三条rank='+_fhTripRank+' < 板面最高rank='+_fhBoardMax+')');
+      }
+    }else{
+      // 同花顺/四条不可能被beat→永远NUTS
+      madeType='NUTS';
+    }
   }else if(madeHand2==='flush'){
     // 同花+板面有对子→可能被葫芦beat→STRONG
     if(_boardHasPair){madeType='STRONG';}
@@ -8689,6 +8713,63 @@ function handClassify(hole,comm){
       var _setWetFlush=_boardHas4Flush||(_boardHas3Flush&&cc<5);
       if(_setWetFlush){madeType='STRONG';console.log('[V2.9.572牌力] set三花面降级NUTS→STRONG cc='+cc);}
       else{madeType='NUTS';}
+    }
+    // ===== V2.9.693 FIX(P7a): 三条踢脚质量闸 =====
+    // 根因(实机铁证 poker_log_20260920_162923 手5-8, 同一缺陷跨4条街):
+    //   hero Qh5h @ QdJcQc → 引擎判 NUTS, 但这是"板面对子Q + hero单张Q"= 三条Q, 踢脚5;
+    //   对手任何 Q7+/QJ/QK/QA 都是【同三条 + 更高踢脚】＝完全压制 hero。
+    //   引擎复现(修复前): Qh2h / Qh5h / Qh7h / QhKh / QhAh @ QdJcQc 全部判 NUTS —— 踢脚2与踢脚A判定完全相同。
+    //   碰撞枚举: hero Qh5h 对上均匀 Qx 范围, hero 仅胜 3/12 = 25%。
+    //   区分两种"三条"情形(关键, 不能一刀切, 否则误伤):
+    //     情形A: 手牌本身是对子 + 板面1张同rank (如 8h8d @ 2c8s9h) = 真正 set。
+    //            对手不可能持有该rank第4张之外的同三条, hero 三条不可能被"同三条更高踢脚"压制 → 保持 NUTS。
+    //     情形B: 手牌只有1张该rank + 板面对子 (如 Qh5h @ QdJcQc) = trips。
+    //            对手任意持该rank的另一张即为"同三条 + 更高踢脚" → 踢脚 < 板面最高单张时降级。
+    //   本闸仅对【情形B】生效(_isBoardPairTrips), 情形A原样保留。
+    //   (自纠记录: 初版未加情形A守卫, 实测把 8h8d@2c8s9h 干燥面的合法 set 误降级, 已修正。)
+    if(madeType==='NUTS'){
+      try{
+        var _tripsRank=-1;
+        for(var _trr in rankCounts){if(rankCounts[_trr]>=3){_tripsRank=RV[_trr];break;}}
+        var _tripsInHole=0;
+        hole.filter(function(c){return c;}).forEach(function(c){if(RV[c.rank]===_tripsRank)_tripsInHole++;});
+        var _isBoardPairTrips=(_tripsInHole===1);  // 手牌仅1张该rank = 板面对子+hero单张
+        if(_isBoardPairTrips){
+          var _tripsKicker=-1;
+          holeRanks.forEach(function(v){if(v!==_tripsRank&&v>_tripsKicker)_tripsKicker=v;});
+          var _tripsBoardMaxSingle=-1;
+          for(var _trk in commRankCounts){
+            if(commRankCounts[_trk]===1){var _trv=RV[_trk];if(_trv>_tripsBoardMaxSingle)_tripsBoardMaxSingle=_trv;}
+          }
+          if(_tripsKicker<_tripsBoardMaxSingle){
+            madeType='STRONG';
+            pairSubType='三条低踢(踢'+_tripsKicker+'<板面单张'+_tripsBoardMaxSingle+')';
+            console.log('[V2.9.693牌力] 三条低踢降级NUTS→STRONG(板对+hero单张, 踢脚'+_tripsKicker+'<板面单张'+_tripsBoardMaxSingle+')');
+          }
+        }
+      }catch(_p7aE){console.log('[V2.9.693牌力] P7a异常: '+_p7aE.message);}
+    }
+    // ===== V2.9.693 FIX(P7c): set 补齐"对子面/连牌面"威胁检查 =====
+    // 根因(覆盖面审计): 同花有 _boardHasPair/_boardIsConnected/_boardHas3Flush 检查,
+    //   顺子有 _boardHasPair/_isNonNutStraight/_boardHas3Flush 检查, 两对有 boardOnlyPairs 检查,
+    //   唯 set 只有三花面检查(见上方 V2.9.572), 对子面与连牌面的威胁完全缺失 = 覆盖漏洞。
+    //   补齐: ① 板面成对且板对rank > hero三条rank → 对手可用板对+更高三条/葫芦反超 → STRONG;
+    //         ② 板面高度连通且板面最高rank > hero三条rank → 对手听顺/成顺风险 → STRONG。
+    if(madeType==='NUTS'){
+      try{
+        if(_boardHasPair){
+          var _setPairRank=-1;
+          for(var _spr in _boardRanks){if(_boardRanks[_spr]>=2){var _sprv=RV[_spr];if(_sprv>_setPairRank)_setPairRank=_sprv;}}
+          if(_setPairRank>_tripsRank){
+            madeType='STRONG';pairSubType+='(对子面降级:板对'+_setPairRank+'>三条'+_tripsRank+')';
+            console.log('[V2.9.693牌力] set对子面降级NUTS→STRONG(板对'+_setPairRank+'>三条'+_tripsRank+')');
+          }
+        }
+        if(madeType==='NUTS'&&_boardIsConnected&&_tripsBoardMax>_tripsRank){
+          madeType='STRONG';pairSubType+='(连牌面降级)';
+          console.log('[V2.9.693牌力] set连牌面降级NUTS→STRONG(板面最高'+_tripsBoardMax+'>三条'+_tripsRank+')');
+        }
+      }catch(_p7cE){console.log('[V2.9.693牌力] P7c异常: '+_p7cE.message);}
     }
   }else if(madeHand2==='twoPair'){
     // V2.9.142: 区分手牌参与的两对 vs 板面双对子面的弱两对
@@ -10793,6 +10874,13 @@ function _decideInner(){
       }
       if(!_changed&&result.a==='call'&&!_pCanCall&&_pCanCheck){
         result.a='check';result.v=0;_changed='call→check(free-check局面无跟注按钮)';
+        // V2.9.693 FIX(P8诊断): 免费局面(bet<=0)本不该产出 call。
+        //   上游 P8 场景金额归一 已消除该矛盾态; 若此处仍命中, 说明有未被覆盖的异常路径,
+        //   打出标记以便从实战日志直接定位(修复前该分支在日志中被写成对手修正文案, 无法归因)。
+        if(!G.bet||G.bet<=0){
+          _changed='call→check(免费局面bet=0:上游scene/bet仍矛盾,源头应判check)';
+          console.log('[V2.9.693 P8] 免费局面(bet=0)决策层仍产出call→物理闸修正为check; 上游scene/bet归一未覆盖此路径, 请核对');
+        }
       }
       if(!_changed&&result.a==='check'&&_pCanCall&&!_pCanCheck){
         // 面对下注不存在check按钮→保守fold(配合v571 free-check保护: 真bet面绝不误点check白输钱)
@@ -12592,6 +12680,46 @@ function onVisionResult(data){
     }
     var detectedScene=detectSceneFromButtons(data.buttons||[],street,activeP);
     G.scene=detectedScene;
+    // ===== V2.9.693 FIX(P8·根因): 场景--金额同源归一——scene 定了, bet 必须同帧跟上 =====
+    // 实机铁证(poker_log_20260920_162923 手7 16:26:10 / 手5 16:26:31, 同一bug在线两次):
+    //   屏幕按钮 = [弃牌, 跟注 800, 加注 1757] (bb=200, 纯bet面, 真实 bet=4BB),
+    //   detectSceneFromButtons 正确判出 scene='bet', 但本块进入前刚刚 G.bet=0 且判定后无人回填,
+    //   → 状态机拿到自相矛盾的 scene='bet' + bet=0, 这直接是 V2.9.567 注释里预警过的场景("决策全乱")。
+    //   下游连锁(postflopSceneNorm 按 bet==0 判免费 → SE 产出 raise"价值下注" →
+    //   物理闸按 free-check 语义降级 check → 屏幕无让牌按钮→保守改fold → 上游"对手修正→跟注"拉回,
+    //   最终 reason 被写成'[物理闸] call→check(free-check局面无跟注按钮)', execAction=check)。
+    //   一帧之内 识别(scene) / 金额(bet) / 执行(action) 三层互相打架, 根因是 scene 与 bet 不同源。
+    // 修复: 以【屏幕按钮】为唯一真相, scene 与 bet 在同一次赋值内收敛——
+    //   有跟注无让牌 = 面对下注: bet 至少 0.5BB(先从屏幕"跟注X"文本反解金额, 再兜底 1BB);
+    //   有让牌无跟注 = 免费局面: bet 归零, 场景不得为 bet/allin。
+    //   精度: 0.5BB 与 V2.9.571 后置真相 / V2.9.676 同款(避免 Math.round(21.5)=22)。
+    try{
+      var _p8Btns=data.buttons||[];
+      var _p8HasCall=_p8Btns.some(function(b){return /跟注|call/i.test(b);});
+      var _p8HasCheck=_p8Btns.some(function(b){return /让牌|过牌|check/i.test(b);});
+      if(_p8Btns.length>0){
+        if(_p8HasCall&&!_p8HasCheck&&(G.scene==='bet'||G.scene==='allin'||G.scene==='raise'||G.scene==='reraise')){
+          if(!(G.bet>0)){
+            var _p8Amt=0;
+            for(var _p8i=0;_p8i<_p8Btns.length;_p8i++){
+              if(/跟注|call/i.test(_p8Btns[_p8i])){
+                var _p8n=parseInt((String(_p8Btns[_p8i]).match(/\d[\d,]*/)||['0'])[0].replace(/,/g,''))||0;
+                if(_p8n>_p8Amt)_p8Amt=_p8n;
+              }
+            }
+            var _p8BBv=(typeof bbValue==='number'&&bbValue>0)?bbValue:(window._lastVisionBB||G._lockedBB||0);
+            var _p8New=(_p8Amt>0&&_p8BBv>0)?Math.max(0.5,Math.round((_p8Amt/_p8BBv)*2)/2):1;
+            console.log('[V2.9.693 P8场景金额归一] 屏幕有跟注无让牌→scene='+G.scene+' 但 bet=0 → 回填 bet='+_p8New+'BB (跟注'+_p8Amt+'chips/bb='+_p8BBv+', buttons='+JSON.stringify(_p8Btns)+')');
+            G.bet=_p8New;
+          }
+        }else if(_p8HasCheck&&!_p8HasCall){
+          if(G.bet>0||G.scene==='bet'||G.scene==='allin'){
+            console.log('[V2.9.693 P8场景金额归一] 屏幕有让牌无跟注→免费局面: bet '+G.bet+'→0, scene '+G.scene+'→check (buttons='+JSON.stringify(_p8Btns)+')');
+            G.bet=0;G.scene='check';detectedScene='check';
+          }
+        }
+      }
+    }catch(_p8e){console.log('[V2.9.693 P8场景金额归一] 异常: '+_p8e.message);}
     // V2.9.168: 按钮规则验证——检测按钮是否符合当前街区预期
     var _bvResult=ButtonValidator.validate(data.buttons||[],street,detectedScene);
     var _bvSummary=ButtonValidator.getSummary(data.buttons||[],street);
@@ -13362,6 +13490,27 @@ function onVisionResult(data){
       if(G.bet!==_pf2Bet){console.log('[V2.9.571后置真相] 归一化后G.bet='+G.bet+'但屏幕有跟注(额'+_pf2Amt+')→终裁'+_pf2Bet+'BB');G.bet=_pf2Bet;}
     } else if(_pf2Check && !_pf2Call && G.bet>0){
       console.log('[V2.9.571后置真相] 归一化后G.bet='+G.bet+'但屏幕让牌免费→终裁0');G.bet=0;
+    }
+    // V2.9.693 FIX(P8·兜底): 场景--金额自洽闸(go()入口最后一道, decide()之前)。
+    //   根因已在 onVisionResult 的 detectSceneFromButtons 出口同源归一(V2.9.693 P8场景金额归一);
+    //   此处为兜底: 上游若经任何异常路径(eq注入晚于scene判定/手动改场景/训练模式/换手脏帧)
+    //   再次让 scene 与 bet 分叉, 在进策略引擎前做最后一次收敛, 杜绝矛盾态流进 decide()。
+    //   判据与上游完全一致(唯一真相=屏幕按钮), 两处同源, 不分叉。
+    var _p8Btn=(G.buttons||[]);
+    var _p8Call=_p8Btn.some(function(b){return /跟注|call/i.test(b);});
+    var _p8Check=_p8Btn.some(function(b){return /让牌|过牌|check/i.test(b);});
+    if(_p8Btn.length>0){
+      if(_p8Call&&!_p8Check){
+        var _p8Fixed=false;
+        if(!(G.bet>0)){G.bet=1;_p8Fixed=true;}
+        if(G.scene==='check'){G.scene='bet';_p8Fixed=true;}
+        if(_p8Fixed){console.log('[V2.9.693 P8场景金额自洽] 兜底: 屏幕有跟注无让牌(buttons='+JSON.stringify(_p8Btn)+')→G.bet='+G.bet+'BB scene='+G.scene);}
+      }else if(_p8Check&&!_p8Call){
+        var _p8Fixed2=false;
+        if(G.bet>0){G.bet=0;_p8Fixed2=true;}
+        if(G.scene==='bet'||G.scene==='allin'){G.scene='check';_p8Fixed2=true;}
+        if(_p8Fixed2){console.log('[V2.9.693 P8场景金额自洽] 兜底: 屏幕有让牌无跟注(buttons='+JSON.stringify(_p8Btn)+')→G.bet=0BB scene=check');}
+      }
     }
   }catch(_pf2Err){console.log('[V2.9.571后置真相] 异常: '+_pf2Err.message);}
   // [REV4_DIAG] V2.9.527块后的状态快照
