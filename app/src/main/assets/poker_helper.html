@@ -5422,6 +5422,40 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk,eq){
       }
       return{a:'call',r:'GTO 面CBet call '+btKey+'/'+hcKey+'('+Math.round(adjC*100)+'%)',eq:eq||0,c:'m',scene:isDonk?'面对Donk':'面对CBet',spr:spr,_se:true,_seFreq:adjC};
     }
+    // ===== V2.9.691 FIX(P5): 面CBet fold 支路权益硬闸 =====
+    // 根因(实测, 非推测): 本支路原为纯频率掷骰 `return _fold(...)`, 无任何 eq 校验——
+    //   而相邻的 call 支路(L5417-5422)有 pot odds 硬校验, fold 支路漏网。
+    //   实测复现: AcAh(超对) @ Kd7h2s 面对75%注, eq 稳定 87.0%(20次重跑 eq方差=0),
+    //   但 40 次调用中出现 3-5 次 fold(约 9-12%), reason='[SE]面CBet fold 0_s/4(9%)'。
+    //   表中 hcKey=4(STRONG) 的 f 值: _FCB_IP 0.03-0.07, _FCB_OOP 0.04-0.09;
+    //   叠加 _sprAdjSafe.fcb / 街调整 / 剥削再分配后会放大(实测放大到 9%)。
+    //   NUTS(hcKey=0) f 恒为 0.00, 故只有 STRONG 层受害。
+    // 影响面: 一切被判 STRONG 的成牌(超对/顶对顶踢/强两对)均有约 4-12% 概率被无理由弃掉。
+    // 修复原则(与 P1 翻前"超强牌硬底"同源): 满足以下任一即不得因掷骰弃牌, 降级为 call——
+    //   闸A(权益闸): eq/100 >= 跟注所需赔率 + 15% 裕度。数学上显著正EV的跟注不该被随机弃。
+    //   闸B(牌力闸): hcKey<=4(NUTS/准坚果/强牌) 且 eq/100 >= 跟注所需赔率。
+    //   为何需要闸B: 多人池下强牌的真实权益被摊薄(实测 AcAh@Kd7h2s:
+    //     2人87.4% → 3人73.7% → 4人62.3% → 5人57.4% → 6人55.3%),
+    //     固定 55% 阈值在6人池恰好与 AA 的 55.3% 贴脸, 掷骰仍会漏出 4-7% 的弃牌
+    //     (实测 6人池 900 次调用 fold=25-39)。故强牌闸只要求"跨过赔率线"而非固定裕度,
+    //     与人数无关, 避免多人池下强牌被误弃。
+    //   保留: 真实弱牌(hcKey>=5 且 eq 未达赔率+15%)仍走原掷骰弃牌, 混合策略不受影响。
+    if(eq!==undefined&&eq!==null&&eq>=0){
+      var _fcbFoldReq=Math.max(1,betSz)/Math.max(pot+betSz,1);
+      var _fcbEq=eq/100;
+      // hcKey 由 _hc2key() 返回【数字】: 0=NUTS 4=STRONG 6=MEDIUM 9/10/11/12=DRAW 15=AIR
+      // (自纠记录: 初版误写为 typeof hcKey==='string' 判断, 恒为 false → 闸B从未生效,
+      //  实测 eq 54.8% / hc=4 时仍被弃 37/900。此处改为数值比较。)
+      var _fcbHcNum=(typeof hcKey==='number')?hcKey:parseInt(hcKey,10);
+      if(isNaN(_fcbHcNum))_fcbHcNum=15;
+      var _fcbStrongHand=(_fcbHcNum<=4);
+      var _fcbGateA=(_fcbEq>=_fcbFoldReq+0.15);
+      var _fcbGateB=(_fcbStrongHand&&_fcbEq>=_fcbFoldReq);
+      if(_fcbGateA||_fcbGateB){
+        console.log('[V2.9.691面CBet] fold支路权益硬闸('+(_fcbGateA?'闸A权益':'闸B牌力')+'): eq='+Math.round(eq)+'% 赔率线='+Math.round(_fcbFoldReq*100)+'% hc='+hcKey+' → fold降级为call (掷骰f='+Math.round(adjF*100)+'%)');
+        return{a:'call',r:'GTO 面CBet call(权益硬闸) '+btKey+'/'+hcKey+' eq='+Math.round(eq)+'%',eq:eq||0,c:'m',scene:isDonk?'面对Donk':'面对CBet',spr:spr,_se:true,_seFreq:adjC};
+      }
+    }
     return _fold(eq||0,'面CBet fold '+btKey+'/'+hcKey+'('+Math.round(adjF*100)+'%)',spr);
   }
 
