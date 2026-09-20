@@ -1393,7 +1393,7 @@ function showToast(msg){
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
-  CURRENT_VERSION:'2.9.693',
+  CURRENT_VERSION:'2.9.694',
   init:function(){
     var saved=localStorage.getItem(this.VERSION_KEY);
     if(saved!==this.CURRENT_VERSION){
@@ -2950,7 +2950,7 @@ var HandStateMachine=(function(){
 // ===== V2.9.155: StrategyEngine (GTO频率表+翻后框架+剥削调整) =====
 // V2.9.300: StrategyEngine v3 — River价值表 + Turn防禦 + GG人群數據 + 多尺度sizing
 // 升级自 V2.9.215
-var APP_VERSION = '2.9.693';
+var APP_VERSION = '2.9.694';
 // 独立IIFE，不修改旧代码，通过 G._seEnabled 开关切换
 var StrategyEngine=(function(){
 'use strict';
@@ -8492,7 +8492,14 @@ function handClassify(hole,comm){
   hole.filter(function(c){return c;}).forEach(function(c){if(c&&c.suit)_flushHoleSuits[c.suit]=(_flushHoleSuits[c.suit]||0)+1;});
   for(var s in flushSuits){
     if(flushSuits[s]>=5)flushMade=true;
-    else if(flushSuits[s]===4&&(_flushHoleSuits[s]||0)>=1)flushDraw=true;
+    // V2.9.694 FIX(P10): 河牌(comm=5)无补牌,不存在听花——
+    //   旧码此处缺 commCount<5 守卫(V2.9.602 已给超牌听/顺听/后门听4处补守卫,独漏此处),
+    //   导致河牌4同花场面(如 4d8d@5s2s7c2dJd)被标 flushDraw=true → madeType=DRAW(9outs)
+    //   → _hc2key→9/10 → _RIV听牌档令引擎以 eq0~5%纯空气牌 bet 55~73%pot。
+    //   实测: 河牌被判DRAW占 8.6~9.3%(4000手枚举), 这些场景平均边际EV=-2.88BB/手。
+    //   修复: 河牌仅认"已成花"(flushMade), 不再产生 flushDraw。
+    //   注: commCount 在下方 L8079 才定义, 此处内联计数避免 TDZ/undefined。
+    else if(flushSuits[s]===4&&(_flushHoleSuits[s]||0)>=1&&comm.filter(function(c){return c;}).length<5)flushDraw=true;
   }
   var rankVals=cards.map(function(c){return c?RV[c.rank]:0;});
   var uniq=[];

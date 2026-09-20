@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.693 · 牌力:底葫芦/三条低踢不再判NUTS | 场景金额同源归一·消除check矛盾链"
+        android:text="V2.9.694 · 河牌不再误判听牌(9.3%→0%)·消除eq1~5%空气牌主动下注 | 牌力:底葫芦/三条低踢不判NUTS"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

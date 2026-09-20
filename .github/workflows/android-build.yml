@@ -37,6 +37,8 @@ jobs:
       run: node tests/engine_smoke.test.js
     - name: 手牌锁跨手回归(v604 P0门禁)
       run: node tests/engine_lock_regression.test.js
+    - name: 河牌听牌误判门禁(v694 P10)
+      run: node tests/engine_p10_river_draw.test.js
 
     - name: Build with Gradle
       run: ./gradlew assembleDebug
