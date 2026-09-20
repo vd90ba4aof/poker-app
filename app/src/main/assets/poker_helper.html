@@ -465,6 +465,7 @@ function _initMCWorker(){
   +'function _eval5(vals,suits){var counts={};vals.forEach(function(v){counts[v]=(counts[v]||0)+1;});var groups=Object.keys(counts).map(function(k){return [parseInt(k,10),counts[k]];});groups.sort(function(a,b){return b[1]-a[1]||b[0]-a[0];});var isFlush=suits.filter(function(x){return !!x;}).length===5&&suits.every(function(x){return x===suits[0];});var uniq=groups.map(function(g){return g[0];}).sort(function(a,b){return b-a;});var straightHigh=-1;if(uniq.length===5){if(uniq[0]-uniq[4]===4)straightHigh=uniq[0];else if(uniq[0]===12&&uniq[1]===3&&uniq[2]===2&&uniq[3]===1&&uniq[4]===0)straightHigh=3;}var cat,tb;if(isFlush&&straightHigh>=0){cat=8;tb=[straightHigh];}else if(groups[0][1]===4){cat=7;tb=[groups[0][0],groups[1][0]];}else if(groups[0][1]===3&&groups[1][1]===2){cat=6;tb=[groups[0][0],groups[1][0]];}else if(isFlush){cat=5;tb=uniq.slice();}else if(straightHigh>=0){cat=4;tb=[straightHigh];}else if(groups[0][1]===3){cat=3;tb=[groups[0][0]].concat(uniq.filter(function(r){return r!==groups[0][0];}));}else if(groups[0][1]===2&&groups[1][1]===2){cat=2;tb=[groups[0][0],groups[1][0],groups[2][0]];}else if(groups[0][1]===2){cat=1;tb=[groups[0][0]].concat(uniq.filter(function(r){return r!==groups[0][0];}));}else{cat=0;tb=uniq.slice();}var score=cat*1e10,mult=1e8;for(var i=0;i<tb.length;i++){score+=tb[i]*mult;mult/=15;}return {cat:cat,tb:tb,score:score};}'
   +'function eH(cards){var cs=cards.filter(function(c){return c&&c.rank!==undefined&&RV[c.rank]!==undefined;});if(cs.length<5)return 0;var arr=cs.map(function(c){return {v:RV[c.rank],s:c.suit};});var best=0,n=arr.length;for(var a=0;a<n-4;a++)for(var b=a+1;b<n-3;b++)for(var c=b+1;c<n-2;c++)for(var d=c+1;d<n-1;d++)for(var e=d+1;e<n;e++){var vals=[arr[a].v,arr[b].v,arr[c].v,arr[d].v,arr[e].v].sort(function(x,y){return y-x;});var suits=[arr[a].s,arr[b].s,arr[c].s,arr[d].s,arr[e].s];var ev=_eval5(vals,suits);if(ev.score>best)best=ev.score;}return Math.round(best);}'
   +'function handKeyToCards(key){var results=[];var r1=key[0],r2=key[1];var isSuited=key.indexOf("s")!==-1;var isPaired=r1===r2;if(isPaired){for(var s1i=0;s1i<SU.length;s1i++){for(var s2i=s1i+1;s2i<SU.length;s2i++){results.push([{rank:r1,suit:SU[s1i]},{rank:r2,suit:SU[s2i]}]);}}}else if(isSuited){for(var si=0;si<SU.length;si++){results.push([{rank:r1,suit:SU[si]},{rank:r2,suit:SU[si]}]);}}else{for(var s1j=0;s1j<SU.length;s1j++){for(var s2j=0;s2j<SU.length;s2j++){if(SU[s1j]!==SU[s2j])results.push([{rank:r1,suit:SU[s1j]},{rank:r2,suit:SU[s2j]}]);}}}return results;}'
+  +(typeof _threatReweight==='function'?_threatReweight.toString()+'\n':'')  // V2.9.697: 威胁重加权随mcVsRange注入Worker
   +(typeof mcVsRange==='function'?mcVsRange.toString()+'\n':'')  // V2.9.637 perf: 注入多对手mcVsRange(原Worker仅单挑)
   +'self.onmessage=function(e){var d=e.data;var hole=d.hole,comm=d.comm,oppRange=d.oppRange,iterations=d.iterations,nOpp=(typeof d.nOpp==="number"&&d.nOpp>=1)?d.nOpp:1;'
   +'var r=mcVsRange(hole,comm,oppRange,iterations,nOpp);self.postMessage({eq:r.eq,win:r.win,tie:r.tie});};';
@@ -1392,7 +1393,7 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.696';
+var ENGINE_VERSION='2.9.697';
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
@@ -4321,6 +4322,10 @@ function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive){
     var _nOpp=Math.max(1,(nActive||2)-1);
     // 与原SE L3661同口径: 对手check=范围弱用宽cbet; 面对下注按街收窄(flop cbet / turn barrel / river barrel极化)
     var line=(sceneIn==='check')?'cbet':(bc.length===5?'barrel_river':bc.length===4?'barrel_turn':'cbet');
+    // V2.9.697 FIX(威胁面eq失真#2): 威胁面对手下注→极化线。中低对(88-)不会在monotone面持续投钱,
+    // 宽cbet范围把它们计入→made hand eq虚高(实测9d9c@4cTc3c深码大注eq54%,真实~15-25%→错误float)。
+    // 'raise'线=JJ+/同花高张/98s+连张/A2s-A5s诈唬代理(极化建模)。连牌面不切:顺子组合无键级稀释,eq已真实。
+    try{if(sceneIn!=='check'&&bTexture&&bTexture.hasMonotone&&line==='cbet')line='raise';}catch(_twE){}
     var wet=(bTexture&&bTexture.wetness>=2)?'wet':'dry';
     var range=getOppRange('postflop',line,wet);
     // V2.9.683 FIX: 多人池范围收窄——移除弱牌避免MC权益膨胀
@@ -12079,7 +12084,7 @@ function riverExactEquity(hole,comm,oppRange,nOpponents){
       }
     }
   }
-  var myBest=e5([].concat(hole,comm));
+  oppHands=_threatReweight(oppHands,comm);var myBest=e5([].concat(hole,comm));
   if(nOpponents<=1){
     var w=0,t=0,total=oppHands.length;
     for(var oi=0;oi<total;oi++){
@@ -12113,10 +12118,46 @@ function riverExactEquity(hole,comm,oppRange,nOpponents){
   }
 }
 
+// V2.9.697 FIX(威胁面eq失真): 威胁板面组合级重加权——修正键级范围的同花威胁组合稀释
+// 根因: 键级范围('XXs'按4花色均匀展开)在威胁面把已成同花组合稀释~4倍——
+//   实测 8c8d@8h7h9h(set) vs CB2.btn(含31同花键,352组合): eq=72.6%,其中已成同花组合仅31个(8.8%);
+//   对照: vs 纯对子范围73.2% / vs 全同花键范围74.3% —— 键级展开下"范围含不含同花键"对eq几乎无影响,
+//   因为'AJs'的4个组合里只有AhJh在monotone面已成同花(25%),持AsJs的对手根本不会继续投钱。
+//   真实对手在威胁面的行动范围是花色条件化的: 已成同花组合真实占比25%+ → made hand eq虚高(72.6% vs 真实~60-65%)
+//   → set/顶对/两对等在威胁面的精细决策(call/fold边界、薄价值加注线)全偏激进。
+// 修复: 按板面威胁对组合级分布重加权,还原"行动条件化"后的真实组合分布:
+//   - 双威胁花色组合(已成同花) ×4: 8.8%→~25%
+//   - 单威胁花色+高张(≥板面最高rank-2,坚果/近坚果听) ×2: 对手持Ah会继续打
+//   - board≥4张同花: 单张威胁花色=已成同花 ×4
+//   - board 5张同花: 不加权(板面自成同花,kicker决定,键级分布已合理)
+// 落点: mcVsRange(MC路径)与riverExactEquity(精确枚举路径)统一调用,Worker经toString注入同口径。
+// 注: 顺子威胁不受键级稀释(JT任意花色组合在789板均已成顺,展开自然覆盖);hero阻断由组合过滤自然处理。
+function _threatReweight(oppHands,comm){
+  try{
+    if(!oppHands||!oppHands.length||!comm)return oppHands;
+    var cOK=comm.filter(function(x){return x&&x.suit;});
+    if(cOK.length<3)return oppHands;
+    var sc={};for(var i=0;i<cOK.length;i++)sc[cOK[i].suit]=(sc[cOK[i].suit]||0)+1;
+    var thr=null;for(var s in sc){if(sc[s]>=3&&sc[s]<5){thr=s;break;}}
+    if(!thr)return oppHands;
+    var hiRV=0;for(var b2=0;b2<cOK.length;b2++){var rv2=RV[cOK[b2].rank];if(rv2!==undefined&&rv2>hiRV)hiRV=rv2;}
+    var out=[];
+    for(var j=0;j<oppHands.length;j++){
+      var h=oppHands[j];
+      var c0h=h[0]&&h[0].suit===thr,c1h=h[1]&&h[1].suit===thr;
+      if(c0h&&c1h){out.push(h,h,h,h);}
+      else if(c0h||c1h){
+        if(sc[thr]>=4){out.push(h,h,h,h);}
+        else{var hv2=Math.max(RV[h[0].rank]||-1,RV[h[1].rank]||-1);if(hv2>=hiRV-2)out.push(h,h);else out.push(h);}
+      }else{out.push(h);}
+    }
+    return out;
+  }catch(e){return oppHands;}
+}
 // V2.9.600 精度债#3: 空范围兜底洗整副牌取对手牌(旧:单对手固定deck前2张+多对手抽样恒败eq虚高100)
 /*V2.9.690 FIX(P0-MC数值稳定性): MC结果缓存Map,30s TTL,key见mcVsRange函数体注释. Worker端有自己的_mcCache(由mcVsRange.toString()注入时随函数体自动注入). 主线程_mcCache在此声明保证mcVsRange函数体可访问.*/
 var _mcCache=(typeof Map!=='undefined')?new Map():null;
-function mcVsRange(hole,comm,oppRange,iterations,nOpp){if(iterations===undefined)iterations=1500;/*V2.9.690 FIX(P0-MC数值稳定性): (hole+comm+range+nOpp)结果缓存30s,消除翻后街间跳跃(旧版每次go()重新MC,单次1000-2000采样std=1-1.5,跨街跳±5-10%,实测KK@9dQdKs→3h翻牌85%→转牌73.7%达11%). 修复: 命中缓存直接返回; 未命中跑MC后写入. 30s TTL覆盖翻牌→转牌→河牌一整轮决策.*/var _mcCk='';try{var _c=function(a){return (a||[]).map(function(x){return x?(x.rank||'')+''+(x.suit||''):'';}).join(',');};_mcCk=_c(hole)+'|'+_c(comm)+'|'+((oppRange||[]).slice().sort().join(','))+'|n'+((typeof nOpp==='number'&&nOpp>=1)?nOpp:1)+'|i'+iterations;var _mcCached=(typeof _mcCache!=='undefined')?_mcCache.get(_mcCk):null;if(_mcCached&&(Date.now()-_mcCached.t)<30000)return _mcCached.r;}catch(_mcCe){}if(nOpp===undefined||nOpp<1)nOpp=1;var known=[].concat(hole,comm.filter(function(c){return c;}));var deck=[];for(var ri=0;ri<R.length;ri++){for(var si=0;si<SU.length;si++){var rank=R[ri];var suit=SU[si];if(!known.some(function(c){return c.rank===rank&&(c.suit===suit||!c.suit)})){deck.push({rank:rank,suit:suit});}}}var cn=comm.filter(function(c){return c;}).length;var nd=5-cn;var oppHands=[];for(var ki=0;ki<oppRange.length;ki++){var key=oppRange[ki];var hands=handKeyToCards(key);for(var hi=0;hi<hands.length;hi++){var h=hands[hi];if(!known.some(function(c){return c.rank===h[0].rank&&(c.suit===h[0].suit||!c.suit)})&&!known.some(function(c){return c.rank===h[1].rank&&(c.suit===h[1].suit||!c.suit)})){oppHands.push(h);}}}var w=0,t=0;var hv=eH([].concat(hole,comm.filter(function(c){return c;})));for(var i=0;i<iterations;i++){var sh=[].concat(deck);for(var j=sh.length-1;j>sh.length-1-nd&&j>0;j--){var k=Math.floor(Math.random()*(j+1));var tmp=sh[j];sh[j]=sh[k];sh[k]=tmp;}var board=[].concat(comm.filter(function(c){return c;}),(nd>0?sh.slice(-nd):[]));var myBest=eH([].concat(hole,board));var oppBest=0;var oppTaken=[];var valid=true;var nOppEff=Math.min(nOpp,oppHands.length>0?oppHands.length:(nOpp>1?nOpp:1));if(nOppEff<=1||oppHands.length===0){if(oppHands.length>0){var oppIdx=Math.floor(Math.random()*oppHands.length);var oppHole=oppHands[oppIdx];/*V2.9.602:补牌不得重对手手牌——从剔除oppHole的牌堆全洗牌抽nd张(旧:board从含oppHole的sh抽,约4%成牌评估重牌致eq偏差)*/var rDeck=deck.filter(function(c){return !((c.rank===oppHole[0].rank&&c.suit===oppHole[0].suit)||(c.rank===oppHole[1].rank&&c.suit===oppHole[1].suit));});for(var rj=rDeck.length-1;rj>0;rj--){var rk=Math.floor(Math.random()*(rj+1));var rt=rDeck[rj];rDeck[rj]=rDeck[rk];rDeck[rk]=rt;}board=[].concat(comm.filter(function(c){return c;}),(nd>0?rDeck.slice(-nd):[]));myBest=eH([].concat(hole,board));if(oppHole)oppBest=eH([].concat(oppHole,board));}else{// V2.9.601 精度: 空范围用同一副全洗牌——末尾nd张=补牌,其前连续2*n张=对手牌,零重牌(旧:独立洗牌→对手牌可能与补牌同卡,eH双计致eq偏差)
+function mcVsRange(hole,comm,oppRange,iterations,nOpp){if(iterations===undefined)iterations=1500;/*V2.9.690 FIX(P0-MC数值稳定性): (hole+comm+range+nOpp)结果缓存30s,消除翻后街间跳跃(旧版每次go()重新MC,单次1000-2000采样std=1-1.5,跨街跳±5-10%,实测KK@9dQdKs→3h翻牌85%→转牌73.7%达11%). 修复: 命中缓存直接返回; 未命中跑MC后写入. 30s TTL覆盖翻牌→转牌→河牌一整轮决策.*/var _mcCk='';try{var _c=function(a){return (a||[]).map(function(x){return x?(x.rank||'')+''+(x.suit||''):'';}).join(',');};_mcCk=_c(hole)+'|'+_c(comm)+'|'+((oppRange||[]).slice().sort().join(','))+'|n'+((typeof nOpp==='number'&&nOpp>=1)?nOpp:1)+'|i'+iterations;var _mcCached=(typeof _mcCache!=='undefined')?_mcCache.get(_mcCk):null;if(_mcCached&&(Date.now()-_mcCached.t)<30000)return _mcCached.r;}catch(_mcCe){}if(nOpp===undefined||nOpp<1)nOpp=1;var known=[].concat(hole,comm.filter(function(c){return c;}));var deck=[];for(var ri=0;ri<R.length;ri++){for(var si=0;si<SU.length;si++){var rank=R[ri];var suit=SU[si];if(!known.some(function(c){return c.rank===rank&&(c.suit===suit||!c.suit)})){deck.push({rank:rank,suit:suit});}}}var cn=comm.filter(function(c){return c;}).length;var nd=5-cn;var oppHands=[];for(var ki=0;ki<oppRange.length;ki++){var key=oppRange[ki];var hands=handKeyToCards(key);for(var hi=0;hi<hands.length;hi++){var h=hands[hi];if(!known.some(function(c){return c.rank===h[0].rank&&(c.suit===h[0].suit||!c.suit)})&&!known.some(function(c){return c.rank===h[1].rank&&(c.suit===h[1].suit||!c.suit)})){oppHands.push(h);}}}oppHands=_threatReweight(oppHands,comm);var w=0,t=0;var hv=eH([].concat(hole,comm.filter(function(c){return c;})));for(var i=0;i<iterations;i++){var sh=[].concat(deck);for(var j=sh.length-1;j>sh.length-1-nd&&j>0;j--){var k=Math.floor(Math.random()*(j+1));var tmp=sh[j];sh[j]=sh[k];sh[k]=tmp;}var board=[].concat(comm.filter(function(c){return c;}),(nd>0?sh.slice(-nd):[]));var myBest=eH([].concat(hole,board));var oppBest=0;var oppTaken=[];var valid=true;var nOppEff=Math.min(nOpp,oppHands.length>0?oppHands.length:(nOpp>1?nOpp:1));if(nOppEff<=1||oppHands.length===0){if(oppHands.length>0){var oppIdx=Math.floor(Math.random()*oppHands.length);var oppHole=oppHands[oppIdx];/*V2.9.602:补牌不得重对手手牌——从剔除oppHole的牌堆全洗牌抽nd张(旧:board从含oppHole的sh抽,约4%成牌评估重牌致eq偏差)*/var rDeck=deck.filter(function(c){return !((c.rank===oppHole[0].rank&&c.suit===oppHole[0].suit)||(c.rank===oppHole[1].rank&&c.suit===oppHole[1].suit));});for(var rj=rDeck.length-1;rj>0;rj--){var rk=Math.floor(Math.random()*(rj+1));var rt=rDeck[rj];rDeck[rj]=rDeck[rk];rDeck[rk]=rt;}board=[].concat(comm.filter(function(c){return c;}),(nd>0?rDeck.slice(-nd):[]));myBest=eH([].concat(hole,board));if(oppHole)oppBest=eH([].concat(oppHole,board));}else{// V2.9.601 精度: 空范围用同一副全洗牌——末尾nd张=补牌,其前连续2*n张=对手牌,零重牌(旧:独立洗牌→对手牌可能与补牌同卡,eH双计致eq偏差)
 var fullSh=[].concat(deck);for(var jj=fullSh.length-1;jj>0;jj--){var kk=Math.floor(Math.random()*(jj+1));var tmp2=fullSh[jj];fullSh[jj]=fullSh[kk];fullSh[kk]=tmp2;}var fBoard=[].concat(comm.filter(function(c){return c;}),(nd>0?fullSh.slice(fullSh.length-nd):[]));myBest=eH([].concat(hole,fBoard));for(var oi2=0;oi2<Math.max(1,nOppEff);oi2++){var oc1=fullSh[fullSh.length-nd-oi2*2-2],oc2=fullSh[fullSh.length-nd-oi2*2-1];var oB=eH([oc1,oc2].concat(fBoard));if(oB>oppBest)oppBest=oB;}}}else{var tries=0;while(tries<5){oppTaken=[];valid=true;var usedI={};for(var oi=0;oi<nOppEff;oi++){var oppIdx2,idx2,att=0;do{oppIdx2=Math.floor(Math.random()*oppHands.length);idx2=oppIdx2;att++;}while(usedI[idx2]&&att<20);if(usedI[idx2]){valid=false;break;}usedI[idx2]=true;var oh=oppHands[oppIdx2];if(oppTaken.some(function(c){return c.rank===oh[0].rank&&c.suit===oh[0].suit})){valid=false;break;}if(oppTaken.some(function(c){return c.rank===oh[1].rank&&c.suit===oh[1].suit})){valid=false;break;}oppTaken.push(oh[0],oh[1]);}if(valid)break;tries++;}if(valid){/*V2.9.602:多对手补牌从剔除全部oppTaken的牌堆全洗牌抽取,零重牌*/var mDeck=deck.filter(function(c){return !oppTaken.some(function(o){return o.rank===c.rank&&o.suit===c.suit;});});for(var mj=mDeck.length-1;mj>0;mj--){var mk2=Math.floor(Math.random()*(mj+1));var mt=mDeck[mj];mDeck[mj]=mDeck[mk2];mDeck[mk2]=mt;}var mBoard=[].concat(comm.filter(function(c){return c;}),(nd>0?mDeck.slice(-nd):[]));myBest=eH([].concat(hole,mBoard));/*FIX-5(审计): 多人tie按份额1/(tie人数)计, 旧恒0.5在3人池高估~17pp; 块内tieN必≥2(hero与≥1对手同分), t累计份额差值(基准0.5在FIX-5b)*/var _oppBList=[];for(var oi2=0;oi2<oppTaken.length;oi2+=2){var oB=eH([oppTaken[oi2],oppTaken[oi2+1]].concat(mBoard));_oppBList.push(oB);if(oB>oppBest)oppBest=oB;}if(myBest===oppBest){var _tieN=1;for(var _tn=0;_tn<_oppBList.length;_tn++){if(_oppBList[_tn]===myBest)_tieN++;}t+=(1/_tieN-0.5);}}else{var oppIdx3=Math.floor(Math.random()*oppHands.length);var oppHole3=oppHands[oppIdx3];/*V2.9.602:fallback同样剔除oppHole3抽补牌*/if(oppHole3){var f3Deck=deck.filter(function(c){return !((c.rank===oppHole3[0].rank&&c.suit===oppHole3[0].suit)||(c.rank===oppHole3[1].rank&&c.suit===oppHole3[1].suit));});for(var f3j=f3Deck.length-1;f3j>0;f3j--){var f3k=Math.floor(Math.random()*(f3j+1));var f3t=f3Deck[f3j];f3Deck[f3j]=f3Deck[f3k];f3Deck[f3k]=f3t;}var b3=[].concat(comm.filter(function(c){return c;}),(nd>0?f3Deck.slice(-nd):[]));myBest=eH([].concat(hole,b3));oppBest=eH([].concat(oppHole3,b3));}}}if(myBest>oppBest)w++;else if(myBest===oppBest)t+=0.5;}var _mcRes={eq:(w+t)/iterations*100,win:w/iterations*100,tie:t/iterations*100};try{if(typeof _mcCache!=='undefined'&&_mcCk){_mcCache.set(_mcCk,{r:_mcRes,t:Date.now()});if(_mcCache.size>256)_mcCache.delete(_mcCache.keys().next().value);}}catch(_mcWe){}return _mcRes;}
 
 function handKeyToCards(key){var results=[];var r1=key[0],r2=key[1];var isSuited=key.indexOf('s')!==-1;var isPaired=r1===r2;if(isPaired){for(var s1i=0;s1i<SU.length;s1i++){for(var s2i=s1i+1;s2i<SU.length;s2i++){results.push([{rank:r1,suit:SU[s1i]},{rank:r2,suit:SU[s2i]}]);}}}else if(isSuited){for(var si=0;si<SU.length;si++){results.push([{rank:r1,suit:SU[si]},{rank:r2,suit:SU[si]}]);}}else{for(var s1j=0;s1j<SU.length;s1j++){for(var s2j=0;s2j<SU.length;s2j++){if(SU[s1j]!==SU[s2j])results.push([{rank:r1,suit:SU[s1j]},{rank:r2,suit:SU[s2j]}]);}}}return results;}

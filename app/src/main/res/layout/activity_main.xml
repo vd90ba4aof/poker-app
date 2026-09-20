@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.696 · 街语义统一:donk防御路由复活(hero PFR面对对手donk首次有专门防御)·CR判据精确化(hero行动后加注才进面CR表)·版本号单一来源(ENGINE_VERSION) | 实测:街动作序列判据23/23"
+        android:text="V2.9.697 · 威胁面止损:对手范围组合级重加权(同花威胁×4/坚果听×2修正键级稀释4倍)·威胁面下注→极化范围(中低对不进威胁面大注线) | 实测:set@三同花eq 72.6%→56%(干燥对照92%),中对@三花面全下fold(9d9c实机教训),21/21"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
