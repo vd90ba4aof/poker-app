@@ -1393,7 +1393,7 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.700';
+var ENGINE_VERSION='2.9.701';
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
@@ -3485,6 +3485,15 @@ function decidePreflop(k){
 
   // V3.24→rev10→V2.9.556: 纳什push/fold — 对手码深<=15BB触发, 直读不再用stk绝对值
   var _nashEffBBpre=_oppEffBB;
+  // V2.9.701 FIX(建议2): Nash触发尺寸守卫——_oppEffBB取"池内最浅活跃对手"(L3479循环min),
+  //   含非本轮加注的短码玩家。多人池"15BB短码在场+深码40BB allin"场景误触发短码Nash表,
+  //   按短码口径fold(K3o需跟40BB进143BB死钱池, 实战日志[13]+复现S7实证, 真实需求~18-22%
+  //   而K3o vs合理范围eq>=30%, fold丢+8~15BB EV)。守卫: 短码玩家全下不超过其码深,
+  //   需跟量>码深×1.15说明本轮加注者不是该短码, 短码push/fold表不适用, 走全押赔率路径。
+  if(_nashEffBBpre>0&&_nashEffBBpre<=15&&bet>_nashEffBBpre*1.15){
+    console.log('[V2.9.701Nash守卫] 需跟'+bet+'BB>>池内最浅'+_nashEffBBpre+'BB(短码非本轮加注者)→跳过Nash走全押赔率路径');
+    _nashEffBBpre=0;
+  }
   // V2.9.647 FIX(P0): scene=check且bet=0时跳过Nash——免费过牌绝不fold!
   //   根因: 短码(≤15BB)时Nash push/fold表对K4o/93s等弱牌return fold,
   //   但scene=check+bet=0=无人加注的limped池,hero可免费过牌看flop,
@@ -3882,6 +3891,15 @@ function decidePreflop(k){
         //   30BB: 51%<53(spr<15+8)→弃; 200BB: 51%≥38(深码-7)→跟。set mine正确形态。
         var _limpEq=(_limpSmallPair)?eq*0.7:eq;
         if(_limpSmallPair&&_limpEq<eq)console.log('[V2.9.699set折损] '+k+' limp兜底 eq'+Math.round(eq)+'%×0.7='+Math.round(_limpEq)+'%(小对子翻后实现折损)');
+        // V2.9.701 FIX(建议1补完): limp兜底同款底池赔率豁免——T4o@BB需跟0.5(需求16.7%,实战[18])
+        //   进limp分支(bet≤2.5且pot≤4)而非FlatCall,首版豁免只盖FlatCall两路径漏掉limp两路径,
+        //   质量门(无对/无broadway/非suited)先于赔率拦截极小注。同口径: 需求≤17%放行+锚定赔率+12。
+        var _limpOddExempt=(_limpPo<=17);
+        if(_limpOddExempt){
+          _limpQualityOK=true;
+          _limpTh=Math.max(_limpPo+3,Math.min(_limpTh,_limpPo+12));
+          console.log('[V2.9.701赔率豁免] '+k+' 需跟'+bet+'BB需求'+Math.round(_limpPo)+'%≤17% limp兜底质量门放行+阈值锚定'+Math.round(_limpTh)+'%');
+        }
         if(_limpQualityOK&&_limpEq>=_limpTh&&_limpEq>=_limpPo){
           var _exLimp=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
           return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(_limpEq)+'%≥需'+Math.round(_limpPo)+'%('+rP5+'无表'+(_limpEq<eq?'·set折损':'')+')',eq:_exLimp.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_limpEq,pot,bet,0),exploit:_exLimp.exploit,_se:true,_seFreq:1,_limpFallback:true};
@@ -3920,7 +3938,14 @@ function decidePreflop(k){
           var _fcMinR=Math.min(_fcI1,_fcI2);
           _fcSuitedOK=_fcHasA||(_fcMinR>=4)||(_fcGap<=2); // V2.9.674: 放宽suited质量——minRank>=5→4(T+),gap<=1→2(允许Q6s/J7s等)
         }
-        var _fcQualOK=(_fcPair||_fcOffBW||(_fcSuited&&_fcSuitedOK));
+        // V2.9.701 FIX(建议1): 底池赔率豁免——需跟额≤跟后底池17%(赔率需求≤17%)时质量门槛放行。
+        //   实战日志[03]A2o@BB需跟1进7池(需求12.5%,eq47)fold/[18]T4o@BB需跟0.5(需求16.7%,eq30)
+        //   fold均丢+EV(复现S1/S2实证100%fold)——质量门先于赔率判定, offsuit非broadway被直接
+        //   排除, 无视极好赔率。豁免后阈值锚定"赔率+12缓冲"(44基准链对极小注严重过苛),
+        //   eq仍需过双数学门(≥锚定阈值且≥赔率), 不引入负EV跟注。v672"17手不在3B范围"同源补完。
+        var _fcPoPre=bet/Math.max(pot+bet,1)*100;
+        var _fcOddExempt=(_fcPoPre<=17);
+        var _fcQualOK=(_fcPair||_fcOffBW||(_fcSuited&&_fcSuitedOK)||_fcOddExempt);
         if(_fcQualOK){
           var _fcPo=bet/Math.max(pot+bet,1)*100;
           // V2.9.674: 基准门槛47→44——实测81%fold率证明47%仍过紧,44%≈底池赔率+15%缓冲仍合理
@@ -3939,6 +3964,9 @@ function decidePreflop(k){
           if(_fcDom>0){_fcTh+=_fcDom;console.log('[V2.9.699被支配] '+k+' vs '+rP5+' FlatCall阈值+'+_fcDom+(spr>25?'(深码×2)':'')+'(offsuit broadway被前位强牌支配)');}
           // 安全闸: 不低于底池赔率+3%(最小+EV边缘),不高于65%(避免要求过离谱)
           _fcTh=Math.max(_fcPo+3,Math.min(65,_fcTh));
+          // V2.9.701 FIX(建议1): 豁免场景阈值锚定"赔率+12"上限——44基准链(含SPR/位置/对手
+          //   调整)对极小注需求过苛(A2o需求12.5%被要求30+), 锚定后eq需≥赔率+12仍保12pp安全缓冲
+          if(_fcOddExempt){_fcTh=Math.max(_fcPo+3,Math.min(_fcTh,_fcPo+12));console.log('[V2.9.701赔率豁免] '+k+' 需跟'+bet+'BB需求'+Math.round(_fcPo)+'%≤17% → 质量门放行+阈值锚定'+Math.round(_fcTh)+'%');}
           // V2.9.699 FIX(PF-2): 小对子set实现折损——查表eq假设showdown直比高估小对子
           //   (88%翻牌miss被迫弃牌, 仅~12%中set实现价值; v698威胁认知反推: 对手只在中牌时支付)。
           //   eq折算×0.7(实现率), 使码深成为set mine的决定变量: 短码阈值升高弃/深码仍可call。
@@ -3994,6 +4022,13 @@ function decidePreflop(k){
         var _limp2Small=(_lq2p&&k.length===2&&'23456'.indexOf(k.charAt(0))>=0);
         var _limp2Eq=(_limp2Small)?eq*0.7:eq;
         if(_limp2Small&&_limp2Eq<eq)console.log('[V2.9.699set折损] '+k+' limp兜底 eq'+Math.round(eq)+'%×0.7='+Math.round(_limp2Eq)+'%(小对子翻后实现折损)');
+        // V2.9.701 FIX(建议1补完): 第二路径limp兜底同款豁免(同第一路径,实战[18]T4o实际走本分支)
+        var _limp2OddExempt=(_limpPo2<=17);
+        if(_limp2OddExempt){
+          _limpQ2=true;
+          _limpTh2=Math.max(_limpPo2+3,Math.min(_limpTh2,_limpPo2+12));
+          console.log('[V2.9.701赔率豁免] '+k+' 需跟'+bet+'BB需求'+Math.round(_limpPo2)+'%≤17% limp兜底(第二路径)质量门放行+阈值锚定'+Math.round(_limpTh2)+'%');
+        }
         if(_limpQ2&&_limp2Eq>=_limpTh2&&_limp2Eq>=_limpPo2){
           var _exLimp2=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});
           return{a:'call',v:bet,r:'limp兜底 '+k+' eq'+Math.round(_limp2Eq)+'%≥需'+Math.round(_limpPo2)+'%('+rP5+'不在3B'+(_limp2Eq<eq?'·set折损':'')+')',eq:_exLimp2.eq,c:eq>=50?'m':'l',scene:'limp跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_limp2Eq,pot,bet,0),exploit:_exLimp2.exploit,_se:true,_seFreq:1,_limpFallback:true};
@@ -4028,7 +4063,10 @@ function decidePreflop(k){
           var _fc2MinR=Math.min(_fc2I1,_fc2I2);
           _fc2SuitedOK=_fc2HasA||(_fc2MinR>=4)||(_fc2Gap<=2); // V2.9.674: 放宽suited质量(同第一路径)
         }
-        var _fc2QualOK=(_fc2Pair||_fc2OffBW||(_fc2Suited&&_fc2SuitedOK));
+        // V2.9.701 FIX(建议1): 第二路径同款底池赔率豁免(口径同第一路径)
+        var _fc2PoPre=bet/Math.max(pot+bet,1)*100;
+        var _fc2OddExempt=(_fc2PoPre<=17);
+        var _fc2QualOK=(_fc2Pair||_fc2OffBW||(_fc2Suited&&_fc2SuitedOK)||_fc2OddExempt);
         if(_fc2QualOK){
           var _fc2Po=bet/Math.max(pot+bet,1)*100;
           var _fc2Th=44+Multiway.callThresholdAdj(); // V2.9.674: 47→44(同第一路径)
@@ -4047,6 +4085,8 @@ function decidePreflop(k){
           if(_fc2Dom>0&&spr>25)_fc2Dom=_fc2Dom*2;
           if(_fc2Dom>0){_fc2Th+=_fc2Dom;console.log('[V2.9.699被支配] '+k+' vs '+rP5+' FlatCall阈值+'+_fc2Dom+(spr>25?'(深码×2)':'')+'(offsuit broadway被前位强牌支配)');}
           _fc2Th=Math.max(_fc2Po+3,Math.min(65,_fc2Th));
+          // V2.9.701 FIX(建议1): 第二路径豁免锚定(同第一路径)
+          if(_fc2OddExempt){_fc2Th=Math.max(_fc2Po+3,Math.min(_fc2Th,_fc2Po+12));console.log('[V2.9.701赔率豁免] '+k+' 需跟'+bet+'BB需求'+Math.round(_fc2Po)+'%≤17% → 质量门放行+阈值锚定'+Math.round(_fc2Th)+'%(第二路径)');}
           // V2.9.699 FIX(PF-2): 小对子set实现折损×0.7(同第一路径)
           var _fc2Eq=eq;
           if(_fc2Pair&&k.length===2&&'23456'.indexOf(k.charAt(0))>=0&&k.charAt(0)===k.charAt(1)){
@@ -4063,6 +4103,24 @@ function decidePreflop(k){
     }
     if(entry!==null){
       var act=entry.a,f=entry.f;f=_adjFreq3bet(act,f,oppType,raiserRole,p,k);
+      // V2.9.701 FIX(建议3): 表内路径挂钩PF-1被支配折价——v699折价只挂FlatCall两路径,
+      //   表内act='c'(如QJo@BTN vs MP走GTO call 69%)完全绕过(实战日志[01]实证)。
+      //   映射: _dominatorTh阈值口径(+10重/+6轻)→频率口径(1-d/20: +10→×0.5, +6→×0.7),
+      //   折价后频率未命中即fold, 收紧被支配broadway vs前位raiser的被动跟注。
+      var _tbDom=0;
+      if(act==='c')_tbDom=_dominatorTh(k,rP5);
+      if(_tbDom>0&&typeof f==='number'&&f>0){
+        var _tbF0=f;f=f*(1-_tbDom/20);
+        console.log('[V2.9.701表内折价] '+k+' vs '+rP5+' GTO call频率'+Math.round(_tbF0*100)+'%→'+Math.round(f*100)+'%(被支配broadway, +'+_tbDom+'阈值口径映射频率×'+(1-_tbDom/20).toFixed(1)+')');
+      }
+      // V2.9.701 FIX(建议4): 小对子表内set折损——查表eq(56)+投机bonus+fish修正层层虚高达74+
+      //   (22真实vs宽范围eq 45-52%), eq>=60恰好误触发"强牌硬底"不弃(实战[44][45]实证,-13.5BB链)。
+      //   折损后eq用于硬底判定, 使22-66不再被当作强牌保call; 频率命中call不受影响(廉价set mine保留)。
+      var _tbEqAdj=eq;
+      if(k.length===2&&k.charAt(0)===k.charAt(1)&&'23456'.indexOf(k.charAt(0))>=0){
+        _tbEqAdj=eq*0.7;
+        console.log('[V2.9.701表内set折损] '+k+' 表内eq'+Math.round(eq)+'%×0.7='+Math.round(_tbEqAdj)+'%(小对子翻后实现折损, 硬底判定用)');
+      }
       // V2.9.672 FIX(P0) BUG8: 翻前路径从未调用ExploitAdjuster→剥削调整全部失效
       //   修复: 在_adjFreq3bet之后调用ExploitAdjuster,对翻前3bet/call频率做剥削微调
       if(typeof f==='number'&&f>0){
@@ -4095,10 +4153,14 @@ function decidePreflop(k){
           //   降级为call: 自动模式下中置信call仍会执行,把随机性损失从"弃强牌"降为"多跟一次"。
           var _isPairPF=(k.length===2&&k[0]===k[1]);
           var _twoBroadway=(!_isPairPF&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
-          if((_isPairPF||_twoBroadway)&&eq>=60){
+          // V2.9.701 FIX(建议3+4): 硬底判定三重收紧——①eq用_tbEqAdj(小对子×0.7折损后,
+          //   22@eq74→51.8不再触发硬底); ②被支配offsuit broadway(_tbDom>0)不给硬底豁免
+          //   (频率折价未命中的QJo vs MP不被硬底捞回, 否则FIX-3折价形同虚设);
+          //   ③其余强牌(对子77+/非被支配双broadway)保留原硬底保护。
+          if((_isPairPF||_twoBroadway)&&_tbDom===0&&_tbEqAdj>=60){
             var exploitHF=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});var weightsHF=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};
-            console.log('[SE] 频率未命中但强牌硬底: '+k+' eq='+eq+'≥60 → 不fold,降级call');
-            return{a:'call',r:'GTO强牌硬底 '+k+' eq'+Math.round(eq)+'%('+Math.round(f*100)+'%频率未命中)',eq:exploitHF.eq,c:'m',sizing:0,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet||pot*2.5,0),exploit:exploitHF.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weightsHF},_se:true,_freqHardFloor:true};
+            console.log('[SE] 频率未命中但强牌硬底: '+k+' eq折损后='+Math.round(_tbEqAdj)+'≥60 → 不fold,降级call');
+            return{a:'call',r:'GTO强牌硬底 '+k+' eq'+Math.round(_tbEqAdj)+'%('+Math.round(f*100)+'%频率未命中)'+(_tbEqAdj<eq?'·set折损':''),eq:exploitHF.eq,c:'m',sizing:0,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet||pot*2.5,0),exploit:exploitHF.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weightsHF},_se:true,_freqHardFloor:true};
           }
           return _fold(eq,'vs '+rP5+' call频率'+Math.round(f*100)+'%未命中',spr);
         }
@@ -4106,7 +4168,7 @@ function decidePreflop(k){
       }
       var actualBet=bet||pot*2.5;
       if(act==='3b'){var sz3=Math.round(actualBet*3);sz3=_sprSizingAdjust(spr,Math.min(sz3,stk),'3bet');var exploitR2=applyExploit(eq,'raise',oppType,{bet:actualBet,pot:pot,facing3bet:true});var weights2=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'raise',v:sz3,r:'GTO 3bet vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR2.eq,c:'h',sizing:sz3,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),exploit:exploitR2.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights2},_se:true,_seFreq:f};}
-      if(act==='c'){var exploitR3=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});var weights3=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call vs '+rP5+'('+Math.round(f*100)+'%)',eq:exploitR3.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet,0),exploit:exploitR3.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights3},_se:true,_seFreq:f};}
+      if(act==='c'){var exploitR3=applyExploit(eq,'call',oppType,{bet:actualBet,pot:pot});var weights3=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};return{a:'call',r:'GTO call vs '+rP5+'('+Math.round(f*100)+'%)'+(_tbEqAdj<eq?'·set折损':'')+(_tbDom>0?'·被支配折价':''),eq:exploitR3.eq,c:eq>=50?'m':'l',scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,actualBet,0),exploit:exploitR3.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weights3},_se:true,_seFreq:f};}
       return _fold(eq,'vs '+rP5+' fold',spr);
     }
   }
@@ -4209,6 +4271,13 @@ function decidePreflop(k){
       var _aiRange=gT(getOppPos());  // V2.9.676 FIX(P0): 全押MC用3bet/jam范围(gT)而非开池范围(gO)。
       //   旧代码gO(MP)=56手→KJo eq47%，实际对手jam范围gT(MP)=21手→KJo eq35-38%。
       //   导致边缘牌被剥削call。gT覆盖TT+/AKs/AQs/AJs/ATs/AKo/AQo/AJo/ATo/KQo等强牌。
+      // V2.9.701 FIX(建议2补完): 对手类型范围感知——gT紧表只对reg/未知成立; fish/calling_station
+      //   推allin的范围远宽于3bet紧表(常见任意Ax/中小对/broadway), 实测K3o vs gT=26.7% vs gO=36.4%
+      //   差10pp, vs紧表系统性低估导致+EV跟注被误弃。fish用gO开池范围(57手)。
+      if(G.opp==='fish'||G.opp==='calling_station'){
+        _aiRange=gO(getOppPos());
+        console.log('[V2.9.701全押范围] opp='+G.opp+' allin范围改用gO开池范围(vs fish推allin远宽于3bet紧表, 防MC系统性低估)');
+      }
       var _aiMs=mcVsRange(_aiHole,[],_aiRange,1500,_aiOpp);
       if(_aiMs&&typeof _aiMs.eq==='number'&&_aiMs.eq>0){
       console.log('[V2.9.625全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
@@ -4824,14 +4893,14 @@ function decidePostflop(k,_pfInj){
       }
       if(eq>=_callTh){
         var _exC=applyExploit(eq,'call',oppType,{bet:_effBet,pot:pot});
-        return{a:'call',r:'GTO收口 跟注(eq'+Math.round(eq)+'%≥需'+Math.round(_callTh)+'%)',eq:_exC.eq,c:eq>=55?'h':'m',scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
+        return{a:'call',r:'GTO收口 跟注(eq'+Math.round(eq)+'%≥需'+Math.round(_callTh)+'%=赔率'+Math.round(_need)+'%+策略'+Math.round(_callTh-_need)+'%)',eq:_exC.eq,c:eq>=55?'h':'m',scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
       }
       // IP float: 有位置+非河牌+非MEDIUM+接近赔率→便宜看下一街(注池比按有效注算)
       if(ip&&street!=='river'&&_clHN!=='MEDIUM'&&eq>=_need-5&&_effBet/Math.max(pot+_effBet,1)<0.75){
         var _exF=applyExploit(eq,'call',oppType,{bet:_effBet,pot:pot});
         return{a:'call',r:'GTO收口 float(eq'+Math.round(eq)+'%)',eq:_exF.eq,c:'l',scene:'赔率收口',spr:spr,sprAdvice:getSPRAdvice(spr),_se:true,_seFreq:0};
       }
-      return _fold(eq,'收口弃牌(eq'+Math.round(eq)+'%<需'+Math.round(_callTh)+'%)',spr);
+      return _fold(eq,'收口弃牌(eq'+Math.round(eq)+'%<需'+Math.round(_callTh)+'%=赔率'+Math.round(_need)+'%+策略'+Math.round(_callTh-_need)+'%)',spr);
     }
     // 免费牌(scene==='check')或数据矛盾(bet=0): eq≥50价值下注,否则过牌(旧postF口径)
     if(scene==='check'||bet<=0){
@@ -12286,6 +12355,19 @@ function _threatReweight(oppHands,comm){
     var connWin=false;
     for(var wi=0;wi+2<bUniq.length;wi++){if(bUniq[wi+2]-bUniq[wi]<=4){connWin=true;break;}}
     if(!thr&&!pairRanks.length&&!connWin)return oppHands;
+    // V2.9.701 FIX(建议5): 威胁重加权运行时标记——v698引擎在mcVsRange内调用本函数(翻后
+    //   每次MC eq计算必经), 但无任何console输出致实战日志零证据(111条日志无威胁标记,
+    //   "翻后威胁是否生效"无法从日志验证)。加节流标记(同威胁签名10s内不重复):
+    //   下次实战日志可直接验证威胁引擎运行。Worker端(toString注入)console为no-op, 无害。
+    try{
+      var _twSig=(thr?'花:'+thr:'')+'|'+(pairRanks.length?'对:'+pairRanks.join(','):'')+'|'+(connWin?'连':'')+'|'+cOK.map(function(x){return x.rank+x.suit;}).join(',');
+      var _now=Date.now();
+      if(typeof _threatReweight._lastSig==='undefined'||_threatReweight._lastSig!==_twSig||(_now-_threatReweight._lastT)>10000){
+        _threatReweight._lastSig=_twSig;_threatReweight._lastT=_now;
+        var _twDims=[thr?(sc[thr]+'张同花('+thr+')'):'',pairRanks.length?('公对('+pairRanks.join(',')+')'):'',connWin?'连牌窗口':''].filter(Boolean).join('+');
+        console.log('[V2.9.701威胁重加权] 板面'+cOK.map(function(x){return x.rank+x.suit;}).join(' ')+' 威胁维度:'+_twDims+' → 对手已成威胁组合权重×2~×4, MC eq下调');
+      }
+    }catch(_twE){}
     var hiRV=0;for(var b2=0;b2<cOK.length;b2++){var rv2=RV[cOK[b2].rank];if(rv2!==undefined&&rv2>hiRV)hiRV=rv2;}
     var out=[];
     for(var j=0;j<oppHands.length;j++){
