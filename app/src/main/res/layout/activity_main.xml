@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.689 · 日志验证12项修复(踢脚/非坚果同花/板对低对/三花威胁/计数去重/B闸赔率)"
+        android:text="V2.9.690 · MC数值稳定(30s缓存+基准iter提升,消除街间跳跃)"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
