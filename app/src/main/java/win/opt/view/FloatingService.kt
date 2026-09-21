@@ -936,17 +936,80 @@ class FloatingService : Service() {
                 }
                 // V3.16: 翻前raise → 直接点GG加注按钮(默认2.5x min-raise)
                 //        翻后raise → 四档按钮(33/50/75/100%)
+                // V2.9.702 FIX(P0): 翻前非标准尺寸不再静默全押——旧逻辑sizing>4BB直接
+                //   executeAutoTapFallback("allin"),而3bet标准尺寸恰为9-12BB(2.5x-3x open的3x),
+                //   即一切3bet全被降级全押,量级放大数倍。且blindBB<=0时isStandardPreflopRaise
+                //   恒false(盲注未知→最大激进度,方向性错误)。
+                //   实证(poker_log_20260921_062000 05:58): KdKc引擎决策raise sizing=9BB
+                //   ("GTO 3bet vs MP(100%)"),2.2秒后执行fallback_allin(39BB全押),量级×4.3,
+                //   该手bbResult=-11.5BB。翻后路径(L957起)早已有executeExactBet精确输入,
+                //   翻前路径缺失=执行能力不对称。
+                //   修复: 非标准尺寸→优先精确金额输入(复用翻后executeExactBet);
+                //   精确输入失败→实际投入(sizing-toCall)≥有效码深才全押(合理),否则保守点加注
+                //   按钮(min-raise近似,尺寸失真已记录logError供审计),绝不静默放大引擎决策量级。
                 if (phase == "pre") {
                     // V3.44: 用isStandardPreflopRaise判断加注量是否可用标准按钮
                     val blindBB = decisionData.optInt("blindBB", 0)
                     if (GameModeConfig.isStandardPreflopRaise(sizing, blindBB)) {
                         Log.d(TAG, "★ GG翻前加注: 标准按钮近似 (size=${sizing} BB=${blindBB})")
                         executeAutoTapFallback("raise")
+                        handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                     } else {
-                        Log.d(TAG, "★ GG翻前加注过大(${sizing}/${blindBB}BB)，走全押")
-                        executeAutoTapFallback("allin")
+                        Log.d(TAG, "★ GG翻前加注非标准尺寸(size=${sizing} BB=${blindBB})→精确金额输入")
+                        // V2.9.702a 字段勘误(实证,非猜测): JS autoDecision JSON(poker_helper.html
+                        //   L14948-14962)字段清单为 action/confidence/reason/eq/hClass/sizing/pot/
+                        //   myChips/toCall/blindBB/phase/nash——无"stack"字段,码深字段名为"myChips"
+                        //   (=JS _stkChips=_toChips(G.stk),chips单位)。初版误用"stack"会恒取0。
+                        //   另: sizing为"加注到"总额(chips),全下判定须扣除已面对的toCall——
+                        //   实际投入=sizing-toCall ≥ 码深 才是全下意图。
+                        // V2.9.702a 守卫: blindBB<=0=盲注识别异常帧(JS _toChips L14817不换算,
+                        //   sizing为BB裸值,精确输入金额不可信)→保守min-raise+记录失真。
+                        //   方向修正: 旧逻辑未知→最激进allin(v701缺陷);新逻辑未知→最保守,量级不放大。
+                        if (blindBB <= 0) {
+                            Log.w(TAG, "★ 翻前盲注未知(blindBB<=0)→sizing单位不可信→保守加注按钮近似(尺寸失真已记录)")
+                            try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.MEDIUM,
+                                "翻前盲注未知→min-raise近似(尺寸失真)", "engineSize=$sizing blindBB=$blindBB") } catch (_: Exception) {}
+                            executeAutoTapFallback("raise")
+                            handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                        } else {
+                        val preSizing = sizing
+                        val preToCall = decisionData.optInt("toCall", 0)
+                        val preStack = decisionData.optInt("myChips", 0)
+                        Thread({
+                            var exactDone = false
+                            try {
+                                exactDone = executeExactBet(preSizing)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "翻前精确输入异常", e)
+                            }
+                            if (!exactDone) {
+                                // 精确输入失败(键盘未配置/输入异常):
+                                // ① 实际投入(sizing-toCall)≥有效码深→全押合理(引擎本意即全下)
+                                // ② 否则保守min-raise按钮近似+记录失真(绝不静默放大到全押)
+                                if (preStack > 0 && (preSizing - preToCall) >= preStack) {
+                                    Log.w(TAG, "★ 翻前精确输入失败且投入(${preSizing}-${preToCall}=${preSizing - preToCall})≥码深(${preStack})→点全押")
+                                    handler.post {
+                                        executeAutoTapFallback("allin")
+                                        handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                                    }
+                                } else {
+                                    Log.w(TAG, "★ 翻前精确输入失败→保守加注按钮近似(引擎size=${preSizing},码深=${preStack},尺寸失真已记录)")
+                                    try { DiagnosticLogger.logError(DiagnosticLogger.ErrorCategory.AUTO_EXEC, DiagnosticLogger.Severity.MEDIUM,
+                                        "翻前非标准尺寸精确输入失败→min-raise近似(尺寸失真)", "engineSize=$preSizing myChips=$preStack toCall=$preToCall blindBB=$blindBB") } catch (_: Exception) {}
+                                    handler.post {
+                                        executeAutoTapFallback("raise")
+                                        handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                                    }
+                                }
+                            } else {
+                                handler.post {
+                                    handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
+                                    Log.i(TAG, "★ 翻前精确输入完成: $preSizing")
+                                }
+                            }
+                        }, "PreExactBetThread").start()
+                        } // 闭合blindBB>0分支(V2.9.702a盲注守卫)
                     }
-                    handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()
                     return
                 }
                 if (sizing > 0 && pot > 0 && GameModeConfig.currentPlatform == GamePlatform.GGPOKER) {

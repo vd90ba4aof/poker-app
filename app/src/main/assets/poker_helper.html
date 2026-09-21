@@ -1393,7 +1393,7 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.701';
+var ENGINE_VERSION='2.9.702';
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
@@ -3012,6 +3012,13 @@ var _3B={
     from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},A2s:{a:'3b',f:.2},"99":{a:'c',f:.8},"88":{a:'c',f:.7},"77":{a:'c',f:.6},"66":{a:'c',f:.5},"55":{a:'c',f:.4},ATs:{a:'c',f:.7},AJs:{a:'c',f:.5},A9s:{a:'c',f:.6},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},QJs:{a:'c',f:.5},JTs:{a:'c',f:.6},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},AJo:{a:'c',f:.4},KQo:{a:'c',f:.3}}
   },
   vs_MP:{
+    // V2.9.702 FIX(补表): 新增from_MP——六人桌MP vs MP开池的位置对称防守,原为_3B唯一缺口
+    //   (vs_UTG1/CO/BTN/SB均有from_MP,仅vs_MP缺失)。实证(poker_log_20260921_062000):
+    //   "[SE] vs_MP.from_MP不存在→fallback vs_UTG1.from_MP (raiser=UTG)"——getOppPos()默认'mp'
+    //   (V2.9.674,mp为均衡覆盖),hero MP位+对手位置未识别→查表必落fallback,系统性用最紧UTG1表。
+    //   范围构造: 介于vs_UTG1.from_MP(QQ .7/JJ .3)与vs_CO.from_MP(QQ .9/JJ .7/TT .5)之间,
+    //   对齐同表内from_HJ(QQ .8/JJ .6)口径,MP开池(~20%)防守强度取中位。
+    from_MP:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.85},JJ:{a:'3b',f:.6},TT:{a:'3b',f:.45},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.75},AQs:{a:'3b',f:.55},AQo:{a:'3b',f:.4},A5s:{a:'3b',f:.45},A4s:{a:'3b',f:.35},"99":{a:'c',f:.85},"88":{a:'c',f:.75},"77":{a:'c',f:.6},ATs:{a:'c',f:.75},AJs:{a:'c',f:.55},AJo:{a:'c',f:.35},KJs:{a:'c',f:.6},KTs:{a:'c',f:.5},KQs:{a:'c',f:.45},QJs:{a:'c',f:.45},JTs:{a:'c',f:.55},T9s:{a:'c',f:.5}},
     from_CO:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.8},JJ:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.7},AQs:{a:'3b',f:.5},A5s:{a:'3b',f:.4},TT:{a:'c',f:.8},"99":{a:'c',f:.7},AQo:{a:'c',f:.6},AJs:{a:'c',f:.6},KQs:{a:'c',f:.5},"88":{a:'c',f:.5},QJs:{a:'c',f:.4},JTs:{a:'c',f:.4},A4s:{a:'3b',f:.3}},
     from_BTN:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.7},TT:{a:'3b',f:.5},AKs:{a:'3b',f:.8},AKo:{a:'3b',f:.8},AQs:{a:'3b',f:.6},AQo:{a:'3b',f:.5},AJs:{a:'3b',f:.3},A5s:{a:'3b',f:.5},A4s:{a:'3b',f:.4},A3s:{a:'3b',f:.3},"99":{a:'c',f:.9},"88":{a:'c',f:.8},"77":{a:'c',f:.7},"66":{a:'c',f:.6},"55":{a:'c',f:.5},"44":{a:'c',f:.4},"33":{a:'c',f:.35},"22":{a:'c',f:.3},ATs:{a:'c',f:.8},A9s:{a:'c',f:.7},A8s:{a:'c',f:.6},A7s:{a:'c',f:.5},A6s:{a:'c',f:.4},KJs:{a:'c',f:.7},KTs:{a:'c',f:.6},QJs:{a:'c',f:.5},JTs:{a:'c',f:.7},T9s:{a:'c',f:.7},KQs:{a:'c',f:.5},KQo:{a:'c',f:.4},KJo:{a:'c',f:.35},QJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJo:{a:'c',f:.45},ATo:{a:'c',f:.4},"98s":{a:'c',f:.5},"87s":{a:'c',f:.35},"76s":{a:'c',f:.3},"65s":{a:'c',f:.25},"54s":{a:'c',f:.2}},
     from_SB:{AA:{a:'3b',f:1},KK:{a:'3b',f:1},QQ:{a:'3b',f:.9},JJ:{a:'3b',f:.8},TT:{a:'3b',f:.6},AKs:{a:'3b',f:.9},AKo:{a:'3b',f:.9},AQs:{a:'3b',f:.7},AQo:{a:'3b',f:.5},A5s:{a:'3b',f:.6},A4s:{a:'3b',f:.5},KQs:{a:'3b',f:.3},"99":{a:'c',f:.7},"88":{a:'c',f:.6},"77":{a:'c',f:.5},"66":{a:'c',f:.4},"55":{a:'c',f:.3},ATo:{a:'c',f:.6},A9s:{a:'c',f:.6},A8s:{a:'c',f:.5},A7s:{a:'c',f:.4},KTs:{a:'c',f:.5},KJs:{a:'c',f:.4},KJo:{a:'c',f:.3},QTs:{a:'c',f:.5},QJo:{a:'c',f:.3},JTs:{a:'c',f:.5},T9s:{a:'c',f:.5},"98s":{a:'c',f:.4},"87s":{a:'c',f:.3},AJo:{a:'c',f:.3},JTo:{a:'c',f:.25},AJs:{a:'c',f:.5},ATs:{a:'c',f:.4},A6s:{a:'c',f:.25},"44":{a:'c',f:.25},"33":{a:'c',f:.2},"22":{a:'c',f:.2},KQo:{a:'c',f:.3},QJs:{a:'c',f:.4}},
@@ -3456,9 +3463,24 @@ function _dominatorTh(k,rP5){
     if(_r1===_r2)return 0;
     var _BW=['A','K','Q','J','T'];
     if(_BW.indexOf(_r1)<0||_BW.indexOf(_r2)<0)return 0;
-    if(_r1==='A')return (_r2==='J')?6:0;
-    if(_r1==='K')return 6;
-    return 10;
+    var _d=0;
+    if(_r1==='A')_d=(_r2==='J')?6:0;
+    else if(_r1==='K')_d=6;
+    else _d=10;
+    // V2.9.702 FIX: 对手类型折减——被支配折价的前提是"对手开池范围紧"(前位+紧手),
+    //   旧代码只看raiser位置不看对手画像,三类误伤:
+    //   ① opp=unknown(范围未知,占实战多数)全额折价——实证(701日志[28]KcTs@BTN vs MP):
+    //     FlatCall2阈值44+7(spr<10)+6(支配)=57>eq55→误弃(赔率仅40%,vs MP开池eq55%为+EV跟注);
+    //   ② opp=fish/cs/maniac(宽范围60%+)仍全额——KTo反被fish的K8o/Q9o反向支配;
+    //   ③ 表内路径(V2.9.701 FIX-3,L4111)同源: GTO call频率被×0.7无差别收紧。
+    //   修复: 宽范围→0(无支配依据),unknown→×0.5(保守取中),tight/nit/tag保持全额。
+    //   该函数三个调用点(FlatCall1/FlatCall2阈值+表内频率折价)统一受益,口径一致。
+    if(_d>0){
+      var _ot=(typeof G!=='undefined'&&G.opp)||'unknown';
+      if(_ot==='fish'||_ot==='calling_station'||_ot==='maniac')return 0;
+      if(_ot==='unknown')return Math.round(_d*0.5);
+    }
+    return _d;
   }catch(e){return 0;}
 }
 function decidePreflop(k){
@@ -3791,8 +3813,13 @@ function decidePreflop(k){
     // V2.9.674 FIX: 扩展fallback逻辑——不仅处理raiserRole='unknown',还要处理posTable不存在的任何情况
     //   根因: getOppPos()默认值从'utg'改为'mp'后,hero在MP位置+对手未知→vs_MP.from_MP不存在
     //   修复: 只要posTable不存在就尝试fallback,优先vs_UTG1(最保守),其次vs_CO(中等),最后vs_BTN(最宽松)
+    // V2.9.702 FIX: fallback顺序UTG1优先→CO优先——六人桌各位开池宽度: UTG1(15-18%)<MP(18-22%)
+    //   <HJ(20-25%)<CO(25-28%)<SB(35-40%)<BTN(40-45%),CO最接近全表中位。旧顺序vs_UTG1最紧
+    //   优先=所有缺表场景系统性过紧(V2.9.674将getOppPos默认设'mp'意图"均衡",V2.9.675的fallback
+    //   却UTG1优先,两版意图相互矛盾——实证701日志: vs_hj.from_XX等缺口全落vs_UTG1表)。
+    //   注: vs_MP.from_MP已由V2.9.702补齐,本fallback现为纯防御路径(vs_hj等罕见缺口)。
     if(!posTable){
-      var _fbKeys=['vs_UTG1','vs_CO','vs_BTN'];
+      var _fbKeys=['vs_CO','vs_UTG1','vs_BTN'];
       for(var _fi=0;_fi<_fbKeys.length;_fi++){
         var _fbKey=_fbKeys[_fi];
         var _fbTb=_3B[_fbKey];
@@ -4880,7 +4907,17 @@ function decidePostflop(k,_pfInj){
     if((scene==='raise'||scene==='reraise')&&_effBet>0){
       var _need=_effBet/Math.max(pot+_effBet,1)*100;  // 跟注所需权益(底池赔率%, pot已含对手bet)
       // 空气牌面对下注: 弃牌(旧postF"空气牌不追")
-      if(_clHN==='AIR')return _fold(eq,'收口空气牌不追(eq'+Math.round(eq)+'%)',spr);
+      // V2.9.702 FIX(P0): AIR无条件弃加权益硬闸(纵深防御)——分类降级链(676/680/681/684/689)
+      //   历史上把两对/中底对误标AIR,eq与分类矛盾(eq57%却被当空气弃)时无条件弃牌丢失大额EV
+      //   (实证8s8c@5c5hQs2s: eq57.19% vs 需33%,单手弃+3.7~6.0BB)。
+      //   闸口径对齐面CBet V2.9.691闸A: eq≥赔率+15pp 且 eq≥50% 才豁免——真空气(eq<50)照常弃,
+      //   仅拦截"分类与权益显著矛盾"的误标场景,不引入弱牌跟注。
+      if(_clHN==='AIR'&&!(eq>=Math.max(_need+15,50))){
+        return _fold(eq,'收口空气牌不追(eq'+Math.round(eq)+'%)',spr);
+      }
+      if(_clHN==='AIR'&&eq>=Math.max(_need+15,50)){
+        console.log('[V2.9.702收口] AIR但eq'+Math.round(eq)+'%≥赔率'+Math.round(_need)+'%+15且≥50%→分类与权益矛盾,按赔率决策');
+      }
       // 加注base阈值: flop +12 / turn +15 / river仅NUTS-STRONG可加(+12),其他+100(河牌非坚果不加注)
       var _raiseBase=_need+(street==='turn'?15:street==='river'?((_clHN==='NUTS'||_clHN==='STRONG')?12:100):12);
       var _raiseTh=SPRZone.raiseThreshold(spr,_raiseBase,_clHN);
@@ -5633,8 +5670,14 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk,eq){
       var _fcbStrongHand=(_fcbHcNum<=4);
       var _fcbGateA=(_fcbEq>=_fcbFoldReq+0.15);
       var _fcbGateB=(_fcbStrongHand&&_fcbEq>=_fcbFoldReq);
-      if(_fcbGateA||_fcbGateB){
-        console.log('[V2.9.691面CBet] fold支路权益硬闸('+(_fcbGateA?'闸A权益':'闸B牌力')+'): eq='+Math.round(eq)+'% 赔率线='+Math.round(_fcbFoldReq*100)+'% hc='+hcKey+' → fold降级为call (掷骰f='+Math.round(adjF*100)+'%)');
+      // V2.9.702 FIX(闸B'): MEDIUM守卫——hcKey=6(中对/底对/弱踢顶对)且eq显著超赔率线
+      //   (+8pp且绝对≥42%)时不掷骰弃牌。旧闸B只保护≤4(STRONG),MEDIUM的eq明显+EV跟注
+      //   仍被表频率f(58%等)随机弃掉。参数刻意克制(非闸A的全额15pp):
+      //   实测校准(701日志[23]8s8h@4c7h6h eq37.5%vs需35.7%,+1.8pp边缘)属GTO混合正常弃牌
+      //   不应豁免; 闸B'只拦"中等牌力+明显正EV"被掷骰误弃的结构性缺口(如eq45%vs需30%)。
+      var _fcbGateB2=(!_fcbStrongHand&&_fcbHcNum<=6&&_fcbEq>=_fcbFoldReq+0.08&&_fcbEq>=0.42);
+      if(_fcbGateA||_fcbGateB||_fcbGateB2){
+        console.log('[V2.9.691面CBet] fold支路权益硬闸('+(_fcbGateA?'闸A权益':(_fcbGateB?'闸B牌力':'闸B\'中等牌力'))+'): eq='+Math.round(eq)+'% 赔率线='+Math.round(_fcbFoldReq*100)+'% hc='+hcKey+' → fold降级为call (掷骰f='+Math.round(adjF*100)+'%)');
         return{a:'call',r:'GTO 面CBet call(权益硬闸) '+btKey+'/'+hcKey+' eq='+Math.round(eq)+'%',eq:eq||0,c:'m',scene:isDonk?'面对Donk':'面对CBet',spr:spr,_se:true,_seFreq:adjC};
       }
     }
@@ -6406,7 +6449,10 @@ var DRTA={
   lastHands:0,
   STORAGE_KEY:'poker_v2958_tracker',
   BLUFF_FREQ:{nit:0.45,tight:0.35,tag:0.20,lag:0.10,fish:0.05,calling_station:0.02,maniac:0.15,unknown:0.10},
-  TYPE_INIT:{fish:{vpip:60,pfr:15,af:0.6},nit:{vpip:12,pfr:10,af:0.5},tight:{vpip:18,pfr:15,af:0.8},tag:{vpip:22,pfr:18,af:1.8},lag:{vpip:50,pfr:35,af:2.5},calling_station:{vpip:55,pfr:10,af:0.3},maniac:{vpip:70,pfr:45,af:3.5},unknown:{vpip:30,pfr:20,af:1.0}},
+  // V2.9.702: TYPE_INIT补ftb(面对下注弃牌率%)先验——setType()等效计数换算需要,
+  //   保证classify()(判据含ftb>=60 nit/ftb>=55 tight)能从注入的等效计数复原出标注类型。
+  //   口径: nit 70 / tight 60 / tag 45 / unknown 50 / fish 40 / cs 30 / lag 35 / maniac 25。
+  TYPE_INIT:{fish:{vpip:60,pfr:15,af:0.6,ftb:40},nit:{vpip:12,pfr:10,af:0.5,ftb:70},tight:{vpip:18,pfr:15,af:0.8,ftb:60},tag:{vpip:22,pfr:18,af:1.8,ftb:45},lag:{vpip:50,pfr:35,af:2.5,ftb:35},calling_station:{vpip:55,pfr:10,af:0.3,ftb:30},maniac:{vpip:70,pfr:45,af:3.5,ftb:25},unknown:{vpip:30,pfr:20,af:1.0,ftb:50}},
   // V2.9.58: 贝叶斯先验——每种对手类型的3bet/cbet/steal/WTSD范围概率
   TYPE_PRIORS:{
     nit:{threebet:3,cbet:45,fold_cbet:70,steal:15,wtsd:22,wsd:55},
@@ -6788,15 +6834,48 @@ var DRTA={
   },
   
   setType:function(type){
+    // V2.9.702 FIX(P0): TYPE_INIT百分比先验误写计数槽——DRTA"脏数据反复重置"的根因闭环。
+    //   根因链(实证poker_log_20260921_062000: "[V2.9.689DRTA] 检测到脏数据(vpip=60,pfr=19,hands=21)→重置追踪器"):
+    //   ① TYPE_INIT(L6409)是百分比先验(fish:{vpip:60,pfr:15});
+    //   ② 旧代码t.vpip=init.vpip直接把60写进计数槽——而tracker.t.vpip是计数语义
+    //     (record() L6544每手最多+1, getProfile() L6603用t.vpip/t.hands*100换算百分比);
+    //   ③ 注入后: vpip冻结在60(硬上限t.vpip<t.hands即60<21恒false不再增长),
+    //     pfr从15涨到19(15<21允许+4), hands涨到21;
+    //   ④ 每次页面重载→load() L6738脏数据检测(vpip 60>hands 21)命中→reset()全清零;
+    //   ⑤ 清零后OppProfiler自动同步(L13557)/手动按钮再次注入百分比→循环。
+    //   这就是v588/590/598/643/671/686/689共8次修复(全在record()写入侧加去重/上限/clamp)
+    //   无法根除的原因: setType()是独立的第二写入入口,历史修复从未触达。
+    //   修复: 百分比先验换算为等效计数(_PRIOR_EQ_HANDS=20手等效样本),保证物理合法
+    //   (hands>0, 0<=pfr<=vpip<=hands),换算后getProfile()复原出的VPIP/PFR/AF与先验一致。
     var init=this.TYPE_INIT[type]||this.TYPE_INIT.unknown;
     var t=this.tracker;
-    t.vpip=init.vpip;t.pfr=init.pfr;
-    t.af=init.af;t.bet_count=Math.round(init.vpip*0.3);t.call_count=Math.round(init.vpip*0.5);
+    if(type==='unknown'){
+      // unknown=无信息状态: 清计数回零,不注入先验(旧代码注入{30,20}会把unknown classify成tight)
+      this.reset();
+      return;
+    }
+    var EQ=20;  // 先验等效样本手数(贝叶斯先验强度,手动/自动标注立即生效但可被真实采样稀释)
+    t.hands=EQ;
+    t.vpip=Math.round(init.vpip*EQ/100);
+    t.pfr=Math.min(t.vpip,Math.round(init.pfr*EQ/100));
+    // AF与ftb先验同步换算(计数口径),保证classify()能从等效计数复原出标注类型
+    var _eqCall=Math.max(3,Math.round(t.vpip*0.5));
+    t.call_count=_eqCall;
+    t.bet_count=Math.max(1,Math.round(_eqCall*init.af));
+    var _eqFtb=(typeof init.ftb==='number')?init.ftb:50;
+    t._bet_faced=Math.max(4,Math.round(EQ*0.8));
+    t._fold_to_bet=Math.round(t._bet_faced*_eqFtb/100);
+    // 清去重键: 先验注入后同手牌键失效,确保后续record()正常累计
+    t._lastCountedHand=null;t._vpipKey=null;t._pfrKey=null;t._sawFlopKey=null;
+    try{delete t._was_pfr;}catch(e0){}
+    this.save();  // V2.9.702: 先验即时持久化(否则hands=20不满足%3==0,重载丢先验)
     this.updateUI();
   }
 };
 
-function setTrackerType(type){DRTA.setType(type);G.opp=type;setOppType(type);}
+// V2.9.702: setTrackerType去重——旧代码DRTA.setType(type)+setOppType(type)双重注入
+//   (setOppType内部L11827也调DRTA.setType),setType跑两次。保留setOppType单一入口。
+function setTrackerType(type){G.opp=type;setOppType(type);}
 
 // ===== V2.9.60: TiltDetector — 对手情绪检测 =====
 var TiltDetector={
@@ -9037,18 +9116,22 @@ function handClassify(hole,comm){
         madeType='MEDIUM';pairSubType+='(三花面降级)';
         console.log('[V2.9.676牌力] 两对在三花面降级STRONG→MEDIUM');
       }
-      // V2.9.684 FIX(P0): 底两对在对子面/连牌面降级为AIR
-      // 实证: 底两对在对子面(如6-6-3-T面)极弱,容易被葫芦beat
-      // 底两对在连牌面(如7-8-9-T面)极弱,容易被顺子beat
+      // V2.9.702 FIX(P0): 底两对(口袋对+板对)误降AIR——旧V2.9.684规则前提错误。
+      //   实证(poker_log_20260921_062000[8]): 8s8c@5c5hQs2s=两对88+55,eq57.19%,被
+      //   "[SE]收口空气牌不追(eq57%)"弃牌,单手弃EV≈+3.7~6.0BB;同构JhJs@5c5hQs2s亦误判AIR
+      //   (Node复现100%命中)。根因: 口袋对+板对构成两对时board必含对子→_boardHasPair恒真
+      //   →旧规则对该牌型100%触发,全量误伤; 且V2.9.684注释示例"66@663T面"实为set场景(前提即错)。
+      //   修复: 维持MEDIUM(两对有摊牌价值,与V2.9.698"降MEDIUM不降AIR,由eq守卫决策"哲学对齐),
+      //   仅保留威胁警示标志与subtype标注(葫芦威胁经_threatReweight在eq层惩罚,分类层不再越权)。
       if(pairSubType.indexOf('底两对')===0){
         if(_boardHasPair){
-          madeType='AIR';pairSubType+='(对子面降级)';
-          _downgradedBy3Flush=true;_downgradedByBoardHazard=true;
-          console.log('[V2.9.684牌力] 底两对在对子面降级MEDIUM→AIR('+pairSubType+')');
+          pairSubType+='(对子面警示)';
+          _downgradedByBoardHazard=true;
+          console.log('[V2.9.702牌力] 底两对在对子面维持MEDIUM(旧V2.9.684降AIR误伤:两对有摊牌价值,eq证据57%)('+pairSubType+')');
         }else if(_boardIsConnected){
-          madeType='AIR';pairSubType+='(连牌面降级)';
-          _downgradedBy3Flush=true;_downgradedByBoardHazard=true;
-          console.log('[V2.9.684牌力] 底两对在连牌面降级MEDIUM→AIR('+pairSubType+')');
+          pairSubType+='(连牌面警示)';
+          _downgradedByBoardHazard=true;
+          console.log('[V2.9.702牌力] 底两对在连牌面维持MEDIUM(旧V2.9.684降AIR误伤,顺子威胁由eq层惩罚)('+pairSubType+')');
         }
       }
     }else{
@@ -9126,18 +9209,25 @@ function handClassify(hole,comm){
       // V2.9.680 FIX(P0): 中对/底对在paired board(对子面)降级为AIR
       // 实证: 7c5s在6c-4h-6h-7h-4c面(6-6对子面)→底对7→MEDIUM→call all-in→-19.1BB
       // 根因: 对子面+中对/底对=极弱，容易被葫芦beat，且对手范围偏强
+      // V2.9.702 FIX(P0): 降AIR→维持MEDIUM——680原始实证的-19.1BB根因是"无eq守卫的错误call all-in",
+      //   现收口层(L4880+)已有完整赔率决策(收口弃牌/收口跟注),MEDIUM走eq决策不会再盲call;
+      //   降AIR则触发"[SE]收口空气牌不追"无条件弃,eq达标的中对也被误弃(同684误伤模式)。
+      //   葫芦威胁由_downgradedByBoardHazard标志经_threatReweight在eq层惩罚,分类层不越权。
       if((pairSubType==='中对'||pairSubType==='底对')&&_boardHasPair){
-        madeType='AIR';pairSubType+='(对子面降级)';
-        _downgradedBy3Flush=true;_downgradedByBoardHazard=true;  // V2.9.680: 对子面降级也阻止DRAW升级
-        console.log('[V2.9.680牌力] 中对/底对在对子面降级MEDIUM→AIR('+pairSubType+')');
+        pairSubType+='(对子面警示)';
+        _downgradedBy3Flush=true;_downgradedByBoardHazard=true;  // 保留: 阻止DRAW升级+eq威胁惩罚
+        console.log('[V2.9.702牌力] 中对/底对在对子面维持MEDIUM(旧V2.9.680降AIR,现由eq守卫决策)('+pairSubType+')');
       }
       // V2.9.681 FIX(P0): 中对/底对在连牌面(3+张连牌)降级为AIR
       // 实证: 中对/底对在连牌面(如7-8-9, T-J-Q)极弱，容易被顺子beat
       // 连牌面+中对/底对=对手范围偏强(顺子可能性高)
+      // V2.9.702 FIX(P0): 降AIR→维持MEDIUM(同680理由)——实证(poker_log_20260921_062000[6]):
+      //   Ah2d@3s4h6h2c=底对2,"底对(连牌面降级)"AIR→被无条件弃; 底对2有摊牌价值,
+      //   顺子威胁由eq层_threatReweight惩罚,由收口层赔率决策。
       if(madeType==='MEDIUM'&&(pairSubType==='中对'||pairSubType==='底对')&&_boardIsConnected){
-        madeType='AIR';pairSubType+='(连牌面降级)';
-        _downgradedBy3Flush=true;_downgradedByBoardHazard=true;  // V2.9.681: 连牌面降级也阻止DRAW升级
-        console.log('[V2.9.681牌力] 中对/底对在连牌面降级MEDIUM→AIR('+pairSubType+')');
+        pairSubType+='(连牌面警示)';
+        _downgradedBy3Flush=true;_downgradedByBoardHazard=true;  // 保留: 阻止DRAW升级+eq威胁惩罚
+        console.log('[V2.9.702牌力] 中对/底对在连牌面维持MEDIUM(旧V2.9.681降AIR,现由eq守卫决策)('+pairSubType+')');
       }
       // V2.9.698 FIX(D5审计): 顶对/超对@连牌面降级STRONG→MEDIUM——对手已成顺/顺听威胁认知。
       //   实测AQ@Q-T-9: 对手范围已成顺7.8%+两对6.7%+set2.4%(直接威胁16.9%), eq虚高6-16pp
@@ -9166,6 +9256,10 @@ function handClassify(hole,comm){
       //   且689 FIX-4把顶对顶踢/超对从STRONG降到MEDIUM后,不过滤的旧检查会把它们
       //   二次降级成AIR→三花面所有对子全灭,过度惩罚。现在: 中对/底对→AIR,
       //   顶对(任意踢)/超对→MEDIUM(由eq守卫按真实赔率决策call/fold)。
+      // V2.9.702 FIX(P0): 降AIR→维持MEDIUM(同680/681/684理由)——676原始实证的
+      //   "eq=53.4%实际30-35%"是eQ查表虚高问题,应由eq层修正; 分类层降AIR会把
+      //   真实eq达标的中对也无条件弃掉。三花威胁保留_downgradedBy3Flush标志:
+      //   ①阻止DRAW升级 ②hazard透传→eq层_threatReweight惩罚,双保险不依赖分类降级。
       if(_boardHas3Flush && madeType==='MEDIUM' && (pairSubType==='中对'||pairSubType==='底对')){
         // 找出三花面的花色
         var _flush3Suit=null;
@@ -9174,11 +9268,11 @@ function handClassify(hole,comm){
           // 检查手牌是否完全阻断该花色(持有2张)
           var _holeFlushCount=0;
           hole.filter(function(c){return c;}).forEach(function(c){if(c.suit===_flush3Suit)_holeFlushCount++;});
-          // 未完全阻断(0-1张) → 降级中对/底对
+          // 未完全阻断(0-1张) → 警示但维持MEDIUM(由eq守卫决策)
           if(_holeFlushCount<2){
-            madeType='AIR';pairSubType+='(三花面降级)';
+            pairSubType+='(三花面警示)';
             _downgradedBy3Flush=true;  // V2.9.678: 标记已降级，防止后续DRAW覆盖
-            console.log('[V2.9.676牌力] 三花面对子降级MEDIUM→AIR(手牌'+_holeFlushCount+'张'+_flush3Suit+'阻断)');
+            console.log('[V2.9.702牌力] 三花面对子维持MEDIUM(旧V2.9.676降AIR,现由eq守卫决策)(手牌'+_holeFlushCount+'张'+_flush3Suit+'阻断)');
           }
         }
       }
@@ -9188,13 +9282,15 @@ function handClassify(hole,comm){
       //   +K/Q/J/T转牌全是超张→eq约30%。用户明确指出: 翻牌中对A必须考虑同花威胁及其他威胁。
       //   修复: 翻牌(cc=3)中对/底对(对子rank<T,本引擎RV: T=8) + 板面有A + 板面2张同花(后门花)
       //   →降级AIR(仅bluff-catcher价值)。转牌后(cc>=4)后门花威胁大减,保持MEDIUM由eq守卫兜底。
+      // V2.9.702 FIX(P0): 降AIR→维持MEDIUM(同上)——"eq约30%"应由eq层体现,
+      //   中对99@A面被Ax支配的认知经_downgradedByBoardHazard标志+eq层惩罚传递。
       if(madeType==='MEDIUM'&&(pairSubType==='中对'||pairSubType==='底对')&&topPairR<8&&cc===3&&commRankCounts['A']>0&&!_boardHas3Flush){
         var _bdFlushThreat=false;
         for(var _bs4k in _boardSuits){if(_boardSuits[_bs4k]>=2){_bdFlushThreat=true;break;}}
         if(_bdFlushThreat){
-          madeType='AIR';pairSubType+='(A面后门花降级)';
+          pairSubType+='(A面后门花警示)';
           _downgradedBy3Flush=true;_downgradedByBoardHazard=true;
-          console.log('[V2.9.689牌力] 中/底对在A面+后门花降级MEDIUM→AIR('+pairSubType+')');
+          console.log('[V2.9.702牌力] 中/底对在A面+后门花维持MEDIUM(旧V2.9.689降AIR,现由eq守卫决策)('+pairSubType+')');
         }
       }
     }else{
@@ -13554,7 +13650,10 @@ function onVisionResult(data){
     var _autoType=_facingAuto.type||OppProfiler.getOverallType();
     if(_autoType!=='unknown'&&_autoType!==G.opp){
       G.opp=_autoType;
-      DRTA.setType(_autoType);
+      // V2.9.702: 去重——旧代码DRTA.setType+setOppType双重注入(setOppType内部L11827也调
+      //   DRTA.setType)。旧版setType把TYPE_INIT百分比直写计数槽,每帧视觉数据都会污染
+      //   tracker(DRTA"脏数据反复重置"根因之一,详见setType V2.9.702注释)。
+      //   保留setOppType单一入口(内部 setType+UI+go())。
       setOppType(_autoType);
       console.log('[OppProfiler] 自动设置对手类型: '+_autoType+(_facingAuto.nickname?' (面对:'+_facingAuto.nickname+')':' (全桌平均)'));
     }
