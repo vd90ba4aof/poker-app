@@ -1400,7 +1400,17 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.707';
+var ENGINE_VERSION='2.9.708';
+// V2.9.708: ★ 翻前跟全压风控（用户偏好开关）★
+// 背景(实机日志2026-09-22 04:03:30): BTN AQs 20.5BB短码在多人全压混战(主池cap 82BB, nOpp=3)
+//   按25%小jam地板跟注(MC eq 34.5%)。数学+EV(+4~9pp), 但多人混战仅1/3胜率、全码波动大。
+// 模式:
+//   'off'    = 数学最优(707旧行为, 完全不动)
+//   'tight'  = 多人池(nOpp>=2)跟全压收紧: eq需>=max(门槛+marginPP, minEq)%; 单挑全压不动
+//   'strict' = 单挑+多人全部收紧: eq需>=max(门槛+marginPP, minEq)%
+//   'ban'    = 禁止翻前跟全压: 一律弃牌(仅AA例外——弃AA vs allin的-EV过大不建议)
+// banExceptAA: ban模式下AA仍跟注(设false则连AA也弃, 极端保守)
+var PREFLOP_ALLIN_GUARD={mode:'tight', marginPP:15, minEq:50, banExceptAA:true};
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
@@ -4373,6 +4383,39 @@ function decidePreflop(k){
         }
       }catch(_aiE){console.log('[V2.9.625全押eq] 异常降级查表: '+_aiE.message);}
     }
+    // V2.9.708: 翻前跟全压风控闸——在最终eq判断前执行, 作用于call出口
+    //   off=直通(707行为); tight=多人池收紧; strict=全收紧; ban=全弃(AA例外可配)
+    //   注意: 只拦"跟注全压", 我方主动短码jam(raise路径)不受影响——那是短码策略必需工具
+    try{
+      var _pfAG=(typeof PREFLOP_ALLIN_GUARD!=='undefined')?PREFLOP_ALLIN_GUARD:{mode:'tight',marginPP:15,minEq:50,banExceptAA:true};
+      // V2.9.708a: mode缺省按tight处理(配置对象存在但未填mode→默认收紧, 防配置遗漏意外放行)
+      var _agMode=_pfAG.mode||'tight';
+      if(_pfAG&&_agMode!=='off'){
+        var _agN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
+        var _agOpp=Math.max(1,_agN-1);  // 与A闸MC的nOpp同源
+        var _agK=k||'';
+        var _agIsPair=(_agK.length===2&&_agK[0]===_agK[1]);
+        if(_agMode==='ban'){
+          var _agBanAllow=(_agIsPair&&_agK==='AA'&&_pfAG.banExceptAA!==false);
+          if(!_agBanAllow){
+            console.log('[V2.9.708全压风控] ban模式: '+_agK+' 翻前跟全压一律弃牌'+(_pfAG.banExceptAA!==false?'(仅AA例外)':''));
+            return _fold(allinEq,'[V2.9.708风控] ban: '+_agK+' 翻前禁跟全压',spr);
+          }
+        }else{
+          // tight: 仅多人池收紧(nOpp>=2); strict: 全部收紧
+          var _agTighten=(_agMode==='strict')||(_agOpp>=2);
+          if(_agTighten){
+            var _agMargin=(_pfAG.marginPP||15), _agMin=(_pfAG.minEq||50);
+            var _agThresh=Math.max(callThresh+_agMargin,_agMin);
+            if(allinEq<_agThresh){
+              console.log('[V2.9.708全压风控] '+_agMode+'模式: '+_agK+' eq'+Math.round(allinEq)+'%<风控门槛'+_agThresh+'%(门槛'+callThresh+'%+'+_agMargin+'pp/地板'+_agMin+'%, nOpp='+_agOpp+')→弃牌');
+              return _fold(allinEq,'[V2.9.708风控] '+_agK+' 全压跟注收紧 eq'+Math.round(allinEq)+'%<'+_agThresh+'%',spr);
+            }
+            console.log('[V2.9.708全压风控] '+_agMode+'模式放行: '+_agK+' eq'+Math.round(allinEq)+'%>=风控门槛'+_agThresh+'% (nOpp='+_agOpp+')');
+          }
+        }
+      }
+    }catch(_agE){console.log('[V2.9.708全压风控] 异常放行走原逻辑: '+_agE.message);}
     if(allinEq>=callThresh){var exploitA=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});return{a:'call',r:'GTO vs allin eq'+Math.round(allinEq)+'%>='+callThresh+'%',eq:exploitA.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitA.exploit,_se:true};}
     return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%',spr);
   }
@@ -11126,8 +11169,11 @@ function _decideInner(){
     // V2.9.123+: ★ 翻前顶级手牌绝对保护 ★
     // AA/KK/QQ/JJ/TT/AK翻前绝不弃牌——任何护栏/纠错都不能把它们改成fold
     // V2.9.127: 扩展至JJ/TT/AK (原V2.9.123只覆盖AA/KK/QQ, 5-max实战中JJ/TT/AK被EV护栏/对手偏移误降fold)
+    // V2.9.708: 用户风控偏好例外——[V2.9.708风控]ban模式是用户主动禁止跟全压(有意为之非bug),
+    //   顶级保护尊重用户意愿不强制翻转(否则ban模式对AA-失效成为摆设)
     var _cc=G.comm.filter(function(c){return c&&c.rank;}).length;
-    if(_cc===0 && result.a==='fold'){
+    var _ag708Ban=(result.r||'').indexOf('[V2.9.708风控] ban')>=0;
+    if(_cc===0 && result.a==='fold' && !_ag708Ban){
       var _pk=k.length===2&&k[0]===k[1]?k:'';
       if(_pk==='AA'||_pk==='KK'||_pk==='QQ'||_pk==='JJ'||_pk==='TT'){
         console.log('[顶级保护] '+_pk+'翻前被降为fold→强制raise');
