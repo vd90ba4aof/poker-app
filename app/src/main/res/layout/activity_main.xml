@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.701 实战修正版 · v700实战日志(34手+59.4BB)审查5项修复: ①FlatCall/limp小额跟注赔率豁免(需求≤17%放行+阈值锚定赔率+12, A2o/T4o实证) ②Nash触发尺寸守卫(需跟>短码×1.15跳过)+全押A闸fish范围感知(vs fish用gO宽表, 实测差10pp) ③表内GTO call被支配折价挂钩PF-1 ④表内小对子set折损×0.7+强牌硬底eq真实化(被支配豁免) ⑤翻后威胁重加权运行时标记+收口需求透明化(需X%=赔率Y%+策略Z%) | 90项验证全绿(14专项+8冒烟+28锁+14P10+26升级)"
+        android:text="V2.9.713 实战修正版 · v712实战日志(67手)审查6项修复+第6处版本UI同步: ①AA翻前豁免通道闭环(翻后正常策略不受影响) ②翻后allin/非allin双通道eq口径隔离 ③翻后威胁按街打折(flop100%/turn50%/river听牌归零) ④翻前翻后reason格式统一 ⑤oppType jam极化(fish/station/maniac宽范围MC重算) ⑥HU纯数学归零(删除无依据保守偏置) | 实战67手0数学违规·3条4对同花/公对/连牌威胁全识别 | 79项验证全绿(8冒烟+28锁+14P10+29审计)"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
