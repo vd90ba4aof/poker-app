@@ -950,7 +950,16 @@ class FloatingService : Service() {
                 if (phase == "pre") {
                     // V3.44: 用isStandardPreflopRaise判断加注量是否可用标准按钮
                     val blindBB = decisionData.optInt("blindBB", 0)
-                    if (GameModeConfig.isStandardPreflopRaise(sizing, blindBB)) {
+                    // V2.9.709: 引擎加注尺度硬约束(3BB)标记——被钳制的raise必须走精确金额输入。
+                    //   根因: 标准按钮=GG默认min-raise(面对open时=2.5x开注额, 如5BB open→12.5BB),
+                    //   与引擎意图3BB不符→点按钮会把"3BB"实际执行成12.5BB, 违反用户规则。
+                    //   reason含[V2.9.709尺度钳制] = JS侧明确要求该尺度, 禁止按钮近似。
+                    val reasonStr = decisionData.optString("reason", "")
+                    val sizeLocked = reasonStr.contains("V2.9.709尺度钳制")
+                    if (sizeLocked) {
+                        Log.d(TAG, "★ V2.9.709尺度钳制: 强制精确金额输入(size=$sizing blindBB=$blindBB, 禁用按钮近似)")
+                    }
+                    if (!sizeLocked && GameModeConfig.isStandardPreflopRaise(sizing, blindBB)) {
                         Log.d(TAG, "★ GG翻前加注: 标准按钮近似 (size=${sizing} BB=${blindBB})")
                         executeAutoTapFallback("raise")
                         handStartTime = 0; _shotClockRunnable?.let { handler.removeCallbacks(it) }; lastDecisionTime = System.currentTimeMillis()

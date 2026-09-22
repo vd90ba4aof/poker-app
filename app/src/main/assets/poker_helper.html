@@ -1400,7 +1400,13 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.708';
+var ENGINE_VERSION='2.9.709';
+// V2.9.709: ★ 翻前加注尺度硬约束（用户规则）★
+// 规则: 翻前所有可加注局面, 只能【平跟】或【当前盲注等级的3倍(=3×BB)】; 超过上限则拉回3BB(不弃牌)
+//   AA 完全豁免(按原打法) / 主动全压(短码push)不受限——独立工具
+// maxBB: 加注上限(大盲倍数), 用户规则为3
+// aaExempt: AA是否豁免(true=按原打法)
+var PREFLOP_SIZING_LIMIT={enabled:true,maxBB:3,aaExempt:true};
 // V2.9.708: ★ 翻前跟全压风控（用户偏好开关）★
 // 背景(实机日志2026-09-22 04:03:30): BTN AQs 20.5BB短码在多人全压混战(主池cap 82BB, nOpp=3)
 //   按25%小jam地板跟注(MC eq 34.5%)。数学+EV(+4~9pp), 但多人混战仅1/3胜率、全码波动大。
@@ -10984,6 +10990,55 @@ function _decideInner(){
       console.log("[SE] GTO返回null(异常帧)→安全fold不归一旧引擎 "+_stScene);
     }
   }
+  // V2.9.709: ★ 翻前加注尺度硬约束（用户规则）★
+  // 规则: 翻前任何加注类动作(开池/3bet/4bet/Squeeze/iso)只能【平跟】或【当前盲注等级的3倍(=3BB)】
+  //   ① 尺度>3BB → 拉回3BB加注(不弃牌, 保进攻机会)
+  //   ② AA 完全豁免(按原打法, 不受本条约束)
+  //   ③ 主动全压(短码push/jam)不受限——独立策略工具, 由 PREFLOP_ALLIN_GUARD 单独管
+  // 位置: SE决策返回后单点收口, 覆盖全部5个raise出口(开池L3832/SqueezeL3856/3betL4258/4betL4303/5betL4275)
+  try{
+    if(result && G.phase==='pre' && (cc===0)){
+      var _szGuard=(typeof PREFLOP_SIZING_LIMIT!=='undefined')?PREFLOP_SIZING_LIMIT:{enabled:true,maxBB:3,aaExempt:true};
+      var _szOn=(_szGuard.enabled!==false);
+      if(_szOn&&(result.a==='raise'||result.a==='raise_big')){
+        var _szK=getHandKey()||'';
+        var _szIsAA=(_szK==='AA');
+        var _szIsShove=(result.scene==='面对5bet'||/shove|全压|全下|jam/i.test(result.r||''));
+        var _szIsAllinBySize=(result.v&&G.stk>0&&result.v>=G.stk*0.999);
+        // 豁免: AA / 主动全压(按scene+reason+尺度三重判据)
+        if(_szGuard.aaExempt!==false&&_szIsAA){
+          console.log('[V2.9.709加注尺度] '+_szK+' AA豁免, 保持原尺度 '+(result.v||0)+'BB');
+        }else if(_szIsShove||_szIsAllinBySize){
+          console.log('[V2.9.709加注尺度] '+_szK+' 主动全压豁免(场景='+result.scene+', v='+result.v+'BB), 不受3BB限制');
+        }else{
+          var _szBB=(typeof window!=='undefined'&&window._lastBlindBB>0)?window._lastBlindBB:((typeof G!=='undefined'&&G._lockedBB>0)?G._lockedBB:200);
+          var _szMaxBB=_szGuard.maxBB||3;
+          var _szCurBB=result.v||0;
+          var _szTargetBB=Math.min(_szCurBB,_szMaxBB);
+          // V2.9.709b: 最小合法加注校验——目标额若<=已面对的下注额, 该加注物理非法(GG会拒绝/强制升级)。
+          //   如对手open 5BB, 目标3BB<5BB → 无法加注。按用户规则(只能平跟或3BB)降级为平跟。
+          //   注意: 仅在"面对加注"时校验(G.bet>0); 无下注时3BB恒合法。
+          var _szBetBB=(G.bet>0)?G.bet:0;
+          var _szIllegalRaise=(_szBetBB>0 && _szTargetBB<=_szBetBB);
+          if(_szIllegalRaise){
+            console.log('[V2.9.709加注尺度] '+_szK+' 目标'+_szTargetBB+'BB≤已面对下注'+_szBetBB+'BB(最小加注非法)→降级平跟');
+            // V2.9.709b: call动作不带加注尺度(v/sizing=0),跟注额由执行层按屏幕按钮自行处理
+            result.a='call'; result.v=0; result.sizing=0;
+            result.r='[V2.9.709] '+_szK+' 加注上限'+_szMaxBB+'BB低于最小合法加注→平跟(原:'+(result.r||'').substring(0,40)+')';
+          }else if(_szCurBB>_szMaxBB+0.001){
+            console.log('[V2.9.709加注尺度] '+_szK+' 原加注'+_szCurBB+'BB>上限'+_szMaxBB+'BB(盲注'+_szBB+')→拉回'+_szTargetBB+'BB');
+            result.v=_szTargetBB;
+            result.sizing=_szTargetBB;
+            result.r=(result.r||'')+' [V2.9.709尺度钳制:'+_szCurBB+'→'+_szTargetBB+'BB]';
+            // 若原为raise_big(超池重加注)且目标降为普通尺度, 降级动作类型保持执行层一致
+            if(result.a==='raise_big'&&_szTargetBB<=_szMaxBB)result.a='raise';
+          }else{
+            console.log('[V2.9.709加注尺度] '+_szK+' 加注'+_szCurBB+'BB≤上限'+_szMaxBB+'BB, 通过');
+          }
+        }
+      }
+    }
+  }catch(_szgE){console.log('[V2.9.709加注尺度] 异常放行原决策: '+_szgE.message);}
   // V2.9.632: 旧引擎物理删除(7-9人桌无数据,豪哥授权清理)。SE启用时走SE;
   //   SE未启用或7-9人桌SE返回null时,result保持null,由下游统一安全fold(NO_DATA)。
   _engineStats.total++;try{localStorage.setItem('poker_engine_stats',JSON.stringify(_engineStats));}catch(_esErr){}
@@ -11041,7 +11096,13 @@ function _decideInner(){
     var _isGTOCall=(G.phase==='pre'&&_origA==='call'&&/GTO call/.test(result.r||'')&&_eq<65);  // V2.9.656: 仅阻断非premium
     // V2.9.662 FIX: FlatCall防御的call也必须阻止升级——FlatCall覆盖的是不够3bet但可以call的中等牌,
     //   如果被对手偏移升级为raise,就违背了"保守跟注"的设计初衷,变成了激进加注
-    var _shouldBlockUpgrade=(G._facing3bet||_isSpecCall||_isLimpFallbackCall||_isGTOCall||_isFlatCall);
+    // V2.9.709 FIX(P0-连续BUG): 尺度钳制降级的call也必须阻止升级!
+    //   场景: 用户规则要求翻前加注≤3BB. 面对5BB open时3BB=非法加注(低于最小合法加注),
+    //   钳制层正确降级为平跟,但本层未识别该降级,又把call升级回raise(v=跟注额=非法加注额)
+    //   实证调试: AKo vs 5BB open → 钳制降级call → 本层升级raise v=5(=跟注额, 非法) → 死循环
+    //   修复: reason含'[V2.9.709]'的call一律不升级, 尊重尺度钳制的最终决定
+    var _isSizeLockedCall=(G.phase==='pre'&&_origA==='call'&&/V2\.9\.709/.test(result.r||''));
+    var _shouldBlockUpgrade=(G._facing3bet||_isSpecCall||_isLimpFallbackCall||_isGTOCall||_isFlatCall||_isSizeLockedCall);
     var _eqForShift=_eq;
     if(_isSpecCall){
       // 投机性跟注: 传入较低eq(去掉投机bonus)给偏移函数，使其不超过升级阈值
@@ -11050,7 +11111,7 @@ function _decideInner(){
     }
     if(_shouldBlockUpgrade&&_origA==='call'){
       // 阻止call→raise/raise_big升级，保持call
-      console.log('[V2.9.652防螺旋] facing3bet='+!!G._facing3bet+' isSpecCall='+_isSpecCall+' isLimpFallback='+_isLimpFallbackCall+' → 保持call不升级');
+      console.log('[V2.9.652防螺旋] facing3bet='+!!G._facing3bet+' isSpecCall='+_isSpecCall+' isLimpFallback='+_isLimpFallbackCall+' isSizeLocked='+_isSizeLockedCall+' → 保持call不升级');
       // 不调用applyOppActionShift，直接跳过Step1
     }else{
       // V2.9.654: 传递reason给applyOppActionShift供bluffReduce识别诈唬类raise
@@ -11363,7 +11424,11 @@ function _decideInner(){
         var _hasDriftPrefix=/^\[(EV|PKO|池驱|纠错|对手修正|Equity底线)\]/.test(result.r||'');
         if(!_syncRaise && _syncA!=='fold' && _syncA!=='check'){
           // call/weak_call：加注尺度必须清零（call不带sizing）
+          // V2.9.709 FIX(连续BUG): 同步清零 result.sizing——执行层FloatingService读的是
+          //   decisionData.optInt("sizing")而非v; 709降级call(then升级回raise)会在sizing残留
+          //   旧加注额(实证: AKs vs 5BB降级call → v=0但sizing=5), 若执行层优先取sizing则误发5BB加注
           if(result.v){console.log('[V2.9.571一致性] '+_syncA+'动作残留sizing='+result.v+'→清零');result.v=0;}
+          if(result.sizing){console.log('[V2.9.709一致性] '+_syncA+'动作残留sizing字段='+result.sizing+'→清零');result.sizing=0;}
         }
         if(_syncRaise){
           if(!result.v||result.v<=0){
