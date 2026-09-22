@@ -59,4 +59,9 @@ verification_output/
 app/src/main/assets/poker_helper_v*_backup.html
 firmware-v2.0.0/
 artifact.zip
+# Keystore: 仅 *.keystore.example 模板可入库,真 keystore 一律忽略
+#  注: release 签名用的真 keystore 不进 git,通过 GitHub Secret 注入(见 .github/workflows/)
+#  例外: 当用户选择方案 B(仓库内置 keystore)时,需手动 git add -f 提交
 *.keystore
+*.keystore.example
+!*.keystore.example

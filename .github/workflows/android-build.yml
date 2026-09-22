@@ -89,37 +89,20 @@ jobs:
       with:
         node-version: '20'
 
-    # ----- 从 Secret 恢复 keystore -----
-    - name: 恢复 release keystore (从 Secret)
+    # ----- 预检查: keystore 必须存在(仓库内置,方案 B) -----
+    #  注: keystore 通过 git add -f 入库, .gitignore 已通过 `*.keystore` + `!*.keystore.example` 规则
+    #  仅 release 用的真 keystore 被强 commit,不会被普通 git add 自动跟踪
+    - name: 校验 keystore 存在
       run: |
-        # 必需 Secret: ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
-        if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
-          echo "::error::Secret ANDROID_KEYSTORE_BASE64 未配置。请在仓库 Settings → Secrets 中配置 4 个 Secret:"
-          echo "  - ANDROID_KEYSTORE_BASE64: base64 编码的 keystore"
-          echo "  - ANDROID_KEYSTORE_PASSWORD: keystore 口令"
-          echo "  - ANDROID_KEY_ALIAS: 密钥别名"
-          echo "  - ANDROID_KEY_PASSWORD: 密钥口令"
+        if [ ! -f "poker-app-release.keystore" ]; then
+          echo "::error::poker-app-release.keystore 不存在。"
+          echo "提示: 本 job 依赖仓库内置 keystore (方案 B)。"
+          echo "  如该 keystore 被 .gitignore 排除,请: git add -f poker-app-release.keystore && git push"
+          echo "  或切换到方案 A (GitHub Secret 注入),见 README/CI 文档。"
           exit 1
         fi
-        echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > poker-app-release.keystore
-        chmod 600 poker-app-release.keystore
-        KS_SIZE=$(stat -c%s poker-app-release.keystore)
-        echo "✓ keystore 已恢复 (${KS_SIZE} 字节)"
-        if [ "$KS_SIZE" -lt 2000 ]; then
-          echo "::error::keystore 异常(<2000字节)"
-          exit 1
-        fi
-        # 透传 keystore 凭据到下一步(gradle 通过 System.getenv 读取)
-        echo "ANDROID_KEYSTORE_PATH=poker-app-release.keystore" >> $GITHUB_ENV
-        if [ -n "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" ]; then
-          echo "ANDROID_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
-        fi
-        if [ -n "${{ secrets.ANDROID_KEY_ALIAS }}" ]; then
-          echo "ANDROID_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> $GITHUB_ENV
-        fi
-        if [ -n "${{ secrets.ANDROID_KEY_PASSWORD }}" ]; then
-          echo "ANDROID_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> $GITHUB_ENV
-        fi
+        KS_SIZE=$(stat -c%s "poker-app-release.keystore")
+        echo "✓ keystore 存在 (${KS_SIZE} 字节)"
 
     # ----- 预检查: 版本号一致性 -----
     - name: 版本号一致性门禁
