@@ -168,9 +168,9 @@ jobs:
         echo "✓ 已生成: ${RELEASE_APK}"
 
     # ----- 推送到 releases/(git add -f 绕过 .gitignore) -----
+    # 注: 推送到远端 branch ref, 而不是 tag ref (annotated tag 不能被非快进更新)
     - name: 推送到 releases/
       run: |
-        RELEASE_APK=${{ env.RELEASE_APK }}
         VERSION=${{ env.VERSION }}
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -179,14 +179,30 @@ jobs:
           git rm -f "releases/poker-app-v${VERSION}-release.apk"
           echo "✓ 已移除旧 $OLD"
         fi
-        git add -f "$RELEASE_APK"
+        git add -f "poker-app-v${VERSION}-release.apk"
         git status --short
         # commit message 用文件避免 YAML 多行解析问题
         printf 'release: V%s APK (CI assembleRelease + 完整签名)\n\nSHA256: %s\nGitHub Actions: %s\n' \
           "${VERSION}" "${{ env.APK_SHA256 }}" "${{ github.run_id }}" > /tmp/commit_msg.txt
         git commit -F /tmp/commit_msg.txt || echo "无变更"
-        git push origin HEAD:${{ github.ref_name }}
-        echo "✓ 已推送到远端 ${{ github.ref_name }}"
+        # 主推送: 推到 main 分支(annotated tag 不能 fast-forward 推送)
+        # 若 tag 与 main 同步(常见情况),此 push 会快速前进 main 一个提交
+        PUSH_OK=0
+        if git push origin HEAD:main 2>&1 | tee /tmp/push_main.log; then
+          PUSH_OK=1
+          echo "✓ 已推送到远端 main"
+        else
+          echo "::warning::推送 main 失败,尝试推送到独立 release branch"
+          if git push origin HEAD:releases/v${VERSION} 2>&1 | tee /tmp/push_rel.log; then
+            PUSH_OK=1
+            echo "✓ 已推送到远端 releases/v${VERSION}"
+          else
+            echo "::warning::推送 release branch 也失败 — Release 上传仍由 action-gh-release 完成"
+          fi
+        fi
+        if [ "$PUSH_OK" -eq 0 ]; then
+          echo "::warning::git push 失败,但 APK 将通过 action-gh-release 上传作为 release asset"
+        fi
 
     # ----- 上传为 artifact(备份) -----
     - name: 上传 artifact
