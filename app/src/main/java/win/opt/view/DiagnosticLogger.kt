@@ -972,6 +972,30 @@ object DiagnosticLogger {
         }
         resetChipTracking()
     }
+
+    // ===== V2.9.714: 引擎会话隔离——重启一次覆盖一次 =====
+    // 实证(poker_log_20260922_205054): object单例的内存数组跨服务(重)启动存活,
+    //   导出混入旧会话数据(decisions 63旧+8新 / errors 189旧+11新 / recognitions 278旧+22新,
+    //   且 recognitions 300上限被旧数据挤占); poker_log.txt滚动文件同样跨会话累积
+    //   (jsConsoleEntries仅因takeLast(500)碰巧只剩新会话行)。
+    // 修复: FloatingService.onCreate 调用本方法 → 新sessionId + 清空全部会话级内存缓冲
+    //   + 截断会话级滚动日志文件。JS端(poker_helper.html boot)通过 AndroidBridge.getSessionId()
+    //   对比 localStorage 持久化的旧id, 不一致时同步清空 localStorage 会话级存储
+    //   (HandHistory/DRTA/engineStats/SessionStats/HandClassifier)。
+    // 保留: error_logs.txt(FloatingService V2.9.183 崩溃持久化,有意跨重启)。
+    @Volatile
+    var engineSessionId: String = java.util.UUID.randomUUID().toString()
+        private set
+
+    fun startEngineSession() {
+        engineSessionId = java.util.UUID.randomUUID().toString()
+        clear()
+        synchronized(esp32TapLogs) { esp32TapLogs.clear() }
+        // 截断会话级滚动日志文件(识别/决策/JS console/ESP32/ERROR行), 新会话从零开始
+        try { synchronized(logFileLock) { getLogFile().writeText("", Charsets.UTF_8) } } catch (_: Exception) {}
+        try { synchronized(decisionFileLock) { getDecisionLogFile().writeText("", Charsets.UTF_8) } } catch (_: Exception) {}
+        Log.i(TAG, "🔄 V2.9.714 引擎会话重置: sessionId=$engineSessionId (内存缓冲+滚动日志已清空)")
+    }
     
     fun getRecentErrors(count: Int = 5): List<String> {
         return synchronized(errorEntries) {

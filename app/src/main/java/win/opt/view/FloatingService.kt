@@ -292,6 +292,11 @@ class FloatingService : Service() {
         // V2.9.503: 初始化诊断日志器（获取Context以使用应用私有目录）
         DiagnosticLogger.init(this)
 
+        // V2.9.714: 引擎会话隔离——每次服务(重)启动=新会话, 清空跨重启残留的会话级缓存
+        //   (DiagnosticLogger 内存数组 + poker_log/decisions 滚动文件 + JS localStorage 会话存储,
+        //   详见 DiagnosticLogger.startEngineSession 注释。实证: poker_log_20260922_205054 60旧+7新混账)
+        DiagnosticLogger.startEngineSession()
+
         // V2.9.518: 初始化本地CV识别引擎
         VisionApiClient.initContext(this)
 
@@ -2345,6 +2350,13 @@ class FloatingService : Service() {
                     put("lastAction", pt?.optString("lastAction") ?: "")
                 }.toString()
             }
+            // V2.9.714: 引擎会话ID——JS boot 时对比 localStorage 持久化的id,
+            //   不一致=引擎服务重启过 → JS 清空会话级存储(HandHistory/DRTA/engineStats等)
+            @JavascriptInterface
+            fun getSessionId(): String {
+                return DiagnosticLogger.engineSessionId
+            }
+
             // V2.9.560: JS导出路径获取poker_log.txt中的JS console日志
             @JavascriptInterface
             fun getJsConsoleEntries(): String {

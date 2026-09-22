@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.713 实战修正版 · v712实战日志(67手)审查6项修复+第6处版本UI同步: ①AA翻前豁免通道闭环(翻后正常策略不受影响) ②翻后allin/非allin双通道eq口径隔离 ③翻后威胁按街打折(flop100%/turn50%/river听牌归零) ④翻前翻后reason格式统一 ⑤oppType jam极化(fish/station/maniac宽范围MC重算) ⑥HU纯数学归零(删除无依据保守偏置) | 实战67手0数学违规·3条4对同花/公对/连牌威胁全识别 | 79项验证全绿(8冒烟+28锁+14P10+29审计)"
+        android:text="V2.9.714 会话隔离版 · v712实战日志(67条快照含60旧+7新混账)审查修复: 日志与缓存重启不残留(重启一次覆盖一次): ①sessionId会话隔离(FloatingService重启→新会话→JS端localStorage五项会话存储清零: 手牌历史/DRTA对手追踪/引擎统计/Session统计/牌局分类) ②Kotlin单例内存缓冲随重启清空(识别/决策/错误/ESP32数组, 旧账不再挤占300上限) ③poker_log/decisions滚动日志随会话截断 ④对手画像/APIKey/版本迁移缓存保留(跨会话有效不误清) ⑤页面刷新(fallback reload)同会话数据保留不打断 | 实证: v713导出日志60旧+7新混账/DRTA51手旧统计喂剥削调整 | 53项验证全绿(8冒烟+28锁+14P10+3会话隔离端到端)"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

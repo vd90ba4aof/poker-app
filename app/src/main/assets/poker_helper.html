@@ -438,6 +438,37 @@ var RV={A:12,K:11,Q:10,J:9,T:8,'9':7,'8':6,'7':5,'6':4,'5':3,'4':2,'3':1,'2':0};
 var SU=['h','d','s','c'];
 var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 
+// V2.9.714 会话隔离: 引擎重启→清空会话级缓存(重启一次覆盖一次)
+// 实证(poker_log_20260922_205054): 服务重启后页面重载, HandHistory.init()从localStorage
+//   读回60条旧会话记录(67=60旧+7新), DRTA.tracker.hands=51(旧会话统计继续喂_quantExploitAdjust
+//   =决策污染), engineStats跨重启累积; Kotlin端DiagnosticLogger单例同步清空(startEngineSession)。
+// 机制: FloatingService.onCreate生成新sessionId(AndroidBridge.getSessionId暴露);
+//   本处位于主脚本块最顶部(先于_engineStats/HandHistory/DRTA/SessionStats/HandClassifier
+//   的localStorage读取), 对比localStorage持久化的'poker_engine_session':
+//   - id不一致 = 引擎服务重启过 → 清空会话级存储 → 新会话从零开始(覆盖)
+//   - id一致 = 同一服务内的页面刷新/fallback reload → 保留(不打断进行中的会话)
+//   - 无bridge = 非引擎WebView(浏览器打开等) → 跳过(保留)
+// 不清: 对手画像(poker_v2942_opp_profiles,按对手键跨会话有效)/rfKey/CacheManager版本迁移。
+(function(){
+  try{
+    var _cur=null;
+    try{_cur=(typeof AndroidBridge!=='undefined'&&typeof AndroidBridge.getSessionId==='function')?AndroidBridge.getSessionId():null;}catch(e){}
+    if(!_cur){try{console.log('[V2.9.714会话] 无bridge→非引擎WebView,跳过会话检查');}catch(e){}return;}
+    var _saved=null;
+    try{_saved=localStorage.getItem('poker_engine_session');}catch(e){}
+    if(_saved===_cur){try{console.log('[V2.9.714会话] 同sessionId→页面刷新,保留会话数据');}catch(e){}return;}
+    var _cleared=[];
+    var _keys=['poker_v2948_history','poker_v2958_tracker','poker_engine_stats','poker_v2957_stats','poker_v29130_classify'];
+    for(var _ki=0;_ki<_keys.length;_ki++){
+      try{
+        if(localStorage.getItem(_keys[_ki])!==null){localStorage.removeItem(_keys[_ki]);_cleared.push(_keys[_ki]);}
+      }catch(e){}
+    }
+    try{localStorage.setItem('poker_engine_session',_cur);}catch(e){}
+    try{console.log('[V2.9.714会话] 引擎重启检测→清空会话缓存: '+(_cleared.join(',')||'(本就为空)'));}catch(e){}
+  }catch(e){}
+})();
+
 // 全局状态
 var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',platform:'standard',rake_cap:0};
 var _pi=null,_ms='h';
@@ -1400,7 +1431,7 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.713';
+var ENGINE_VERSION='2.9.714';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
