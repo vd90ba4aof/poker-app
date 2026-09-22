@@ -17,12 +17,18 @@ android {
     }
 
     // Release签名配置
+    // CI 模式: 从环境变量/Project属性读取 keystore 凭据(优先 Secret 注入)
+    // 本地模式: 找不到环境变量时回退到硬编码值(需 keystore 在仓库根目录)
     signingConfigs {
         release {
-            storeFile file("../poker-app-release.keystore")
-            storePassword "pokerApp2026"
-            keyAlias "pokerAppRelease"
-            keyPassword "pokerApp2026"
+            def ksPath = System.getenv('ANDROID_KEYSTORE_PATH') ?: project.findProperty('ANDROID_KEYSTORE_PATH') ?: "../poker-app-release.keystore"
+            def ksPass = System.getenv('ANDROID_KEYSTORE_PASSWORD') ?: project.findProperty('ANDROID_KEYSTORE_PASSWORD') ?: "pokerApp2026"
+            def ksAlias = System.getenv('ANDROID_KEY_ALIAS') ?: project.findProperty('ANDROID_KEY_ALIAS') ?: "pokerAppRelease"
+            def keyPass = System.getenv('ANDROID_KEY_PASSWORD') ?: project.findProperty('ANDROID_KEY_PASSWORD') ?: "pokerApp2026"
+            storeFile file(ksPath)
+            storePassword ksPass
+            keyAlias ksAlias
+            keyPassword keyPass
         }
     }
 

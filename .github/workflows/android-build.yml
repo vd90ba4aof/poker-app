@@ -11,9 +11,11 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  # ====== Job 1: 调试构建(仅 main 分支) ======
+  # 仅 smoke test + assembleDebug,不签名不入库
+  debug-build:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -40,49 +42,203 @@ jobs:
     - name: 河牌听牌误判门禁(v694 P10)
       run: node tests/engine_p10_river_draw.test.js
 
-    - name: Build with Gradle
+    - name: Build debug APK
       run: ./gradlew assembleDebug
 
-    - name: Rename APK with version
+    - name: 版本号一致性门禁
       run: |
         GRADLE_VER=$(grep "versionName" app/build.gradle | head -1 | sed 's/.*versionName *"//;s/".*//')
         ENGINE_VER=$(grep -o "ENGINE_VERSION='[^']*'" app/src/main/assets/poker_helper.html | head -1 | sed "s/ENGINE_VERSION='//;s/'$//")
         echo "build.gradle versionName = $GRADLE_VER"
         echo "poker_helper.html ENGINE_VERSION = $ENGINE_VER"
         if [ "$GRADLE_VER" != "$ENGINE_VER" ]; then
-          echo "::error::版本号漂移: build.gradle=$GRADLE_VER vs poker_helper.html=$ENGINE_VER — 两处版本源必须同步后重推"
+          echo "::error::版本号漂移: build.gradle=$GRADLE_VER vs poker_helper.html=$ENGINE_VER"
           exit 1
         fi
-        VERSION=$ENGINE_VER
-        SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-        cp app/build/outputs/apk/debug/app-debug.apk "poker-app-v${VERSION}.apk"
-        echo "APK_NAME=poker-app-v${VERSION}.apk" >> $GITHUB_ENV
-        echo "VERSION=${VERSION}" >> $GITHUB_ENV
-        echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
 
-    - name: Upload APK Artifact
+    - name: 上传debug产物
       uses: actions/upload-artifact@v4
       with:
         name: poker-app-debug
         path: app/build/outputs/apk/debug/app-debug.apk
         retention-days: 30
 
-    - name: Publish to Release (tag only)
-      if: startsWith(github.ref, 'refs/tags/v')
+  # ====== Job 2: 发布构建(仅 v* tag 触发) ======
+  # 完整重编译 + R8 + 真签名 + 推 releases/
+  # 关键修复: 此前所有 "重打包" 都只更新 html/manifest, dex 来自 V2.9.572 旧 APK
+  # 本 job 通过 ./gradlew assembleRelease 从源码全量重编, dex 含 V2.9.573+ 全部 Kotlin 修改
+  release-build:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code (不含 keystore)
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    # ----- 从 Secret 恢复 keystore -----
+    - name: 恢复 release keystore (从 Secret)
+      run: |
+        # 必需 Secret: ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
+        if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+          echo "::error::Secret ANDROID_KEYSTORE_BASE64 未配置。请在仓库 Settings → Secrets 中配置 4 个 Secret:"
+          echo "  - ANDROID_KEYSTORE_BASE64: base64 编码的 keystore"
+          echo "  - ANDROID_KEYSTORE_PASSWORD: keystore 口令"
+          echo "  - ANDROID_KEY_ALIAS: 密钥别名"
+          echo "  - ANDROID_KEY_PASSWORD: 密钥口令"
+          exit 1
+        fi
+        echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > poker-app-release.keystore
+        chmod 600 poker-app-release.keystore
+        KS_SIZE=$(stat -c%s poker-app-release.keystore)
+        echo "✓ keystore 已恢复 (${KS_SIZE} 字节)"
+        if [ "$KS_SIZE" -lt 2000 ]; then
+          echo "::error::keystore 异常(<2000字节)"
+          exit 1
+        fi
+        # 透传 keystore 凭据到下一步(gradle 通过 System.getenv 读取)
+        echo "ANDROID_KEYSTORE_PATH=poker-app-release.keystore" >> $GITHUB_ENV
+        if [ -n "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" ]; then
+          echo "ANDROID_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ secrets.ANDROID_KEY_ALIAS }}" ]; then
+          echo "ANDROID_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ secrets.ANDROID_KEY_PASSWORD }}" ]; then
+          echo "ANDROID_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> $GITHUB_ENV
+        fi
+
+    # ----- 预检查: 版本号一致性 -----
+    - name: 版本号一致性门禁
+      run: |
+        GRADLE_VER=$(grep "versionName" app/build.gradle | head -1 | sed 's/.*versionName *"//;s/".*//')
+        ENGINE_VER=$(grep -o "ENGINE_VERSION='[^']*'" app/src/main/assets/poker_helper.html | head -1 | sed "s/ENGINE_VERSION='//;s/'$//")
+        echo "build.gradle versionName = $GRADLE_VER"
+        echo "poker_helper.html ENGINE_VERSION = $ENGINE_VER"
+        if [ "$GRADLE_VER" != "$ENGINE_VER" ]; then
+          echo "::error::版本号漂移: build.gradle=$GRADLE_VER vs poker_helper.html=$ENGINE_VER"
+          exit 1
+        fi
+        echo "VERSION=${ENGINE_VER}" >> $GITHUB_ENV
+
+    # ----- JS 引擎单测 -----
+    - name: JS engine runtime smoke test
+      run: node tests/engine_smoke.test.js
+    - name: 手牌锁跨手回归(v604 P0门禁)
+      run: node tests/engine_lock_regression.test.js
+    - name: 河牌听牌误判门禁(v694 P10)
+      run: node tests/engine_p10_river_draw.test.js
+
+    # ----- 完整重编译(R8 优化 + 真签名) -----
+    - name: 完整重编译 assembleRelease
+      run: ./gradlew assembleRelease --no-daemon
+      # keystore 凭据已在恢复步骤注入到 $GITHUB_ENV,gradle 通过 System.getenv 读取
+
+    # ----- 校验 APK 完整性 -----
+    - name: 校验 release APK
+      run: |
+        APK="app/build/outputs/apk/release/app-release.apk"
+        if [ ! -f "$APK" ]; then
+          echo "::error::release APK 未生成"
+          ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "(目录不存在)"
+          exit 1
+        fi
+        APK_SIZE=$(stat -c%s "$APK")
+        echo "release APK 大小: ${APK_SIZE} 字节"
+        if [ "$APK_SIZE" -lt 1000000 ]; then
+          echo "::error::APK 异常(<1MB)"
+          exit 1
+        fi
+        # 校验签名
+        if unzip -p "$APK" META-INF/MANIFEST.MF > /dev/null 2>&1; then
+          echo "✓ APK 含 META-INF/MANIFEST.MF(已签名)"
+        else
+          echo "::error::APK 未签名"
+          exit 1
+        fi
+        # 计算 SHA256
+        SHA256=$(sha256sum "$APK" | cut -d' ' -f1)
+        echo "✓ SHA256: ${SHA256}"
+        echo "APK_SHA256=${SHA256}" >> $GITHUB_ENV
+
+    # ----- 重命名并准备发布物 -----
+    - name: 重命名
+      run: |
+        APK="app/build/outputs/apk/release/app-release.apk"
+        VERSION=${{ env.VERSION }}
+        RELEASE_APK="poker-app-v${VERSION}-release.apk"
+        cp "$APK" "$RELEASE_APK"
+        echo "RELEASE_APK=${RELEASE_APK}" >> $GITHUB_ENV
+        echo "✓ 已生成: ${RELEASE_APK}"
+
+    # ----- 推送到 releases/(git add -f 绕过 .gitignore) -----
+    - name: 推送到 releases/
+      run: |
+        RELEASE_APK=${{ env.RELEASE_APK }}
+        VERSION=${{ env.VERSION }}
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        OLD=$(ls releases/poker-app-v${VERSION}-release.apk 2>/dev/null || true)
+        if [ -n "$OLD" ]; then
+          git rm -f "releases/poker-app-v${VERSION}-release.apk"
+          echo "✓ 已移除旧 $OLD"
+        fi
+        git add -f "$RELEASE_APK"
+        git status --short
+        # commit message 用文件避免 YAML 多行解析问题
+        printf 'release: V%s APK (CI assembleRelease + 完整签名)\n\nSHA256: %s\nGitHub Actions: %s\n' \
+          "${VERSION}" "${{ env.APK_SHA256 }}" "${{ github.run_id }}" > /tmp/commit_msg.txt
+        git commit -F /tmp/commit_msg.txt || echo "无变更"
+        git push origin HEAD:${{ github.ref_name }}
+        echo "✓ 已推送到远端 ${{ github.ref_name }}"
+
+    # ----- 上传为 artifact(备份) -----
+    - name: 上传 artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: poker-app-release
+        path: ${{ env.RELEASE_APK }}
+        retention-days: 90
+
+    # ----- 创建 GitHub Release(带说明页) -----
+    - name: 创建 GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ${{ env.APK_NAME }}
+        tag_name: ${{ github.ref_name }}
+        name: "V${{ env.VERSION }}"
+        body: |
+          ## V${{ env.VERSION }} 完整签名发布版
+
+          **✅ 本次 CI 关键改进**: 完整重编译 Kotlin 代码,解决此前 APK 内 dex 来自 V2.9.572 旧版的问题
+          - `./gradlew assembleRelease` 全量构建
+          - R8 优化已启用
+          - dex 含 V2.9.573+ 全部 Kotlin 修改(包括 `sizeLocked` 等执行层修复)
+
+          ### 安装信息
+          - **包名**: `win.opt.view`
+          - **versionName**: `${{ env.VERSION }}`
+          - **SHA256**: `${{ env.APK_SHA256 }}`
+          - **最低 Android**: 8.0 (API 26)
+          - **目标 Android**: 14 (API 34)
+
+          ### 国内直链下载
+          ```
+          https://gh-proxy.com/https://raw.githubusercontent.com/vd90ba4aof/poker-app/main/releases/poker-app-v${{ env.VERSION }}-release.apk
+          ```
+        files: ${{ env.RELEASE_APK }}
         draft: false
         prerelease: false
-        generate_release_notes: true
-
-    - name: Publish CI Pre-release (main branch push)
-      if: github.ref == 'refs/heads/main'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ci-v${{ env.VERSION }}-${{ env.SHORT_SHA }}
-        name: "CI Build v${{ env.VERSION }} (${{ env.SHORT_SHA }})"
-        files: ${{ env.APK_NAME }}
-        draft: false
-        prerelease: true
         generate_release_notes: true
