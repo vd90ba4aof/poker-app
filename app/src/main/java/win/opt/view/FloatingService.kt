@@ -292,17 +292,6 @@ class FloatingService : Service() {
         // V2.9.503: 初始化诊断日志器（获取Context以使用应用私有目录）
         DiagnosticLogger.init(this)
 
-        // V2.9.715: 区分「用户重启」与「系统自动重建」(V2.9.714实证缺陷: START_STICKY重建也走
-        //   onCreate被清空, 用户数小时当前会话数据全丢——"打了好久导出为空")
-        //   - 用户主动停止过(MainActivity.stopServices→markUserStop) → 新会话(清空, 重启一次覆盖一次)
-        //   - 系统自动重建(START_STICKY/崩溃重启/开机) → 恢复会话(复用旧sessionId,
-        //     JS端localStorage id一致→handHistory/DRTA保留)
-        if (DiagnosticLogger.wasUserStopped()) {
-            DiagnosticLogger.startNewEngineSession()
-        } else {
-            DiagnosticLogger.resumeEngineSession()
-        }
-
         // V2.9.518: 初始化本地CV识别引擎
         VisionApiClient.initContext(this)
 
@@ -2356,15 +2345,6 @@ class FloatingService : Service() {
                     put("lastAction", pt?.optString("lastAction") ?: "")
                 }.toString()
             }
-            // V2.9.714: 引擎会话ID——JS boot 时对比 localStorage 持久化的id,
-            //   不一致=引擎服务重启过 → JS 清空会话级存储(HandHistory/DRTA/engineStats等)
-            //   V2.9.715: id 由 DiagnosticLogger 持久化管理(用户重启变/系统重建不变),
-            //   currentSessionId 惰性兜底防极端时序
-            @JavascriptInterface
-            fun getSessionId(): String {
-                return DiagnosticLogger.currentSessionId()
-            }
-
             // V2.9.560: JS导出路径获取poker_log.txt中的JS console日志
             @JavascriptInterface
             fun getJsConsoleEntries(): String {

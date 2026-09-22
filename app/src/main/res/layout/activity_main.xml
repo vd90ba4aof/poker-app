@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.715 会话隔离修订版 · 修复v714缺陷(系统杀进程自动重建也清空→数小时数据丢失): 区分「用户重启」与「系统重建」: ①用户主动停止(MainActivity停服标记)→下次启动新会话(清空=重启一次覆盖一次) ②系统自动重建(START_STICKY/崩溃重启)→复用旧sessionId→手牌历史/DRTA完整保留 ③升级首启→清空旧版残留 ④同服务页面刷新→保留 | v712实证: 60旧+7新混账+DRTA旧统计污染剥削调整 | 8项状态机+50项引擎测试全绿"
+        android:text="V2.9.716 数据保全版 · 回退714/715会话隔离(打牌→重启→导出为空的缺陷): 手牌历史/DRTA对手统计/引擎统计/Session统计全部永久保留, 重启不清空, 条数上限自然淘汰(手牌100条/识别300条) | 实证: 010556日志打牌后重启导出全空 | 50项引擎测试全绿"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
