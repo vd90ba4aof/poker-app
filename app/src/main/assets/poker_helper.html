@@ -1400,23 +1400,28 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.709';
-// V2.9.709: ★ 翻前加注尺度硬约束（用户规则）★
-// 规则: 翻前所有可加注局面, 只能【平跟】或【当前盲注等级的3倍(=3×BB)】; 超过上限则拉回3BB(不弃牌)
-//   AA 完全豁免(按原打法) / 主动全压(短码push)不受限——独立工具
-// maxBB: 加注上限(大盲倍数), 用户规则为3
-// aaExempt: AA是否豁免(true=按原打法)
+var ENGINE_VERSION='2.9.711';
+// ============================================================
+// V2.9.711 尺度约束（用户规则，场景分流）
+//   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
+//         下限=最小合法加注(2×已面对下注), 否则3bet物理上不可能成立。
+//   背景(实证 本次日志手牌#8 JsJh): 旧规则 min(尺度,3) 使 3BB<=open(4BB) 恒真,
+//         导致所有3bet意图被降级为平跟 → 实为"禁止3bet", 强牌丧失主动权。
+//   AA 完全豁免 / 主动全压不受限
+//   maxBB: 开池加注上限(大盲倍数)
+//   aaExempt: AA是否豁免(true=按原打法)
+// ============================================================
 var PREFLOP_SIZING_LIMIT={enabled:true,maxBB:3,aaExempt:true};
-// V2.9.708: ★ 翻前跟全压风控（用户偏好开关）★
-// 背景(实机日志2026-09-22 04:03:30): BTN AQs 20.5BB短码在多人全压混战(主池cap 82BB, nOpp=3)
-//   按25%小jam地板跟注(MC eq 34.5%)。数学+EV(+4~9pp), 但多人混战仅1/3胜率、全码波动大。
-// 模式:
-//   'off'    = 数学最优(707旧行为, 完全不动)
-//   'tight'  = 多人池(nOpp>=2)跟全压收紧: eq需>=max(门槛+marginPP, minEq)%; 单挑全压不动
-//   'strict' = 单挑+多人全部收紧: eq需>=max(门槛+marginPP, minEq)%
-//   'ban'    = 禁止翻前跟全压: 一律弃牌(仅AA例外——弃AA vs allin的-EV过大不建议)
-// banExceptAA: ban模式下AA仍跟注(设false则连AA也弃, 极端保守)
-var PREFLOP_ALLIN_GUARD={mode:'tight', marginPP:15, minEq:50, banExceptAA:true};
+// ============================================================
+// V2.9.711 翻前跟全押风控（已重构为引擎内建逻辑, 此对象仅保留兼容占位）
+//   旧实现(708)是叠加在赔率门槛之外的第4层覆盖: callThresh+15pp / 地板50%,
+//   与 585/622/592 的层层 Math.max 叠加, 导致门槛与真实赔率完全脱钩。
+//   新模型已内建"双闸"(赔率闸 + 牌力闸), 不再需要外部模式开关:
+//     · 牌力闸: 非对子/非双J+/非强A → 直接弃(防剥削式全压)  ← 取代 ban/strict
+//     · 人数+码深修正: 取代 tight 的 15pp 硬性加码
+//   mode 保留仅为向后兼容读取, 引擎已不消费。
+// ============================================================
+var PREFLOP_ALLIN_GUARD={mode:'off', marginPP:0, minEq:0, banExceptAA:true, _deprecated:'2.9.711内建双闸取代'};
 // V2.9.46: 缓存管理——版本升级时自动清理旧缓存
 var CacheManager={
   VERSION_KEY:'poker_cache_version',
@@ -4315,115 +4320,124 @@ function decidePreflop(k){
   // 4: 面对allin
   // V2.9.582 FIX(P1): 与翻后同款——硬45%地板仅用于大jam(注池比>=0.5);
   //   小jam(短码巨池)回归赔率门槛+3%噪声裕度(翻前eq为查表值,裕度取3%)。
+  // ============================================================
+  // V2.9.711 翻前面对全押 —— 双闸决策模型（替换 V2.9.582/585/592/622/625/655/676/687/689/701/708 十一层补丁叠加）
+  //   旧实现问题(源码实证):
+  //     ① callThresh 被 4 次连续 Math.max 覆盖(585→622→592→708), 最终门槛与真实赔率脱钩
+  //     ② L4357 自述「V2.9.655/687 的低赔率绕过通道从未生效=死代码」
+  //     ③ 708 在最外层再套 callThresh+15pp/地板50%
+  //   新模型(单通道, 无叠加覆盖):
+  //     闸1 赔率闸: eq >= 真实赔率 + MC噪声裕度          (数学基线)
+  //     闸2 牌力闸: 对子22+ / 双J+高张 / 强A             (防对手宽范围剥削式全压)
+  //     豁免: AA 完全豁免(用户规则), 仅走赔率闸
+  //   用户规则(要求3): 翻前除AA外, 禁止被剥削到跟注/全压
+  // ============================================================
   if(scene==='allin'){
-    var allinBet=bet||pot,allinEq=eq;  // V2.9.584 FIX(BUG-04): posMod已在L3200统一加过,allin分支不再重复加(旧引擎L9087同理)
-    // V2.9.625 FIX(P0): 主池cap——pot可能包含边池(对手超额投入部分我们赢不到),需cap到实际能赢的主池
-    // 简化估算: 主池上限 = min(pot, 我方码深 × 在池人数), 因为每人对主池贡献不超过我们的码深
+    var allinBet=(bet>0)?bet:pot;
+    var allinEq=eq;
+    var _k711=(k||'');
+
+    // [物理层] 主池cap: pot 含边池时, 我方只能赢到 min(pot, 码深×在池人数)
+    //   物理正确, 保留(源自 V2.9.625)
     var _inPotForCap=(typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:2;
     var _cappedPot=Math.min(pot,stk*_inPotForCap);
-    if(_cappedPot<pot){console.log('[V2.9.625主池cap] pot '+pot+'→'+_cappedPot+' (stk='+stk+' inPot='+_inPotForCap+')');}
-    var callThresh=allinBet>0?Math.round(allinBet/(_cappedPot+allinBet)*100):50;  // V2.9.585+V2.9.625: 用cappedPot计算真实赔率
-    var _preAiRatio=pot>0?allinBet/(_cappedPot+allinBet):0;
-    var _rawPotOdds=callThresh;  // V2.9.689 FIX(P0): 保存钳制前的原始底池赔率——B闸绕过判断必须用真实赔率
-    // V2.9.622 FIX(P0, 实机日志2026-09-12 6h4s stk24BB面8BB全押eq31%赔率38%却用25%门槛跟):
-    //   Math.min(callThresh+3,25)把赔率门槛封顶在25%——赔率要求38%时门槛被压到25%,
-    //   31%>25%通过但31%<38%赔率=纯负EV。改为Math.max保证门槛永远不低于赔率要求,
-    //   同时保留25%地板(赔率<25%时门槛不低于25%,防极小赔率噪声)。
-    callThresh=_preAiRatio>=0.5?Math.max(callThresh,45):Math.max(callThresh,25);
-    // V2.9.592 FIX(P1, 实机日志2026-09-08 A7o stk61BB面61BB全押eq41%用25%地板跟):
-    //   25%小jam地板为短码推弃设计;深码跟全押套牢大额,分级收紧门槛(复用L3191 _oppEffBB):>40BB→40%,>80BB→45%,>120BB→50%。
-    // V2.9.689 FIX(P1): 收紧仅限真实套牢(allinBet>=hero码量40%)——旧代码不看jam尺寸,
-    //   54筹码小jam(200码深只冒27%码量)也被套45%门槛→MC eq43%被拦而赔率只需18.4%
-    //   →巨池小jam过度弃牌(V2.9.687声称的K7o场景仍未打通)。592实证(A7o面61BB全押
-    //   =100%码量套牢)不受影响,仍分级收紧。
-    if(allinBet>=stk*0.4){
-      if(_oppEffBB>120){callThresh=Math.max(callThresh,50);}else if(_oppEffBB>80){callThresh=Math.max(callThresh,45);}else if(_oppEffBB>40){callThresh=Math.max(callThresh,40);}
-    }
-    // V2.9.625 FIX(P0, 豪哥原则): 投机牌翻前全压无潜力可兑现,A/B闸扩展覆盖所有非极短码场景
-    // 原条件(_oppEffBB>40||ratio>=0.5)只覆盖深码/大jam,漏掉短码多人池跑马(如2BB 3way jam)
-    // 新条件:>15BB(非极短码) 或 大jam(注池比>=0.5) 或 多人池(3way+),15BB以下仍走Nash路径
-    var _aiDeep=(_oppEffBB>15)||(_preAiRatio>=0.5)||((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=3));
-    if(_aiDeep){
-    // B闸-牌力硬底(不依赖eq质量): 翻前接全押,仅对子22+或两张>=J双高张(与L3432强牌硬底同口径);
-    //   投机牌(同花连张/小对子/A低同花)翻前无翻后潜力可兑现,直接fold
-    // V2.9.655 FIX(P0): 全押硬闸B-gate忽略底池赔率——PKO大底池中A2o eq37%面对239BB底池只需4.8%却弃牌!
-    //   根因: B-gate检查手牌质量(对子/双J+)不看底池赔率,但底池赔率<25%时任何牌都+EV
-    //   修复: 底池赔率<25%时跳过B-gate,直接走A闸eq检查(纯数学决策)
-    //   V2.9.687: 15%→25%,覆盖更多+EV场景(如K7o eq43%面对18.5%赔率)
-      var _aiPair=(k.length===2&&k[0]===k[1]);
-      var _aiTwoBroad=(!_aiPair&&'JQKA'.indexOf(k[0])>=0&&'JQKA'.indexOf(k[1])>=0);
-      var _aiPotOddsLow=_rawPotOdds<25;  // V2.9.687: 15%→25%; V2.9.689 FIX(P0): 改用_rawPotOdds(未钳制)
-      //   旧代码用钳制后的callThresh判断(callThresh>=25恒成立→_aiPotOddsLow恒false),
-      //   V2.9.655/687的"低赔率绕过B-gate"通道从未生效=死代码,实证: K7o eq43%面对18.5%赔率
-      //   仍被B-gate弃牌(审计复现测试F3)。修复后: 原始赔率<25%→跳过B-gate走A闸纯数学决策。
-      if(!_aiPair&&!_aiTwoBroad&&!_aiPotOddsLow){
-      console.log('[V2.9.625全押硬闸] '+k+' 翻前全压非强牌(非对子非双J+) fold (oppEff='+_oppEffBB+'BB ratio='+_preAiRatio.toFixed(2)+' inPot='+((typeof G._inPotPlayers!=='undefined')?G._inPotPlayers:'?')+')');
-      return _fold(allinEq,'[V2.9.625全押硬闸] '+k+' 翻前全压牌力不足弃',spr);
-      }
-      if(_aiPotOddsLow&&!_aiPair&&!_aiTwoBroad){
-        console.log('[V2.9.689全押硬闸] '+k+' 跳过B-gate(原始底池赔率'+_rawPotOdds+'%<25%→纯数学决策) eq='+Math.round(allinEq)+'%');
-      }
-    // A闸-eq真实化: 查表值替换为mcVsRange对实际开牌范围+实际进池人数的蒙特卡洛胜率(复用翻后同款函数,不拍新范围表)。
-    //   强牌(TT+/AQ+)HU仍65%+正常跟;多人池弱牌eq按人数客观回落。异常try-catch降级查表值。
-    //   V2.9.625: 扩展触发条件后,短码多人池(如3way 2BB)也能用MC修正eq,避免单挑eq虚高导致错误call
-      try{
-      var _aiHole=(G.hole||[]).filter(function(c){return c;});
-      var _aiN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
-      var _aiOpp=Math.max(1,_aiN-1);
-      if(_aiHole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'){
-      var _aiRange=gT(getOppPos());  // V2.9.676 FIX(P0): 全押MC用3bet/jam范围(gT)而非开池范围(gO)。
-      //   旧代码gO(MP)=56手→KJo eq47%，实际对手jam范围gT(MP)=21手→KJo eq35-38%。
-      //   导致边缘牌被剥削call。gT覆盖TT+/AKs/AQs/AJs/ATs/AKo/AQo/AJo/ATo/KQo等强牌。
-      // V2.9.701 FIX(建议2补完): 对手类型范围感知——gT紧表只对reg/未知成立; fish/calling_station
-      //   推allin的范围远宽于3bet紧表(常见任意Ax/中小对/broadway), 实测K3o vs gT=26.7% vs gO=36.4%
-      //   差10pp, vs紧表系统性低估导致+EV跟注被误弃。fish用gO开池范围(57手)。
-      if(G.opp==='fish'||G.opp==='calling_station'){
-        _aiRange=gO(getOppPos());
-        console.log('[V2.9.701全押范围] opp='+G.opp+' allin范围改用gO开池范围(vs fish推allin远宽于3bet紧表, 防MC系统性低估)');
-      }
-      var _aiMs=mcVsRange(_aiHole,[],_aiRange,1500,_aiOpp);
-      if(_aiMs&&typeof _aiMs.eq==='number'&&_aiMs.eq>0){
-      console.log('[V2.9.625全押eq] '+k+' 查表'+Math.round(allinEq)+'%→MC '+_aiMs.eq.toFixed(1)+'% (nOpp='+_aiOpp+')');
-      allinEq=_aiMs.eq;
-          }
-        }
-      }catch(_aiE){console.log('[V2.9.625全押eq] 异常降级查表: '+_aiE.message);}
-    }
-    // V2.9.708: 翻前跟全压风控闸——在最终eq判断前执行, 作用于call出口
-    //   off=直通(707行为); tight=多人池收紧; strict=全收紧; ban=全弃(AA例外可配)
-    //   注意: 只拦"跟注全压", 我方主动短码jam(raise路径)不受影响——那是短码策略必需工具
+    if(_cappedPot<pot){console.log('[V2.9.711主池cap] pot '+pot+'→'+_cappedPot+' (stk='+stk+' inPot='+_inPotForCap+')');}
+
+    // [第1层] 数学基线: 真实底池赔率(唯一真相源, 绝不被后续覆盖)
+    var _prePotOdds=(_cappedPot+allinBet)>0?(allinBet/(_cappedPot+allinBet)*100):50;
+    var _preNoise=3;  // MC统计误差裕度
+    var _preBase=_prePotOdds+_preNoise;
+
+    // [物理层] 在池人数(供MC与人数修正共用, 单一来源)
+    var _preN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
+    var _preOpp=Math.max(1,_preN-1);
+
+    // [第2层] 牌力闸判定(用户要求3: 防剥削)
+    var _preIsAA=(_k711==='AA');
+    var _prePair=(_k711.length===2&&_k711[0]===_k711[1]);
+    var _preTwoBroad=(!_prePair&&'JQKA'.indexOf(_k711[0])>=0&&'JQKA'.indexOf(_k711[1])>=0);
+    // 强A: AK/AQ/AJ/AT(同花或非同花) —— AA已在上面单独豁免
+    var _preStrongAce=(!_prePair&&_k711[0]==='A'&&'KQJT'.indexOf(_k711[1])>=0);
+    var _preStrong=(_prePair||_preTwoBroad||_preStrongAce);
+
+    // [第3层] eq真实化: 查表eq → MC对实际jam范围+实际进池人数的胜率
+    //   范围选择: reg/未知 → gT(jam紧表); fish/station → gO(开池宽表)
+    //   多处实证: 查表eq在多人池系统性虚高(单挑口径), 必须用MC按真实人数回落
     try{
-      var _pfAG=(typeof PREFLOP_ALLIN_GUARD!=='undefined')?PREFLOP_ALLIN_GUARD:{mode:'tight',marginPP:15,minEq:50,banExceptAA:true};
-      // V2.9.708a: mode缺省按tight处理(配置对象存在但未填mode→默认收紧, 防配置遗漏意外放行)
-      var _agMode=_pfAG.mode||'tight';
-      if(_pfAG&&_agMode!=='off'){
-        var _agN=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(G.act||2));
-        var _agOpp=Math.max(1,_agN-1);  // 与A闸MC的nOpp同源
-        var _agK=k||'';
-        var _agIsPair=(_agK.length===2&&_agK[0]===_agK[1]);
-        if(_agMode==='ban'){
-          var _agBanAllow=(_agIsPair&&_agK==='AA'&&_pfAG.banExceptAA!==false);
-          if(!_agBanAllow){
-            console.log('[V2.9.708全压风控] ban模式: '+_agK+' 翻前跟全压一律弃牌'+(_pfAG.banExceptAA!==false?'(仅AA例外)':''));
-            return _fold(allinEq,'[V2.9.708风控] ban: '+_agK+' 翻前禁跟全压',spr);
-          }
-        }else{
-          // tight: 仅多人池收紧(nOpp>=2); strict: 全部收紧
-          var _agTighten=(_agMode==='strict')||(_agOpp>=2);
-          if(_agTighten){
-            var _agMargin=(_pfAG.marginPP||15), _agMin=(_pfAG.minEq||50);
-            var _agThresh=Math.max(callThresh+_agMargin,_agMin);
-            if(allinEq<_agThresh){
-              console.log('[V2.9.708全压风控] '+_agMode+'模式: '+_agK+' eq'+Math.round(allinEq)+'%<风控门槛'+_agThresh+'%(门槛'+callThresh+'%+'+_agMargin+'pp/地板'+_agMin+'%, nOpp='+_agOpp+')→弃牌');
-              return _fold(allinEq,'[V2.9.708风控] '+_agK+' 全压跟注收紧 eq'+Math.round(allinEq)+'%<'+_agThresh+'%',spr);
-            }
-            console.log('[V2.9.708全压风控] '+_agMode+'模式放行: '+_agK+' eq'+Math.round(allinEq)+'%>=风控门槛'+_agThresh+'% (nOpp='+_agOpp+')');
-          }
+      var _preHole=(G.hole||[]).filter(function(c){return c;});
+      if(_preHole.length===2&&typeof mcVsRange==='function'&&typeof gT==='function'&&typeof gO==='function'){
+        var _preRange=gT(getOppPos());
+        if(G.opp==='fish'||G.opp==='calling_station'){
+          _preRange=gO(getOppPos());
+          console.log('[V2.9.711全押范围] opp='+G.opp+' 改用开池宽范围(防MC系统性低估)');
+        }
+        var _preMs=mcVsRange(_preHole,[],_preRange,1500,_preOpp);
+        if(_preMs&&typeof _preMs.eq==='number'&&_preMs.eq>0){
+          console.log('[V2.9.711全押eq] '+_k711+' 查表'+Math.round(allinEq)+'%→MC '+_preMs.eq.toFixed(1)+'% (nOpp='+_preOpp+')');
+          allinEq=_preMs.eq;
         }
       }
-    }catch(_agE){console.log('[V2.9.708全压风控] 异常放行走原逻辑: '+_agE.message);}
-    if(allinEq>=callThresh){var exploitA=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});return{a:'call',r:'GTO vs allin eq'+Math.round(allinEq)+'%>='+callThresh+'%',eq:exploitA.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitA.exploit,_se:true};}
-    return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%',spr);
+    }catch(_preE){console.log('[V2.9.711全押eq] 异常降级查表值: '+_preE.message);}
+
+    // [第4层] 人数修正: 多人池时对手综合牌力上升
+    var _preMwAdj=0;
+    if(_preOpp>=4){_preMwAdj=10;}
+    else if(_preOpp===3){_preMwAdj=7;}
+    else if(_preOpp===2){_preMwAdj=4;}
+    else if(_preOpp===1){_preMwAdj=2;}
+
+    // [第5层] 码深修正: 深码跟全押=套牢大额, 需更高确定性
+    var _preDeepAdj=0;
+    try{
+      var _preBB=window._lastBlindBB||G._lockedBB||200;
+      var _preEffBB=(stk>0?stk:0);
+      var _preOs=G.oppSeats||[];
+      for(var _preI=0;_preI<_preOs.length;_preI++){
+        var _preOc=parseInt(_preOs[_preI]&&_preOs[_preI].chips)||0;
+        var _preOf=(_preOs[_preI]&&_preOs[_preI].active!==false&&_preOs[_preI].action!=='fold');
+        if(_preOc>0&&_preOf&&_preBB>0){
+          var _preE=Math.round(_preOc/_preBB);
+          if(_preE>0&&(_preEffBB<=0||_preE<_preEffBB))_preEffBB=_preE;
+        }
+      }
+      if(_preEffBB>120){_preDeepAdj=10;}
+      else if(_preEffBB>80){_preDeepAdj=7;}
+      else if(_preEffBB>40){_preDeepAdj=4;}
+    }catch(_preEfE){}
+
+    // [最终门槛] 单通道求和
+    //   V2.9.711c 上限保护: 与翻后同口径, 防极端组合门槛不可达致强牌误弃。
+    //     翻前全押上限设80%(略低于翻后, 因翻前eq查表+MC, 强牌如KK/AK可达80%+)
+    var callThreshRaw=_preBase+_preMwAdj+_preDeepAdj;
+    var callThreshCap=80;
+    var callThresh=Math.round(Math.min(callThreshRaw,callThreshCap));
+    if(callThreshRaw>callThreshCap){console.log('[V2.9.711门槛封顶] 原始'+Math.round(callThreshRaw)+'%>上限'+callThreshCap+'%→封顶');}
+    console.log('[V2.9.711翻前全押] '+_k711+' 门槛='+callThresh+'% = 赔率'+Math.round(_prePotOdds)+'%+裕度'+_preNoise
+      +'+人数'+_preMwAdj+'(nOpp='+_preOpp+')+码深'+_preDeepAdj+' | eq='+Math.round(allinEq*10)/10+'%'
+      +' 牌力='+(_preStrong?'达标':(_preIsAA?'AA豁免':'不足')));
+
+    // [闸2] 牌力闸 —— AA完全豁免; 其余必须牌力达标 且 赔率达标
+    //   注意: 只在"赔率不足以纯粹靠数学赢"时才用牌力闸兜底。
+    //   若真实赔率极低(<=12%), 任何牌跟注都是+EV(赢面成本极低), 此处仍受牌力闸保护,
+    //   防止对手用宽范围剥削式全压消耗筹码(用户明确要求)。
+    if(_preIsAA){
+      // AA豁免: 仅走赔率闸(AA翻前eq约85%, 实际恒过)
+      if(allinEq>=_prePotOdds){
+        var _aaEx=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});
+        return{a:'call',r:'GTO vs allin AA豁免 eq'+Math.round(allinEq)+'%>='+Math.round(_prePotOdds)+'%',eq:_aaEx.eq,c:'h',scene:'面对allin',spr:spr,exploit:_aaEx.exploit,_se:true};
+      }
+    }else if(!_preStrong){
+      // 非强牌: 牌力闸不放行 → 直接弃(防剥削)
+      console.log('[V2.9.711牌力闸] '+_k711+' 非对子非双J+非强A → 翻前全押弃(防剥削式全压)');
+      return _fold(allinEq,'[V2.9.711牌力闸] '+_k711+' 翻前全压牌力不足弃',spr);
+    }
+
+    // [闸1] 赔率闸: 牌力达标(或AA)后, 用数学门槛最终判定
+    if(allinEq>=callThresh){
+      var exploitA=applyExploit(allinEq,'call',G.opp,{bet:allinBet,pot:pot});
+      return{a:'call',r:'GTO vs allin eq'+Math.round(allinEq)+'%>='+callThresh+'%(赔率'+Math.round(_prePotOdds)+'%+人数'+_preMwAdj+'+码深'+_preDeepAdj+')',eq:exploitA.eq,c:allinEq>=65?'h':'m',scene:'面对allin',spr:spr,exploit:exploitA.exploit,_se:true};
+    }
+    return _fold(allinEq,'vs allin eq'+Math.round(allinEq)+'%<'+callThresh+'%(赔率'+Math.round(_prePotOdds)+'%+人数'+_preMwAdj+'+码深'+_preDeepAdj+')',spr);
   }
 
     // V2.9.640 FIX(P0): 未匹配任何scene分支的fallthrough——原代码return null导致decide()返回null→
@@ -4667,63 +4681,100 @@ function decidePostflop(k,_pfInj){
   var didPFR=ActionLine.didPreflopRaise();
   var weights=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};
 
-  // V3.28: 翻后面对allin — 权益阈值决策（与翻前同逻辑）
-  // V2.9.582 FIX(P1, 实机日志2026-09-06 Jd6d 3BB into 279BB): 硬40%地板无视底池赔率——
-  //   巨池短码jam赔率门槛仅~1%，后门听牌eq4.45%数学EV+9.7BB却被fold。
-  //   修复: 大jam(注池比>=0.5, 门槛本>=25%)保留40%地板防eq噪声滥跟;
-  //         小jam回归赔率门槛+3%噪声裕度(MC误差/范围不确定性缓冲)。
+  // ============================================================
+  // V2.9.711 翻后面对全押 —— 单一决策模型（替换 V2.9.582/585/592/622/668 五层补丁叠加）
+  //   旧实现问题(实证):
+  //     ① L4677 算出真实赔率门槛后, L4680 用 Math.max(.,20/40) 覆盖 → 真实赔率丢失。
+  //        本次日志手牌#11: pot=55 bet=0.5 → 真实赔率 0.90%, 被覆盖为 20% (22倍)。
+  //     ② 小对保护硬编码 '23456789'(22-99), JJ(1010) 落在盲区。
+  //     ③ 该分支全程未引用 _nActive → 多人池门槛与单挑无差异。
+  //   新模型(单通道, 无叠加覆盖):
+  //     门槛 = 真实赔率 + MC噪声裕度 + 公共牌威胁修正 + 人数修正
+  //   用户规则: 翻后必须考虑全部威胁(公共牌成牌/听牌 + 其他玩家成牌可能)
+  // ============================================================
   if(scene==='allin'){
-    var _aiBet=bet||pot;
-    var _aiThresh=_aiBet>0?Math.round(_aiBet/(pot+_aiBet)*100):50;  // V2.9.585 FIX(BUG-07): 同上
-    var _aiBetRatio=pot>0?_aiBet/(pot+_aiBet):0; // 注池比: 大jam>=0.5
-    // V2.9.622 FIX(P0): 同翻前——Math.min封顶20%导致赔率不足也能通过,改Math.max保赔率兜底
-    _aiThresh=_aiBetRatio>=0.5?Math.max(_aiThresh,40):Math.max(_aiThresh,20);
-    // V2.9.592 FIX(P1, 实机日志2026-09-08 J4c stk142BB面118BB全押eq31%/stk166BB面24BB eq22%两跟全输):
-    //   小jam赔率门槛+3%裕度是为【短码推弃】设计(跟注浅、风险有限);深码(>40BB)跟全押是套牢大额
-    //   筹码,20-25%地板对小jam放太松→深码用弱牌跟大额全押。修复:有效码深>40BB时翻后跟全押
-    //   统一门槛40%(与翻前L3360深码allin口径一致),深码不做投机性低eq跟注。
+    var _aiBet=(bet>0)?bet:pot;
+
+    // [第1层] 数学基线: 真实底池赔率(唯一真相源, 绝不被后续覆盖)
+    //   真实赔率 = 跟注额 / (可赢底池 + 跟注额)
+    var _aiPotOdds=(pot+_aiBet)>0?(_aiBet/(pot+_aiBet)*100):50;
+    // MC噪声裕度: 蒙特卡洛模拟存在统计误差(源码L4674自述±3%), 用裕度而非人为地板防噪
+    var _aiNoise=3;
+    var _aiBase=_aiPotOdds+_aiNoise;
+
+    // [第2层] 公共牌威胁修正(用户要求3: 必须考虑公共牌+对手成牌可能)
+    var _aiThreat=0, _aiThreatWhy=[];
+    try{
+      var _bt=boardTexture(comm);
+      // 2a. 已成花/已成顺: 公共牌3+同花 或 3+连续 → 我方对子类牌力大幅贬值
+      var _aiCommC=comm.filter(function(c){return c;});
+      var _aiSuits={};_aiCommC.forEach(function(c){if(c.suit)_aiSuits[c.suit]=(_aiSuits[c.suit]||0)+1;});
+      var _aiMaxSuit=0;for(var _sk in _aiSuits)_aiMaxSuit=Math.max(_aiMaxSuit,_aiSuits[_sk]);
+      var _aiIdx=[];_aiCommC.forEach(function(c){var _ri=R.indexOf(c.rank);if(_ri>=0)_aiIdx.push(_ri);});
+      _aiIdx.sort(function(a,b){return a-b;});
+      var _aiConn=0;for(var _ci=0;_ci<_aiIdx.length-1;_ci++){if(_aiIdx[_ci+1]-_aiIdx[_ci]===1)_aiConn++;}
+      var _aiIsPairedBoard=(function(){var _s={};for(var _i2=0;_i2<_aiCommC.length;_i2++){var _r2=_aiCommC[_i2].rank;_s[_r2]=(_s[_r2]||0)+1;if(_s[_r2]>=2)return true;}return false;})();
+      if(_aiMaxSuit>=3&&_aiConn>=2){_aiThreat+=18;_aiThreatWhy.push('花面+顺面');}
+      else if(_aiMaxSuit>=3){_aiThreat+=12;_aiThreatWhy.push('同花面'+_aiMaxSuit+'张');}
+      else if(_aiConn>=2){_aiThreat+=10;_aiThreatWhy.push('连牌面'+(_aiConn+1)+'连');}
+      else if(_aiConn===1){_aiThreat+=5;_aiThreatWhy.push('半连面');}
+      // 2b. 公对面: 出现公对 → 对手三条/两对概率上升, 我方对子被压
+      if(_aiIsPairedBoard){_aiThreat+=8;_aiThreatWhy.push('公对面');}
+      // 2c. 高牌威胁: 公共牌含A/K/Q 且我方无该牌 → 我方对子可能已被反超
+      //     判据: 公共牌最高牌 > 我方手牌最高牌 且 我方非成顺/成花
+      var _aiCommHigh=0;
+      _aiIdx.forEach(function(_ri){_aiCommHigh=Math.max(_aiCommHigh,12-_ri);});
+      var _aiHoleHigh=0;
+      (hole||[]).forEach(function(c){var _ri=R.indexOf(c.rank);if(_ri>=0)_aiHoleHigh=Math.max(_aiHoleHigh,12-_ri);});
+      if(_aiCommHigh>_aiHoleHigh){_aiThreat+=7;_aiThreatWhy.push('公共牌高张压制');}
+    }catch(_aiThrE){console.log('[V2.9.711威胁] 异常跳过威胁修正: '+_aiThrE.message);}
+
+    // [第3层] 多人池修正(用户要求3: 其他玩家成牌可能)
+    //   nActive 越多, 至少一人成牌的概率越高 → 门槛按人数递增
+    var _aiMwAdj=0;
+    if(_nActive>=4){_aiMwAdj=12;}
+    else if(_nActive===3){_aiMwAdj=7;}
+    else if(_nActive===2){_aiMwAdj=2;}
+
+    // [第4层] 码深修正: 深码跟全押风险大(套牢), 需更高确定性
+    //   与翻前同口径, 但用裕度而非地板
+    var _aiEffBB=0;
     try{
       var _aiBlind=window._lastBlindBB||G._lockedBB||200;
-      var _aiEff=(stk>0?stk:0);
+      _aiEffBB=(stk>0?stk:0);
       var _aiOs=G.oppSeats||[];
-      for(var _aiI=0;_aiI<_aiOs.length;_aiI++){
-        var _aiOc=parseInt(_aiOs[_aiI]&&_aiOs[_aiI].chips)||0;
-        var _aiOf=(_aiOs[_aiI]&&_aiOs[_aiI].active!==false&&_aiOs[_aiI].action!=='fold');
-        if(_aiOc>0&&_aiOf&&_aiBlind>0){var _aiE=Math.round(_aiOc/_aiBlind);if(_aiE>0&&(_aiEff<=0||_aiE<_aiEff))_aiEff=_aiE;}
-      }
-      if(_aiEff>40){_aiThresh=Math.max(_aiThresh,40);}
-    }catch(_aiE){}
-    // V2.9.668 FIX(P0): 小对子(22-99)在连牌面/同花面脆弱,提高门槛
-    try{
-      var _spH=hole||[];
-      var _spPair=_spH.length>=2&&_spH[0].rank===_spH[1].rank;
-      var _spRank=_spPair?_spH[0].rank:0;
-      if(_spPair&&'23456789'.indexOf(_spRank)!==-1){
-        var _spC=comm.filter(function(c){return c;});
-        var _spIdx=[];_spC.forEach(function(c){var i=R.indexOf(c.rank);if(i>=0)_spIdx.push(i);});
-        _spIdx.sort(function(a,b){return a-b;});
-        var _spConn=0;for(var _si=0;_si<_spIdx.length-1;_si++){if(_spIdx[_si+1]-_spIdx[_si]<=2)_spConn++;}
-        var _spGap=_spIdx.length>=3&&(_spIdx[_spIdx.length-1]-_spIdx[0])<=4;
-        var _spFSh={};_spC.forEach(function(c){if(c.suit)_spFSh[c.suit]=(_spFSh[c.suit]||0)+1;});
-        var _spMaxF=0;for(var _fk in _spFSh)_spMaxF=Math.max(_spMaxF,_spFSh[_fk]);
-        var _spHigh=(_spConn>=2)||(_spConn>=1&&_spGap);
-        var _spMed=_spConn>=1||_spMaxF>=3;
-        if(_spHigh){
-          _aiThresh=Math.max(_aiThresh,55);
-          if(hClass&&hClass.name!=='NUTS'){hClass={name:'MEDIUM',desc:'中对',detail:'小对连牌面降级',outs:hClass.outs||0,isOvercard:false};}
-          console.log('[SP-AI] 小对'+_spRank+_spRank+' 高协调 门槛>=55% eq='+Math.round(eq)+'%');
-        }else if(_spMed){
-          _aiThresh=Math.max(_aiThresh,_aiThresh+8);
-          if(hClass&&hClass.name==='STRONG'){hClass={name:'MEDIUM',desc:'中对',detail:'小对协调面降级',outs:hClass.outs||0,isOvercard:false};}
-          console.log('[SP-AI] 小对'+_spRank+_spRank+' 中协调 门槛='+_aiThresh+'% eq='+Math.round(eq)+'%');
+      for(var _aiOi=0;_aiOi<_aiOs.length;_aiOi++){
+        var _aiOc=parseInt(_aiOs[_aiOi]&&_aiOs[_aiOi].chips)||0;
+        var _aiOf=(_aiOs[_aiOi]&&_aiOs[_aiOi].active!==false&&_aiOs[_aiOi].action!=='fold');
+        if(_aiOc>0&&_aiOf&&_aiBlind>0){
+          var _aiE=Math.round(_aiOc/_aiBlind);
+          if(_aiE>0&&(_aiEffBB<=0||_aiE<_aiEffBB))_aiEffBB=_aiE;
         }
       }
-    }catch(_spE){console.error('[SP-AI]',_spE);}
+    }catch(_aiEfE){}
+    var _aiDeepAdj=0;
+    if(_aiEffBB>120){_aiDeepAdj=12;}
+    else if(_aiEffBB>80){_aiDeepAdj=8;}
+    else if(_aiEffBB>40){_aiDeepAdj=4;}
+
+    // [最终门槛] 单通道求和, 无 Math.max 叠加覆盖
+    //   V2.9.711c 上限保护: 压力测试发现极端组合(湿面+多人池+深码)可达102%,
+    //     该门槛物理上不可达 → 即使坚果也会被误弃(反向BUG)。
+    //     修复: 封顶85% —— 留出空间让"坚果级"(eq>=85%)仍可通过,
+    //     同时保留全部修正的相对次序(修正越多的局面门槛仍越高)。
+    var _aiThreshRaw=_aiBase+_aiThreat+_aiMwAdj+_aiDeepAdj;
+    var _aiThreshCap=85;
+    var _aiThresh=Math.round(Math.min(_aiThreshRaw,_aiThreshCap));
+    if(_aiThreshRaw>_aiThreshCap){console.log('[V2.9.711门槛封顶] 原始'+Math.round(_aiThreshRaw)+'%>上限'+_aiThreshCap+'%→封顶(防门槛不可达致坚果误弃)');}
+    console.log('[V2.9.711翻后全押] 门槛='+_aiThresh+'% = 赔率'+Math.round(_aiPotOdds)+'%+裕度'+_aiNoise
+      +'+威胁'+_aiThreat+'('+(_aiThreatWhy.join('+')||'无')+')+人数'+_aiMwAdj+'(n='+_nActive+')+码深'+_aiDeepAdj
+      +'(eff='+_aiEffBB+'BB) | eq='+Math.round(eq*10)/10+'%');
+
     if(eq>=_aiThresh){
       var _aiExploit=applyExploit(eq,'call',oppType,{bet:_aiBet,pot:pot});
-      return{a:'call',r:'GTO 翻后vs allin eq'+Math.round(eq)+'%>='+_aiThresh+'%',eq:_aiExploit.eq,c:eq>=65?'h':'m',scene:'面对allin',spr:spr,_se:true};
+      return{a:'call',r:'GTO 翻后vs allin eq'+Math.round(eq)+'%>='+_aiThresh+'%(赔率'+Math.round(_aiPotOdds)+'%+威胁'+_aiThreat+'+人数'+_aiMwAdj+'+码深'+_aiDeepAdj+')',eq:_aiExploit.eq,c:eq>=65?'h':'m',scene:'面对allin',spr:spr,_se:true};
     }
-    return _fold(eq,'翻后vs allin eq'+Math.round(eq)+'%<'+_aiThresh+'%',spr);
+    return _fold(eq,'翻后vs allin eq'+Math.round(eq)+'%<'+_aiThresh+'%(赔率'+Math.round(_aiPotOdds)+'%+威胁'+_aiThreat+'+人数'+_aiMwAdj+'+码深'+_aiDeepAdj+')',spr);
   }
 
   // V3.12: 3bet底池/多人池检测 (旧引擎设置，我们丢失后补回)
@@ -11014,26 +11065,52 @@ function _decideInner(){
           var _szBB=(typeof window!=='undefined'&&window._lastBlindBB>0)?window._lastBlindBB:((typeof G!=='undefined'&&G._lockedBB>0)?G._lockedBB:200);
           var _szMaxBB=_szGuard.maxBB||3;
           var _szCurBB=result.v||0;
-          var _szTargetBB=Math.min(_szCurBB,_szMaxBB);
-          // V2.9.709b: 最小合法加注校验——目标额若<=已面对的下注额, 该加注物理非法(GG会拒绝/强制升级)。
-          //   如对手open 5BB, 目标3BB<5BB → 无法加注。按用户规则(只能平跟或3BB)降级为平跟。
-          //   注意: 仅在"面对加注"时校验(G.bet>0); 无下注时3BB恒合法。
           var _szBetBB=(G.bet>0)?G.bet:0;
+          // ============================================================
+          // V2.9.711 尺度上限场景分流（修复 JJ 3bet 被禁止的核心缺陷）
+          //   旧实现问题(实证: 本次日志手牌#8 JsJh):
+          //     _szTargetBB=Math.min(原尺度,3) 保证目标恒≤3BB;
+          //     对手open 4BB时判据 `3BB<=4BB` 恒真 → 所有3bet意图被降级平跟。
+          //     这不是"尺度钳制", 实际效果是"禁止3bet"。
+          //   修复: 区分"开池"与"反加注(3bet/4bet/5bet)"
+          //     · 开池(无人下注): 上限 3BB          ← 保留用户规则
+          //     · 反加注(G.bet>0): 下限=最小合法加注(2×open), 上限不设(由SPR/码深约束)
+          //       理由: 3bet 的物理下限天然高于3BB(最小合法加注=2×open), 3BB上限使其不可能成立
+          // ============================================================
+          var _szIsOpenRaise=(_szBetBB<=0);
+          var _szMinLegalBB=_szIsOpenRaise?0:(_szBetBB*2);   // 最小合法加注=2×已面对下注
+          var _szTargetBB;
+          if(_szIsOpenRaise){
+            _szTargetBB=Math.min(_szCurBB,_szMaxBB);          // 开池: 保留3BB上限
+          }else{
+            // 反加注: 下限为最小合法加注, 若原意图低于该下限则抬到下限(而非降级平跟)
+            _szTargetBB=Math.max(_szCurBB,_szMinLegalBB);
+          }
           var _szIllegalRaise=(_szBetBB>0 && _szTargetBB<=_szBetBB);
           if(_szIllegalRaise){
-            console.log('[V2.9.709加注尺度] '+_szK+' 目标'+_szTargetBB+'BB≤已面对下注'+_szBetBB+'BB(最小加注非法)→降级平跟');
-            // V2.9.709b: call动作不带加注尺度(v/sizing=0),跟注额由执行层按屏幕按钮自行处理
-            result.a='call'; result.v=0; result.sizing=0;
-            result.r='[V2.9.709] '+_szK+' 加注上限'+_szMaxBB+'BB低于最小合法加注→平跟(原:'+(result.r||'').substring(0,40)+')';
-          }else if(_szCurBB>_szMaxBB+0.001){
-            console.log('[V2.9.709加注尺度] '+_szK+' 原加注'+_szCurBB+'BB>上限'+_szMaxBB+'BB(盲注'+_szBB+')→拉回'+_szTargetBB+'BB');
+            // 理论上经上面修正后不会进入(反加注下限已抬到2×bet > bet)。
+            // 保留此分支仅作物理兜底: 若最小合法加注已超过我方码深 → 无法加注, 只能跟或弃
+            var _szAllinOnly=(_szMinLegalBB>=G.stk);
+            if(_szAllinOnly){
+              console.log('[V2.9.711加注尺度] '+_szK+' 最小合法加注'+_szMinLegalBB+'BB≥码深'+G.stk+'BB→降级平跟');
+              result.a='call'; result.v=0; result.sizing=0;
+              result.r='[V2.9.711] '+_szK+' 最小合法加注超码深→平跟(原:'+(result.r||'').substring(0,40)+')';
+            }
+          }else if(_szIsOpenRaise&&_szCurBB>_szMaxBB+0.001){
+            // 开池超上限 → 拉回3BB(保留用户规则)
+            console.log('[V2.9.711加注尺度] '+_szK+' 开池'+_szCurBB+'BB>上限'+_szMaxBB+'BB→拉回'+_szTargetBB+'BB');
             result.v=_szTargetBB;
             result.sizing=_szTargetBB;
-            result.r=(result.r||'')+' [V2.9.709尺度钳制:'+_szCurBB+'→'+_szTargetBB+'BB]';
-            // 若原为raise_big(超池重加注)且目标降为普通尺度, 降级动作类型保持执行层一致
-            if(result.a==='raise_big'&&_szTargetBB<=_szMaxBB)result.a='raise';
+            result.r=(result.r||'')+' [V2.9.711尺度钳制(开池):'+_szCurBB+'→'+_szTargetBB+'BB]';
+            if(result.a==='raise_big')result.a='raise';
+          }else if(!_szIsOpenRaise&&_szCurBB<_szMinLegalBB-0.001){
+            // 反加注低于最小合法加注 → 抬到最小合法加注(解锁3bet, 而非降级平跟)
+            console.log('[V2.9.711加注尺度] '+_szK+' 反加注'+_szCurBB+'BB<最小合法'+_szMinLegalBB+'BB→抬至'+_szTargetBB+'BB(解锁3bet)');
+            result.v=_szTargetBB;
+            result.sizing=_szTargetBB;
+            result.r=(result.r||'')+' [V2.9.711反加注抬升:'+_szCurBB+'→'+_szTargetBB+'BB(最小合法=2×open)]';
           }else{
-            console.log('[V2.9.709加注尺度] '+_szK+' 加注'+_szCurBB+'BB≤上限'+_szMaxBB+'BB, 通过');
+            console.log('[V2.9.711加注尺度] '+_szK+' 加注'+_szCurBB+'BB通过('+(_szIsOpenRaise?'开池':'反加注')+', 最小合法'+_szMinLegalBB+'BB)');
           }
         }
       }
@@ -11230,11 +11307,11 @@ function _decideInner(){
     // V2.9.123+: ★ 翻前顶级手牌绝对保护 ★
     // AA/KK/QQ/JJ/TT/AK翻前绝不弃牌——任何护栏/纠错都不能把它们改成fold
     // V2.9.127: 扩展至JJ/TT/AK (原V2.9.123只覆盖AA/KK/QQ, 5-max实战中JJ/TT/AK被EV护栏/对手偏移误降fold)
-    // V2.9.708: 用户风控偏好例外——[V2.9.708风控]ban模式是用户主动禁止跟全压(有意为之非bug),
-    //   顶级保护尊重用户意愿不强制翻转(否则ban模式对AA-失效成为摆设)
+    // V2.9.711: 清理失效引用——旧代码检测 '[V2.9.708风控] ban' 标记放行用户禁用,
+    //   但708风控闸已在711重构中移除(改为引擎内建双闸), 该标记不再产生 → 检测恒false=死代码。
+    //   711新牌力闸本身放行 对子22+/双J+/强A(含AA-TT/AK), 与顶级保护口径一致, 无冲突。
     var _cc=G.comm.filter(function(c){return c&&c.rank;}).length;
-    var _ag708Ban=(result.r||'').indexOf('[V2.9.708风控] ban')>=0;
-    if(_cc===0 && result.a==='fold' && !_ag708Ban){
+    if(_cc===0 && result.a==='fold'){
       var _pk=k.length===2&&k[0]===k[1]?k:'';
       if(_pk==='AA'||_pk==='KK'||_pk==='QQ'||_pk==='JJ'||_pk==='TT'){
         console.log('[顶级保护] '+_pk+'翻前被降为fold→强制raise');

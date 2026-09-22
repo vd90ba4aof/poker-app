@@ -953,11 +953,16 @@ class FloatingService : Service() {
                     // V2.9.709: 引擎加注尺度硬约束(3BB)标记——被钳制的raise必须走精确金额输入。
                     //   根因: 标准按钮=GG默认min-raise(面对open时=2.5x开注额, 如5BB open→12.5BB),
                     //   与引擎意图3BB不符→点按钮会把"3BB"实际执行成12.5BB, 违反用户规则。
-                    //   reason含[V2.9.709尺度钳制] = JS侧明确要求该尺度, 禁止按钮近似。
+                    //   reason含[V2.9.7xx尺度钳制] = JS侧明确要求该尺度, 禁止按钮近似。
+                    // V2.9.711 FIX(防标记传播断裂/连续BUG): 改为"尺度钳制"关键字 + 版本号前缀双判据。
+                    //   旧代码硬编码 "V2.9.709尺度钳制", 引擎升级到711后JS输出的标记变为
+                    //   "[V2.9.711尺度钳制(开池):...]" / "[V2.9.711反加注抬升:...]" → 旧匹配失效
+                    //   → 精确金额输入路径静默失效, 尺度钳制形同虚设(历史707/708/709同类事故根因)。
+                    //   修复: 只要reason含"尺度钳制"(版本无关)即锁定精确输入, 兼容709/710/711及未来版本。
                     val reasonStr = decisionData.optString("reason", "")
-                    val sizeLocked = reasonStr.contains("V2.9.709尺度钳制")
+                    val sizeLocked = reasonStr.contains("尺度钳制")
                     if (sizeLocked) {
-                        Log.d(TAG, "★ V2.9.709尺度钳制: 强制精确金额输入(size=$sizing blindBB=$blindBB, 禁用按钮近似)")
+                        Log.d(TAG, "★ 尺度钳制: 强制精确金额输入(size=$sizing blindBB=$blindBB, 禁用按钮近似) reason=$reasonStr")
                     }
                     if (!sizeLocked && GameModeConfig.isStandardPreflopRaise(sizing, blindBB)) {
                         Log.d(TAG, "★ GG翻前加注: 标准按钮近似 (size=${sizing} BB=${blindBB})")

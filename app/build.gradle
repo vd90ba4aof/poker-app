@@ -12,8 +12,8 @@ android {
         applicationId "win.opt.view"
         minSdk 26
         targetSdk 34
-        versionCode 710
-        versionName "2.9.709"
+        versionCode 711
+        versionName "2.9.711"
     }
 
     // Release签名配置
@@ -29,6 +29,11 @@ android {
             storePassword ksPass
             keyAlias ksAlias
             keyPassword keyPass
+            // V2.9.711 修复(run#330): minSdk>=24 时 AGP 默认不做 v1 签名,产物无 META-INF/MANIFEST.MF,
+            // 导致 CI 校验步骤"unzip -p ... META-INF/MANIFEST.MF"误判为未签名而失败。
+            // 显式启用 v1+v2 双签名: v1 产出 MANIFEST.MF 供 CI 校验,v2 保证 Android 7+ 安装校验。
+            enableV1Signing true
+            enableV2Signing true
         }
     }
 
