@@ -245,6 +245,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopServices() {
         try {
+            // V2.9.715: 标记用户主动停止——只有这条路径(用户动作源头)算会话边界;
+            //   系统杀进程/START_STICKY 重建不经过这里 → 下次启动恢复会话, 数据保留
+            DiagnosticLogger.markUserStop()
             startService(Intent(this, HttpServerService::class.java).apply { action = "STOP" })
             startService(Intent(this, FloatingService::class.java).apply { action = "STOP" })
             isRunning = false

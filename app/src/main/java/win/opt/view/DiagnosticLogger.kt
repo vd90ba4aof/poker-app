@@ -973,28 +973,64 @@ object DiagnosticLogger {
         resetChipTracking()
     }
 
-    // ===== V2.9.714: 引擎会话隔离——重启一次覆盖一次 =====
-    // 实证(poker_log_20260922_205054): object单例的内存数组跨服务(重)启动存活,
-    //   导出混入旧会话数据(decisions 63旧+8新 / errors 189旧+11新 / recognitions 278旧+22新,
-    //   且 recognitions 300上限被旧数据挤占); poker_log.txt滚动文件同样跨会话累积
-    //   (jsConsoleEntries仅因takeLast(500)碰巧只剩新会话行)。
-    // 修复: FloatingService.onCreate 调用本方法 → 新sessionId + 清空全部会话级内存缓冲
-    //   + 截断会话级滚动日志文件。JS端(poker_helper.html boot)通过 AndroidBridge.getSessionId()
-    //   对比 localStorage 持久化的旧id, 不一致时同步清空 localStorage 会话级存储
-    //   (HandHistory/DRTA/engineStats/SessionStats/HandClassifier)。
-    // 保留: error_logs.txt(FloatingService V2.9.183 崩溃持久化,有意跨重启)。
+    // ===== V2.9.715: 引擎会话隔离修订——区分「用户重启」与「系统重建」 =====
+    // V2.9.714 缺陷(实证 20260922_2340xx): 清空钩子挂在 onCreate 一刀切——
+    //   START_STICKY 服务被系统杀后自动重建(新进程走 onCreate)也被当作"重启",
+    //   用户当前会话数小时数据被全清(内存数组 + poker_log.txt 截断 + JS localStorage 清空)。
+    //   用户"打了好久"导出为空。v712 时代数据反而能活过系统重启(当时抱怨的正是这个)。
+    // V2.9.715 修复: sessionId 持久化到 SharedPreferences + 「用户主动停止」标记:
+    //   - 用户主动停止(MainActivity.stopServices→markUserStop) → 下次启动 startNewEngineSession
+    //     (新id + 清内存 + 截滚动日志; JS 端 IIFE 检测 id 变化 → 清 localStorage) = 重启一次覆盖一次
+    //   - 系统自动重建(START_STICKY/崩溃后重启/开机) → resumeEngineSession (复用旧id, 不清不截)
+    //     → JS getSessionId 返回旧id → localStorage id 一致 → handHistory/DRTA 保留
+    //   - JS 端 IIFE 逻辑不变(V2.9.714): id 不一致=引擎重启→清空; 一致=页面刷新→保留;
+    //     「id 何时变化」由本对象控制。
+    // 注: 进程死亡时 Kotlin 内存数组已丢(无法救), 但核心复盘数据 handHistory/DRTA 在 JS localStorage, 完整保留。
+    // 保留: error_logs.txt(崩溃持久化)/对手画像/APIKey/版本迁移缓存。
+    private fun sessionPrefs() = appContext?.getSharedPreferences("poker_engine_session", Context.MODE_PRIVATE)
+
     @Volatile
-    var engineSessionId: String = java.util.UUID.randomUUID().toString()
+    var engineSessionId: String = ""
         private set
 
-    fun startEngineSession() {
+    fun wasUserStopped(): Boolean = try {
+        sessionPrefs()?.getBoolean("user_stopped", false) ?: false
+    } catch (_: Exception) { false }
+
+    fun markUserStop() {
+        try { sessionPrefs()?.edit()?.putBoolean("user_stopped", true)?.apply() } catch (_: Exception) {}
+    }
+
+    fun startNewEngineSession() {
         engineSessionId = java.util.UUID.randomUUID().toString()
+        try {
+            sessionPrefs()?.edit()?.putString("session_id", engineSessionId)
+                ?.putBoolean("user_stopped", false)?.apply()
+        } catch (_: Exception) {}
         clear()
         synchronized(esp32TapLogs) { esp32TapLogs.clear() }
         // 截断会话级滚动日志文件(识别/决策/JS console/ESP32/ERROR行), 新会话从零开始
         try { synchronized(logFileLock) { getLogFile().writeText("", Charsets.UTF_8) } } catch (_: Exception) {}
         try { synchronized(decisionFileLock) { getDecisionLogFile().writeText("", Charsets.UTF_8) } } catch (_: Exception) {}
-        Log.i(TAG, "🔄 V2.9.714 引擎会话重置: sessionId=$engineSessionId (内存缓冲+滚动日志已清空)")
+        Log.i(TAG, "🔄 V2.9.715 用户重启→新会话 $engineSessionId (内存缓冲+滚动日志已清空)")
+    }
+
+    fun resumeEngineSession() {
+        val p = sessionPrefs()
+        val saved = try { p?.getString("session_id", null) } catch (_: Exception) { null }
+        engineSessionId = saved ?: java.util.UUID.randomUUID().toString()
+        if (saved == null) {
+            try { p?.edit()?.putString("session_id", engineSessionId)?.putBoolean("user_stopped", false)?.apply() } catch (_: Exception) {}
+        }
+        // 不清内存、不截断滚动日志——系统重建时进程已死内存本就为空;
+        // 同进程内服务销毁重建的场景(罕见), 保留数据也比误清正确。
+        Log.i(TAG, "🔄 V2.9.715 系统重建→恢复会话 $engineSessionId (数据保留)")
+    }
+
+    /** bridge 查询入口: 惰性初始化兜底(极端时序下 onCreate 前被调) */
+    fun currentSessionId(): String {
+        if (engineSessionId.isEmpty()) resumeEngineSession()
+        return engineSessionId
     }
     
     fun getRecentErrors(count: Int = 5): List<String> {

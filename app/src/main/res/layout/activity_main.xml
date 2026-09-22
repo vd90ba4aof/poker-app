@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.714 会话隔离版 · v712实战日志(67条快照含60旧+7新混账)审查修复: 日志与缓存重启不残留(重启一次覆盖一次): ①sessionId会话隔离(FloatingService重启→新会话→JS端localStorage五项会话存储清零: 手牌历史/DRTA对手追踪/引擎统计/Session统计/牌局分类) ②Kotlin单例内存缓冲随重启清空(识别/决策/错误/ESP32数组, 旧账不再挤占300上限) ③poker_log/decisions滚动日志随会话截断 ④对手画像/APIKey/版本迁移缓存保留(跨会话有效不误清) ⑤页面刷新(fallback reload)同会话数据保留不打断 | 实证: v713导出日志60旧+7新混账/DRTA51手旧统计喂剥削调整 | 53项验证全绿(8冒烟+28锁+14P10+3会话隔离端到端)"
+        android:text="V2.9.715 会话隔离修订版 · 修复v714缺陷(系统杀进程自动重建也清空→数小时数据丢失): 区分「用户重启」与「系统重建」: ①用户主动停止(MainActivity停服标记)→下次启动新会话(清空=重启一次覆盖一次) ②系统自动重建(START_STICKY/崩溃重启)→复用旧sessionId→手牌历史/DRTA完整保留 ③升级首启→清空旧版残留 ④同服务页面刷新→保留 | v712实证: 60旧+7新混账+DRTA旧统计污染剥削调整 | 8项状态机+50项引擎测试全绿"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

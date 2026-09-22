@@ -448,6 +448,10 @@ var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 //   - id不一致 = 引擎服务重启过 → 清空会话级存储 → 新会话从零开始(覆盖)
 //   - id一致 = 同一服务内的页面刷新/fallback reload → 保留(不打断进行中的会话)
 //   - 无bridge = 非引擎WebView(浏览器打开等) → 跳过(保留)
+// V2.9.715 修订(实证 20260922_2340xx): id 何时变化由 Kotlin 端精确控制——
+//   用户主动停止(MainActivity.stopServices→markUserStop)→下次启动新id(此处清空, 正确);
+//   系统自动重建(START_STICKY/崩溃重启)→Kotlin复用旧id→此处对比一致→数据保留
+//   (修复 v714 缺陷: 系统杀进程重建也清空, 用户数小时数据全丢)。
 // 不清: 对手画像(poker_v2942_opp_profiles,按对手键跨会话有效)/rfKey/CacheManager版本迁移。
 (function(){
   try{
@@ -1431,7 +1435,7 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.714';
+var ENGINE_VERSION='2.9.715';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
