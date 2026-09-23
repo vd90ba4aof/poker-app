@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.719 策略引擎治本版 · 6项翻前/翻后逻辑修复: ①翻后eq口径修正——面对单个下注按「击败下注者」而非「领先全场」计算(实测顶对K: 领先全场21%→击败下注者61%, 修顶对无理由弃牌) ②撤掉多人池eq二次折扣(MEDIUM/DRAW 0.92→0.97, 原折扣与源码自述「多对手MC已客观分摊」矛盾) ③翻后全押门槛去除威胁+人数双重计税(实测门槛22%→赔率+3) ④新增翻前vs-open真实权益表(169手×6位置×5000次MC仿真, 修「用vs随机的eq打vs-open的仗」) ⑤翻前质量门挂钩数学 + 纯赔率兜底通道(治该跟不跟/烂牌乱跟) ⑥River表fold出口加底池赔率守卫 | 50项引擎测试全绿"
+        android:text="V2.9.720 策略引擎治本版 · 4项逻辑修复: ①翻前回撤刹车改底池赔率感知(废除48%绝对阈值)…②翻后回撤刹车改底池赔率+3(废除空气牌40%绝对阈值)…③翻后面对全押权益口径收敛为击败全押者…④河牌主动下注加被跟注口径权益闸 | 50项引擎测试全绿| 50项引擎测试全绿"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />

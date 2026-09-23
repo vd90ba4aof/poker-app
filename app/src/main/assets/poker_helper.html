@@ -1534,7 +1534,7 @@ function showToast(msg){
 //   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
 //   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
 //   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
-var ENGINE_VERSION='2.9.719';
+var ENGINE_VERSION='2.9.720';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -4992,10 +4992,20 @@ function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive){
     // 【修法】非 allin 的"面对下注/加注"场景, nOpp 取 1(下注者本身)。全场人数带来的额外风险
     //   (后方未行动玩家可能再加注) 改由【门槛】的人数修正承担——从乘法级(eq 73%→21%, -52pp)
     //   降为加法级(+3~10pp), 这才是人数风险的真实量级。
-    //   保持 nActive-1 的场景: allin(跟注全押确实须赢全场) / check(我方主动下注,面向全场)。
-    if(sceneIn==='raise'||sceneIn==='reraise'||sceneIn==='bet'){
+    //   保持 nActive-1 的场景: check(我方主动下注,面向全场)。
+    // ===== V2.9.720 FIX(P0 B3): allin 场景同样收敛为 1 (V2.9.719 漏改) =====
+    //   【铁证】poker_log_20260924_021323 #30: Jc3h @ 4d7d8hAd(turn) 面对全押 bet21/pot52,
+    //     postflopEqSpec 返回 nOpp=5 → 引擎 eq=0.6%; 同场景 mcVsRange nOpp=1 → 15.6%(vs 全场169手),
+    //     vs 引擎自身 barrel_turn 紧范围 ≈ 8~10%。赔率 28.8%, 本手弃牌结论虽对, 但口径把 eq 压低约 10 倍。
+    //   【危害】赔率很低时(极短码面对全押)该误伤会致命: 赔率 5% 的局面, vs1人 eq 30% 应必跟,
+    //     但 vs5人 eq 只剩 3% → 误弃。这正是 V2.9.648 已修过一次的同类故障(5d5h BTN 0.5BB pot=65BB)。
+    //   【口径自洽】跟注一个全押, 决策对象就是【全押者】; 全押后其余未全押玩家几乎总是弃牌。
+    //     eq 收敛为 vs1 人后, 残余人数风险(多人全押/cold call 后被再加注)属【加法级】个位数pp,
+    //     由本分支的 _aiNoise=3 噪声裕度覆盖 —— 与 C3 一致: 门槛不加人数项, eq 也不乘算人数,
+    //     不存在"两头都漏"(乘法级误伤实测把 #30 的 eq 压低约 10 倍, 加法级近似更安全)。
+    if(sceneIn==='raise'||sceneIn==='reraise'||sceneIn==='bet'||sceneIn==='allin'){
       if(_nOpp>1){
-        console.log('[V2.9.719eq口径] 面对下注: nOpp '+_nOpp+'(领先全场)→1(击败下注者) | 人数风险移交门槛承担');
+        console.log('[V2.9.720 eq口径] 面对'+(sceneIn==='allin'?'全押':'下注')+': nOpp '+_nOpp+'(领先全场)→1(击败'+(sceneIn==='allin'?'全押者':'下注者')+') | 人数风险移交门槛承担');
         _nOpp=1;
       }
     }
@@ -5217,7 +5227,11 @@ function decidePostflop(k,_pfInj){
       var _aiOppT=oppType||(G&&G.opp)||'unknown';
       if((_aiOppT==='fish'||_aiOppT==='calling_station'||_aiOppT==='maniac')&&hole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'&&typeof getOppPos==='function'){
         var _aiJamRange=gO(getOppPos());  // 开池宽表 → 近似 jam 宽范围
-        var _aiJamMs=mcVsRange(hole,comm,_aiJamRange,1500,Math.max(1,_nActive-1));
+        // ===== V2.9.720 FIX(P0 B3-b): 与 postflopEqSpec allin 口径对齐 —— 跟注对象是【全押者】 =====
+        //   旧代码此处硬写 Math.max(1,_nActive-1), 绕过了 postflopEqSpec 的口径收敛,
+        //   导致 V2.9.720 B3 对 allin 场景的修复在本分支失效(实测 #30 修复前/后 eq 均为 0.2%)。
+        //   同一决策对象必须同一人数口径, 否则同一手牌在两条路径下算出两套 eq。
+        var _aiJamMs=mcVsRange(hole,comm,_aiJamRange,1500,1);
         if(_aiJamMs&&typeof _aiJamMs.eq==='number'&&_aiJamMs.eq>0){
           _aiJamAdjLog='[V2.9.712jam极化] opp='+_aiOppT+' 切宽jam范围 MC eq '+Math.round(eq)+'%→'+_aiJamMs.eq.toFixed(1)+'%';
           console.log(_aiJamAdjLog);
@@ -5936,6 +5950,27 @@ function _riverDecision(k,hcKey,hasInitiative,scene,betSz,pot,btKey,ip,_sprAdj3,
       else{console.log('[SE] river诈唬命中: freq='+Math.round(_rivBluffFreq*100)+'% hc='+hcKey);}
     }
     var spr=calcSPR();
+    // ===== V2.9.720 FIX(P0 B4): River 主动价值下注必须过「被跟注口径」权益闸 =====
+    //   【铁证】poker_log_20260924_021323 #21: 5d4h @ Qd5s8dKs2c 河牌, bet=0(我方主动),
+    //     引擎 eq=2.6%(vs全场5人口径), 却查 _RIV 表按 hcKey 判 "GTO River 价值 6(33%pot)" 要下注——
+    //     这条路径【完全没有 eq 参与】, 只看牌力等级表。实测 vs 单个跟注者(同引擎范围) eq≈37~40%,
+    //     被跟注时并不领先, 价值下注站不住(本手最终被下游物理闸改成 check, 但内核结论是错的)。
+    //   【口径】河牌主动下注的成败取决于"被跟注时是否领先"(对手弃牌则白拿底池, 与 eq 无关),
+    //     而引擎手上只有"是否领先全场"的 eq —— 两者不是一回事, 前者必须用 nOpp=1 复算。
+    //   【修法】river + scene==='check'(我方主动) 且表判价值下注时, 用 nOpp=1 精确枚举复算,
+    //     低于 50%(被跟注即落后) 则降级 check。仅作用价值下注; 诈唬、面对下注分支完全不受影响。
+    if(e.a==='bet'&&scene==='check'&&G.comm&&G.comm.length>=5){
+      var _rivVeq=null;
+      try{
+        var _rvSpec=postflopEqSpec(G.hole,G.comm,'bet',1,Math.max(pot,1),{},2);
+        var _rvR=riverExactEquity(G.hole,G.comm,_rvSpec.range,1);
+        _rivVeq=(_rvR&&typeof _rvR.eq==='number')?_rvR.eq:null;
+      }catch(_rve){_rivVeq=null;}
+      if(typeof _rivVeq==='number'&&_rivVeq<50){
+        console.log('[V2.9.720河牌价值闸] 被跟注口径eq'+Math.round(_rivVeq)+'%<50% → 价值下注降级check(hc='+hcKey+' 全场eq='+Math.round(eq||0)+'%)');
+        e={a:'check',s:0};
+      }
+    }
     if(e.a==='bet'||e.a==='bluff'){
       var rSz=Math.round(pot*e.s);
       rSz=Math.min(rSz,G.stk||100000);
@@ -12105,30 +12140,40 @@ function _decideInner(){
         if(_stEval&&_stEval.level>=2&&result){
           var _stA=result.a;
           var _stEq=(typeof result.eq==='number'&&result.eq>0)?result.eq:50;
-          var _stHC=(result.hClass&&result.hClass.name)?result.hClass.name:'';
           var _stBlock=false,_stWhy='';
-          if(G.phase==='pre'&&(_stA==='call'||_stA==='weak_call')){
-            var _stBet=G.bet||0;
-            var _stThreshold=(_stBet<=1.5)?33:48;
-            // V2.9.651 FIX(P0): 回撤刹车不得误弃+EV强牌——实机铁证: QQ UTG面对全压eq47%>赔率35%(+EV)
-            //   却被48%阈值误判为"弱牌跟注"→fold(-3BB)。
-            //   根因: 纯eq阈值不区分"弱牌投机跟注"和"强牌+EV跟注";且全压场景无后续下注,底池赔率才是唯一准绳。
-            //   修复: 全压场景用底池赔率+5%做阈值(纯数学决策),非全压场景保留33/48%阈值(含隐含赔率考量)
-            var _stPotOdds=G.pot>0?(_stBet/(G.pot+_stBet)*100):100;
-            var _stIsAllin=(G.scene==='allin');
-            if(_stIsAllin){
-              // 全压场景: 底池赔率+5%安全边际(无后续下注,纯数学决策)
+          var _stBet=G.bet||0;
+          var _stPotOdds=G.pot>0?(_stBet/(G.pot+_stBet)*100):100;
+          // ===== V2.9.720 FIX(P0 B1+B2): 回撤刹车全面改为「底池赔率 + 安全边际」, 废除绝对eq阈值 =====
+          //   实机铁证(V2.9.719日志: 49条决策/23手, 筹码96→12):
+          //     翻前 #26 87o mp  pot15/bet4.5 赔率23.1%  eq38%(vs-open) 边际+14.9pp
+          //       主决策「赔率兜底」明确判 call, 却被绝对阈值 48% 改 fold ——
+          //       同一条理由里两个模块给出相反结论(日志原文并存两个判据)。
+          //     翻后 #45 94o@3hJd2s pot9/bet1 赔率10%  eq15.8% 边际+5.8pp
+          //       主决策「面CBet call 边际+6.4pp≥0」判 call, 却被「AIR && eq<40」绝对闸改 fold。
+          //     翻后 #43 Q8o@KsJh4h pot4.5/bet1 赔率18.2% eq19.9% 边际+1.7pp 同样被该闸改 fold。
+          //   根因: 绝对eq阈值与底池赔率【无关】——赔率只要10%的局面却要求40%权益,
+          //        必然把 +EV 跟注判成"弱牌跟注", 制造 -EV 弃牌(沙箱去掉情绪层复现即为 call)。
+          //   修复: 与主决策【同口径同源】, 只在边际不足时收紧, 绝不覆盖主决策的数学结论:
+          //     翻前 = 底池赔率 + 8  (与 V2.9.719 赔率兜底边际 8 同值, 不再分 limp池/非limp池)
+          //     翻后 = 底池赔率 + 3  (与 翻后收口 SPRZone.callThreshold(spr,_need+3) 同值)
+          //     全押 = 底池赔率 + 5  (V2.9.651 既有口径, 全押无后续下注=纯数学, 保持不变)
+          //   且取消对 AIR 牌类的单独加罚 —— 牌类已计入 eq, 再按牌类加罚属重复计税。
+          if(_stA==='call'||_stA==='weak_call'){
+            if(G.scene==='allin'){
               var _stAllinTh=_stPotOdds+5;
               if(_stEq<_stAllinTh){
-                _stBlock=true;_stWhy='全压弱牌跟注(eq'+Math.round(_stEq)+'<赔率'+Math.round(_stAllinTh)+'%)';
+                _stBlock=true;_stWhy='全压弱牌跟注(eq'+Math.round(_stEq)+'%<赔率'+Math.round(_stAllinTh)+'%='+Math.round(_stPotOdds)+'%+5)';
               }else{
                 console.log('[SelfTiltGuard] 全压放行: eq='+Math.round(_stEq)+'% ≥ 赔率+5%='+Math.round(_stAllinTh)+'%');
               }
-            }else if(_stEq<_stThreshold){
-              _stBlock=true;_stWhy='翻前弱牌跟注(eq'+Math.round(_stEq)+'<'+_stThreshold+(_stBet<=1.5?' limp池':'')+')';
+            }else{
+              var _stIsPre=(G.phase==='pre');
+              var _stMarg=_stIsPre?8:3;
+              var _stTh=_stPotOdds+_stMarg;
+              if(_stEq<_stTh){
+                _stBlock=true;_stWhy=(_stIsPre?'翻前':'翻后')+'弱牌跟注(eq'+Math.round(_stEq)+'%<赔率'+Math.round(_stTh)+'%='+Math.round(_stPotOdds)+'%+'+_stMarg+')';
+              }
             }
-          }else if(G.phase!=='pre'&&(_stA==='call'||_stA==='weak_call')&&_stHC==='AIR'&&_stEq<40){
-            _stBlock=true;_stWhy='空气牌跟注(eq'+Math.round(_stEq)+'<40)';
           }
           if(_stBlock){
             console.log('[SelfTiltGuard] 回撤刹车level'+_stEval.level+'→fold: '+_stWhy);
