@@ -5090,7 +5090,10 @@ function decidePostflop(k,_pfInj){
       //      门槛=赔率13+裕度3+威胁7(公共牌高张压制)+人数2=25% → 险过;
       //      同类 AIR 手牌 eq 落在 18~25% 区间(数学上全部 +EV)时会被这 7pp 误杀。
       //   修法: 仅当 hero 已成对/成牌(非 AIR)才保留该项——此时"对子被反超"的语义才成立。
-      if(_aiCommHigh>_aiHoleHigh&&hClass!=='AIR'){_aiThreat+=7;_aiThreatWhy.push('公共牌高张压制');}
+      // 注: handClassify() 返回对象 {name:'AIR'|'MEDIUM'|...} 而非字符串(实测: QTo@Ad8h6s
+      //   → {"name":"AIR","desc":"空气/弱牌","outs":0}), 故取 .name 之后再比对, 勿直接比对象。
+      var _hClassName=(hClass&&typeof hClass==='object'&&hClass.name)?hClass.name:hClass;
+      if(_aiCommHigh>_aiHoleHigh&&_hClassName!=='AIR'){_aiThreat+=7;_aiThreatWhy.push('公共牌高张压制');}
       if(_aiDrawFactor<1){_aiThreatWhy.push('街'+_aiStreet+'衰减'+(Math.round(_aiDrawFactor*100))+'%');}
     }catch(_aiThrE){console.log('[V2.9.712威胁] 异常跳过威胁修正: '+_aiThrE.message);}
 
