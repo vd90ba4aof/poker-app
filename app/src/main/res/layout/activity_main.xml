@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.718 策略引擎精度版 · 5项翻前/翻后逻辑修复: ①对手位置大小写归一(SeatRole返回UTG/BU/CO等大写, 而 _pos5/_fp/gO/gT/gC 全小写键 → 实测 gO('UTG')=95手=O6.btn兜底, 对手范围被系统性按庄位最宽计算 → eq虚高; _pos5('BU'/'UTG') 一律返MP → 防守表错配) ②新增极短码(≤3BB)底池赔率闸: 修 Nash闸误用对手码深把我方短码逻辑整体关闭、退回100BB GTO表的P0过度弃牌 ③翻前底池物理下限钳制(低于SB+BB=1.5BB的读数按物理下限处理, 修赔率被高估) ④limp分支吞掉FlatCall防御的else-if屏蔽 ⑤翻后allin门槛对AIR牌不再计公共牌高张压制(消除双重计税) | 50项引擎测试全绿"
+        android:text="V2.9.719 策略引擎治本版 · 6项翻前/翻后逻辑修复: ①翻后eq口径修正——面对单个下注按「击败下注者」而非「领先全场」计算(实测顶对K: 领先全场21%→击败下注者61%, 修顶对无理由弃牌) ②撤掉多人池eq二次折扣(MEDIUM/DRAW 0.92→0.97, 原折扣与源码自述「多对手MC已客观分摊」矛盾) ③翻后全押门槛去除威胁+人数双重计税(实测门槛22%→赔率+3) ④新增翻前vs-open真实权益表(169手×6位置×5000次MC仿真, 修「用vs随机的eq打vs-open的仗」) ⑤翻前质量门挂钩数学 + 纯赔率兜底通道(治该跟不跟/烂牌乱跟) ⑥River表fold出口加底池赔率守卫 | 50项引擎测试全绿"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
