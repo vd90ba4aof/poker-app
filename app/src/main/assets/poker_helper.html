@@ -9328,7 +9328,15 @@ function eQ(key,nOpponents){
     var ent=_EQ_NONPAIR[combo];
     if(ent&&s>=0){base=ent[s];}
     else if(ent){base=Math.round((ent[0]+ent[1])/2);}
-    else{base=35;console.log('[eQ] 未匹配手牌:'+key+'，fallback eq=35');}
+    // V2.9.717 FIX(连带修复): fallback 必须保持 base=30, 不得上调。
+    //   ① 本分支仅对非法/非标准 key('ZZ'/'A'/未按 s|o 归一的手牌符)生效——已实测
+    //      _EQ_PAIR + _EQ_NONPAIR 覆盖全部 169 个正常组合(缺失 0), 62o=37.6/32o=36.6 均
+    //      直接取表, 永不进入本分支, 故该值不影响任何真实手牌决策。
+    //   ② 但 CI 门禁 tests/engine_lock_regression.test.js 用例7 对源码字面 'base=30'
+    //      做静态存在性断言(守护 V2.9.605 offsuit BTN 弱牌不得因 posMod+6 越闸),
+    //      V2.9.717 重标定曾误将其改为 35 → 门禁失败 → release-build 被 skip, APK 从未构建。
+    //   ③ 结论: 30 为门禁契约值, 改动必须同步 tests/engine_lock_regression.test.js。
+    else{base=30;console.log('[eQ] 未匹配手牌:'+key+'，fallback eq=30');}
   }
   // V2.9.717: 多人衰减按类别分化(实测曲线, 非单一 0.92)
   //   ★ 索引换算(易错点, 已用实测数据校准, 勿再简化): 曲线下标 = 对手数 nOpponents 本身,
