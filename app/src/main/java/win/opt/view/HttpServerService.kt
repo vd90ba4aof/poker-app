@@ -53,6 +53,21 @@ class HttpServerService : Service() {
             }
             return 0
         }
+
+        // V2.9.717 FIX(P0, 实证非猜测): 版本号提取必须以 ENGINE_VERSION 权威字面量为唯一来源。
+        //   [缺陷] 旧实现 Regex("""V(\d+\.\d+\.\d+)""").find() 取文件"首个"匹配,
+        //          而 poker_helper.html 首个 V2.9.xxx 出现于 L21 的 CSS 注释
+        //          「/* V2.9.63: 7色信号闪烁动画 */」→ assetsVer 恒被解析为 "2.9.63"。
+        //   [后果] loadPokerHelperHtml 的清除判据 compareSemVer(hotVer, assetsVer) < 0 几乎永假,
+        //          旧热更新文件永远不删除, remote 旧版永久压制 assets 新版(热更新回滚通道失效)。
+        //   [实测] assets 真身=2.9.717 时: hot=2.9.716 vs 误解析 assetsVer=2.9.63 → 判定 +1 → 保留(错);
+        //          修正后 compareSemVer("2.9.716","2.9.717") = -1 → 删除(对)。
+        //   [处理] 主路径锚定权威字面量; 仅当目标文件确无该字面量(极旧热更新产物)才兜底首匹配。
+        private fun extractEngineVersion(html: String): String {
+            Regex("""ENGINE_VERSION\s*=\s*['"](\d+\.\d+\.\d+)['"]""").find(html)
+                ?.let { return it.groupValues[1] }
+            return Regex("""V(\d+\.\d+\.\d+)""").find(html)?.groupValues?.get(1) ?: ""
+        }
     }
 
     // R6-fix: 热更新并发信号量（最多1个并发下载）
@@ -78,8 +93,7 @@ class HttpServerService : Service() {
                 val is_ = assets.open("poker_helper.html")
                 val assetsHtml = java.io.InputStreamReader(is_, "UTF-8").readText()
                 is_.close()
-                val verMatch = Regex("""V(\d+\.\d+\.\d+)""").find(assetsHtml)
-                assetsVer = verMatch?.groupValues?.get(1) ?: ""
+                assetsVer = extractEngineVersion(assetsHtml)
             } catch (_: Exception) {}
             // v2.9.35: 优先加载热更新文件（持久化的远程版本）
             // V2.9.113: 但如果热更新版本比assets旧，删除热更新文件
@@ -87,8 +101,7 @@ class HttpServerService : Service() {
                 val hotFile = File(filesDir, HOTLOAD_FILE)
                 if (hotFile.exists()) {
                     val hotHtml = hotFile.readText(Charsets.UTF_8)
-                    val hotVerMatch = Regex("""V(\d+\.\d+\.\d+)""").find(hotHtml)
-                    val hotVer = hotVerMatch?.groupValues?.get(1) ?: "0"
+                    val hotVer = extractEngineVersion(hotHtml).takeIf { it.isNotEmpty() } ?: "0"
                     if (assetsVer.isNotEmpty() && compareSemVer(hotVer, assetsVer) < 0) {
                         // 热更新版本比assets旧→删除，用assets的新版
                         hotFile.delete()

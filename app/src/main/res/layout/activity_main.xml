@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.716 数据保全版 · 回退714/715会话隔离(打牌→重启→导出为空的缺陷): 手牌历史/DRTA对手统计/引擎统计/Session统计全部永久保留, 重启不清空, 条数上限自然淘汰(手牌100条/识别300条) | 实证: 010556日志打牌后重启导出全空 | 50项引擎测试全绿"
+        android:text="V2.9.717 策略引擎精度版 · 6项策略引擎修复: ①eQ翻前静态权益表全量重标定(169组合6000次/组仿真对齐, 原非对子组平均偏差8.38pp) ②多人池衰减曲线按手牌类型分化(平均误差12.00pp→3.04pp) ③_hc2key手牌档位细分(表数据可达性24pct→52pct) ④cbFreq单位统一为0~1口径 ⑤_mcFallbackEq与eQ共用衰减曲线 ⑥postflopActiveCount语义定论复核后加护栏 | 50项引擎测试全绿"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
