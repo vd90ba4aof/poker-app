@@ -1534,7 +1534,7 @@ function showToast(msg){
 //   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
 //   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
 //   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
-var ENGINE_VERSION='2.9.717';
+var ENGINE_VERSION='2.9.718';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -3783,6 +3783,20 @@ function decidePreflop(k){
   // V3.9/V2.9.632: 入参防护 — 手牌非法返回null,入口归一后由decide()下游统一安全fold(NO_DATA),不再回落旧引擎
   if(!k||typeof k!=='string'||k.length<2){return null;}
   var p=G.pos||'btn', scene=G.scene||'check', stk=G.stk||100000, pot=G.pot||1, bet=G.bet||0;
+  // ===== V2.9.718 FIX(P0): 翻前底池物理下限钳制 =====
+  // 【铁证】poker_log_20260923_222211: blind_sb=1250 / blind_bb=2500 → 翻前底池物理下限
+  //   = SB+BB = 3750 chips = 1.5BB(任何位置、任何行动前都不可能更低)。
+  //   实测 rawPot(chips): #3=1300 #4=1500 #5=1100 #6=2200 #7=2900 —— 5/8 手低于 3750;
+  //   仅 #8 rawPot=5000 与 #1(翻后)15960 合规。即底池读数普遍低于盲注之和=视觉层漏读。
+  // 【后果】底池赔率 = bet/(pot+bet), pot 被低估 → 门槛虚高 → 系统性过度弃牌。
+  //   例: K7o@BB 读数 pot=0.5BB(真值≥1.5BB) bet=0.5BB → 赔率被算成33%(真值25%),
+  //        与"多人衰减后 eq=40%"比较时由 +EV 变 -EV, 直接导致误弃。
+  // 【修法】仅当 pot 低于物理下限 1.5BB 时钳制(正常读数零改动), 并留日志可追溯。
+  var _potFloorBB=1.5;
+  if(pot<_potFloorBB){
+    console.log('[V2.9.718底池下限] 翻前 pot='+pot+'BB < 物理下限'+_potFloorBB+'BB(SB0.5+BB1)→钳制(读数低于盲注之和,赔率被高估)');
+    pot=_potFloorBB;
+  }
   var spr=calcSPR(), eq=eQ(k);
   var profile=DRTA.getProfile(), oppType=G.opp||'unknown', p5=_pos5(p);
 
@@ -3825,6 +3839,39 @@ function decidePreflop(k){
   // 注意: 仅作用于翻前; 翻后函数读到 _pH 字段可独立判断, 不再二次修正.
   if(_depthTier==='short'&&_pH<=2)eq-=3;
   else if(_depthTier==='deep'&&_pH>=7)eq+=3;
+
+  // ===== V2.9.718 FIX(P0): 极短码(≤3BB)底池赔率闸 —— 前置、全场景 =====
+  // 【铁证】poker_log_20260923_222211 (v2.9.717): 我方码深 0.84~1.92BB, 8手中5手全 fold,
+  //   reason="[SE]vs MP open不在3B范围"。已在沙箱逐字复现7/8手(含reason), 内部日志铁证:
+  //   "[Nash闸] 面对加注0.5BB < 对手有效码深12BB×90%→非全码,不走Nash表(走常规范围)"
+  // 【根因链】① Nash闸(NashPushFold.decide scene==='raise') 判据取「对手最浅码深」12BB,
+  //     而非我方码深2BB → 我方超短码+对手深码时, 该闸把短码逻辑整体关闭;
+  //   ② V2.9.648 的极短码赔率闸只写在 scene==='allin' 分支里, 覆盖不到 scene==='raise';
+  //   ③ 短码逻辑被关后, 引擎退回 100BB 口径的 GTO 3B 防守表(_3B vs_XX.from_XX)
+  //     → K7o/KTo/55 这类在 2BB 下必跟的牌被 100BB 图表判弃 → 灾难性过度弃牌。
+  // 【修法】≤3BB 时翻后已无博弈空间(equity realization≈100%), 唯一正确判据是底池赔率;
+  //   在 Nash 与 SE 表之前前置一道纯数学闸, 使 100BB 图表不再成为短码局的决策者。
+  //   边际 = 6pp(eq 静态表 + 位置误差) + Multiway.callThresholdAdj()(多人池同口径加成)。
+  //   eq 用 eQ(k, 对手数) 多人衰减口径(与 eQ 设计一致), 不用单挑 eq 高估多人池胜率。
+  if(bet>0&&_myEffBB>0&&_myEffBB<=3&&scene!=='check'&&scene!=='open'){
+    var _xsPo=bet/Math.max(pot+bet,1)*100;
+    var _xsN=Math.max(1,((G.act||2)-1));
+    var _xsEq=eQ(k,_xsN);
+    var _xsNeed=_xsPo+6+Multiway.callThresholdAdj();
+    // V2.9.718 边界: 本闸只"救回原本会被100BB图表误弃的边际牌", 不接管强牌的加注/推全下决策。
+    //   用【名义单挑 eq】eQ(k) 判定牌力档位(与上面多人衰减后的 _xsEq 分工, 避免人数影响档位判定)。
+    //   实测 eQ(k): AA84.7/KK82.6/QQ79.4/JJ78.7/TT74.1/99 71.5/AKo66.2/AKs65/AQo64.6/AQs63.1
+    //     → 取 62 为界: TT+/AK/AQ 全部保留原 3bet/推全下通道(短码最需要弃牌率与价值);
+    //       AJs60.8/KQs60.8/55 60.7/KTo59.3/QTo57.9/K7o57.2 归入本闸救回。
+    //   对拍实证: 无限幅时 AKs/AQs/AKo/JJ/TT 被从 raise 降级为 call(丢EV), 限幅后差异消失。
+    if(_xsEq>=_xsNeed&&eq<62){
+      console.log('[V2.9.718极短码赔率闸] '+k+' '+p+' '+_myEffBB+'BB pot='+pot+'BB bet='+bet+'BB 赔率='
+        +Math.round(_xsPo)+'% 需='+Math.round(_xsNeed)+'%(赔率+6+多人'+Multiway.callThresholdAdj()
+        +') eq='+Math.round(_xsEq)+'%(n='+_xsN+'对手)→call(不查100BB GTO表)');
+      var _xsEx=applyExploit(_xsEq,'call',oppType,{bet:bet,pot:pot});
+      return{a:'call',v:bet,r:'极短码赔率call '+k+' eq'+Math.round(_xsEq)+'%≥需'+Math.round(_xsNeed)+'%(码深'+_myEffBB+'BB 赔率'+Math.round(_xsPo)+'%)',eq:_xsEx.eq,c:_xsEq>=55?'m':'l',scene:'极短码跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_xsEq,pot,bet,0),exploit:_xsEx.exploit,_se:true,_seFreq:1,_xsShort:true};
+    }
+  }
 
   // V3.24→rev10→V2.9.556: 纳什push/fold — 对手码深<=15BB触发, 直读不再用stk绝对值
   var _nashEffBBpre=_oppEffBB;
@@ -4260,7 +4307,12 @@ function decidePreflop(k){
       //   优化依据: V2.9.661首测通过率仅4%(1/23),100%翻前call正确率=策略过紧铁证
       //   调整: 基准50%→47%, OOP缓冲5%→3%, 新增K9o+offsuit质量标准
       // V2.9.687 FIX(P0): FlatCall防御不应受位置限制——limp是主动入池,FlatCall是被动防守
-      else if(bet>0&&_flatCallPosOK){
+      // V2.9.718 FIX(P1): else→if(消除"limp分支吞掉FlatCall")——
+      //   【BUG】原写法 if(_isLimp&&_limpPosOK){...} else if(bet>0&&_flatCallPosOK){...}:
+      //     _isLimp 为真(小额下注; 短码局几乎恒真)但 limp 分支内部质量门/eq门未过而【无 return】时,
+      //     控制流直接落到块尾的 return _fold(...), FlatCall 防御被 else 永久屏蔽 → 过度弃牌。
+      //   【修法】limp 分支成功时必然 return, 失败时不 return 自然落入 FlatCall, 两分支互斥无重复决策。
+      if(bet>0&&_flatCallPosOK){
         // 手牌质量标准(比limp兜底略宽——新增K9o+offsuit,面对raise中等Kx可防守)
         var _fcSuited=(k.length>=2&&k.charAt(k.length-1)==='s');
         var _fcPair=(k.length>=2&&k.charAt(0)===k.charAt(1));
@@ -4387,7 +4439,12 @@ function decidePreflop(k){
       }
       // V2.9.662: Flat Call防御优化(同第一路径)——基准47%+OOP3%+K9o+offsuit
       // V2.9.687 FIX(P0): FlatCall防御不应受位置限制——limp是主动入池,FlatCall是被动防守
-      else if(bet>0&&_flatCallPosOK){
+      // V2.9.718 FIX(P1): else→if(消除"limp分支吞掉FlatCall")——
+      //   【BUG】原写法 if(_isLimp&&_limpPosOK){...} else if(bet>0&&_flatCallPosOK){...}:
+      //     _isLimp 为真(小额下注; 短码局几乎恒真)但 limp 分支内部质量门/eq门未过而【无 return】时,
+      //     控制流直接落到块尾的 return _fold(...), FlatCall 防御被 else 永久屏蔽 → 过度弃牌。
+      //   【修法】limp 分支成功时必然 return, 失败时不 return 自然落入 FlatCall, 两分支互斥无重复决策。
+      if(bet>0&&_flatCallPosOK){
         var _fc2Suited=(k.length>=2&&k.charAt(k.length-1)==='s');
         var _fc2Pair=(k.length>=2&&k.charAt(0)===k.charAt(1));
         var _fc2OffBW=false;
@@ -5024,7 +5081,16 @@ function decidePostflop(k,_pfInj){
       _aiIdx.forEach(function(_ri){_aiCommHigh=Math.max(_aiCommHigh,12-_ri);});
       var _aiHoleHigh=0;
       (hole||[]).forEach(function(c){var _ri=R.indexOf(c.rank);if(_ri>=0)_aiHoleHigh=Math.max(_aiHoleHigh,12-_ri);});
-      if(_aiCommHigh>_aiHoleHigh){_aiThreat+=7;_aiThreatWhy.push('公共牌高张压制');}
+      // V2.9.718 FIX(P1): AIR(无对无听牌)不再计"公共牌高张压制"——消除双重计税
+      //   ① 本项原始依据写的是「我方对子可能已被反超」; hero 牌力为 AIR 时根本没有对子可反超,
+      //      判据 _aiCommHigh>_aiHoleHigh 对任何"比公共牌最高张小"的手牌都成立 → 误伤面极大。
+      //   ② 更关键: 与之比较的 eq 来自 mcVsRange/riverExactEquity —— 公共牌 5 张已全部参与模拟,
+      //      公共牌 A 的压制效应【已经计入 eq】, 再在门槛上加 7pp 属同一因素的二次计税。
+      //   实证(poker_log_20260923_222211 #1): QsTc @ Ad8h6s hClass=AIR, eq=31.9%,
+      //      门槛=赔率13+裕度3+威胁7(公共牌高张压制)+人数2=25% → 险过;
+      //      同类 AIR 手牌 eq 落在 18~25% 区间(数学上全部 +EV)时会被这 7pp 误杀。
+      //   修法: 仅当 hero 已成对/成牌(非 AIR)才保留该项——此时"对子被反超"的语义才成立。
+      if(_aiCommHigh>_aiHoleHigh&&hClass!=='AIR'){_aiThreat+=7;_aiThreatWhy.push('公共牌高张压制');}
       if(_aiDrawFactor<1){_aiThreatWhy.push('街'+_aiStreet+'衰减'+(Math.round(_aiDrawFactor*100))+'%');}
     }catch(_aiThrE){console.log('[V2.9.712威胁] 异常跳过威胁修正: '+_aiThrE.message);}
 
@@ -9079,9 +9145,26 @@ function pA(p){var m={utg:0,utg1:0.5,mp:1,mp1:1.5,hj:2,co:3,btn:4,sb:5,bb:5.5};r
 //   旧BUG: G._raiserRole='unknown'时回退G.pos→BB vs BB/BTN vs BTN等自引用→vs_XX.from_XX表不存在→
 //          UTG1 fallback永远不触发(raiserRole!='unknown')→直接走无表fold→错失+EV跟注
 //   修复: 回退'utg'(最紧raiser=最强范围=最保守),所有表都有UTG条目,且UTG1兜底逻辑仍可用作安全网
+// V2.9.718 FIX(P0 根因): 对手位置大小写归一
+//   【铁证1 范围错级】SeatRole.getRole() 返回大写(ROLES: 'BU'/'SB'/'BB'/'UTG'/'MP'/'CO'),
+//     而 _fp()/gO()/gT()/gC() 的范围表 O6/TB6/CB6 全部以小写为键。
+//     gO(p)=O6[_fp(p)]||O6.btn||O6.co → 入参 'UTG' 不在表里 → 静默兜底到 O6.btn(庄位最宽)。
+//     实测(tt=6): gO('utg')=43手 / gO('mp')=57手 / gO('co')=76手 / gO('btn')=95手,
+//                 gO('UTG')=gO('MP')=gO('CO')=gO('BU')=95手 —— 全部退化为庄位范围,
+//     导致 mcVsRange/eQ 的对手范围被系统性高估 → eq 全面虚高 → 过度跟注/过度加注。
+//   【铁证2 防守表错配】_pos5(p) 映射表键同样全小写,大写入参一律走默认 'MP':
+//     实测 _pos5('UTG')=_pos5('BU')=_pos5('CO')=_pos5('SB')=_pos5('BB')='MP'
+//     → 面对 BTN 开池(最宽)按 vs_MP 防守(过紧), 面对 UTG 开池(最紧)按 vs_MP 防守(过松)。
+//     实机日志 poker_log_20260923_222211: [SeatRole] role=UTG 而决策 reason="vs MP ..." 即此证。
+//   【铁证3 位置优势错判】L11700 _pfOrdDI[getOppPos()] 用小写键, 大写 → undefined → ||5 → IP/OOP 判定错。
+//   修法: 在单一真相源出口(getOppPos)归一,下游 _pos5/_fp/gO/gT/gC/_pfOrdDI 零改动。
+var _OPP_ROLE_NORM={utg:'utg',utg1:'utg1',mp:'mp',mp1:'mp1',hj:'hj',co:'co',btn:'btn',bu:'btn',sb:'sb',bb:'bb','sb_complete':'sb'};
 function getOppPos(){
   try{
-    if(G._raiserRole&&G._raiserRole!=='unknown')return G._raiserRole;
+    if(G._raiserRole&&G._raiserRole!=='unknown'){
+      var _oppR=String(G._raiserRole).toLowerCase();
+      return _OPP_ROLE_NORM[_oppR]||_oppR;
+    }
   }catch(e){}
   return 'mp'; // V2.9.674: utg→mp, 修正对手位置默认值——utg映射为UTG1表最紧导致大量手牌不在3B范围,mp更均衡覆盖
 }
