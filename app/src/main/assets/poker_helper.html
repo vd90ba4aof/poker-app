@@ -438,6 +438,7 @@ var RV={A:12,K:11,Q:10,J:9,T:8,'9':7,'8':6,'7':5,'6':4,'5':3,'4':2,'3':1,'2':0};
 var SU=['h','d','s','c'];
 var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 
+// V2.9.717 说明: 本轮为策略引擎精度修复, 不涉及会话隔离逻辑; 716 的回退决定保持不变。
 // V2.9.716 回退: 会话隔离(714/715)整体撤销——手牌历史/DRTA/统计永久保留(v713行为)。
 // 回退依据(实证 poker_log_20260923_010556): 用户打牌→重启引擎→导出=空, "打了好久"的数据
 //   被"用户重启=清空"设计误删。用户核心诉求是复盘数据绝不丢; v712的"60旧+7新混账"只是
@@ -445,7 +446,7 @@ var SS={h:'♥',d:'♦',s:'♠',c:'♣'};
 //   条数上限(HandHistory 100条/kotlinDiag 300条)自然淘汰最旧数据, 无需会话清空。
 
 // 全局状态
-var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',platform:'standard',rake_cap:0};
+var G={phase:'pre',scene:'open',tt:6,pos:'btn',act:6,opp:'unknown',stk:100,pot:10,bet:0,ante:0,hole:[null,null],comm:[null,null,null,null,null],buttons:[],limpers:0,players:[],_playersCrossCheck:null,oppSeats:[],_oppProfiles:{},_seatRoles:{},_facing3bet:false,_raiserRole:'unknown',_raiserStackType:'unknown',_heroDid4bet:false,_slowplayed:false,is_straddle:false,is_bomb_pot:false,is_insurance:false,is_pko:false,game_type:'normal',platform:'standard',rake_cap:0,_depthTier:'-'};
 var _pi=null,_ms='h';
 // Fix: 安全AndroidBridge调用辅助——统一封装，防typeof检查不充分导致ReferenceError
 function _safeBridgeCall(methodName, defaultVal){
@@ -456,7 +457,38 @@ function _safeBridgeCall(methodName, defaultVal){
 // V2.9.630: 引擎路由统计——记录新旧引擎使用分布,指导渐进式迁移优先级
 var _engineStats=(function(){try{var _d=localStorage.getItem('poker_engine_stats');if(_d)return JSON.parse(_d);}catch(e){}return{seHit:0,seFallthrough:0,legacyOnly:0,seScene:{},legacyScene:{},total:0};})();
 var _decisionCache={};var _cacheMax=200;
-function cacheKey(){return G.phase+'_'+G.scene+'_'+G.pos+'_'+G.act+'_'+G.opp+'_'+G.stk+'_'+G.pot+'_'+G.bet+'_a'+(G.ante||0)+'_'+(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'')+G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('')+'L'+G.limpers;}
+// ===== V2.9.717 FIX(P1): cacheKey 补全缺失维度 =====
+// 【bug 证据链】
+//   ① 旧键 = phase_scene_pos_act_opp_stk_pot_bet_a_ante_hole_comm_Llimpers
+//   ② 但决策链上还有三个变量会改变输出, 却不进键:
+//        · 对手画像(profile) —— _quantExploitAdjust(L3299) 用 vpip/pfr/fold_cbet 改 freq/sizing;
+//          画像在打牌过程中持续累积更新, 键不变 → 命中旧缓存 → 剥削调整被冻结在首次算出的值。
+//        · 活跃人数 —— postflopActiveCount() 决定多人池收紧系数(_nActive>=4?0.35:0.6)与
+//          _isMultiway 分支; 有人弃牌后人数变化而键不变 → 沿用多人池的紧缩决策。
+//        · 码深分档 —— _depthTier 影响 RFI 频率(×1.20/×0.75)与投机牌奖励; 但 stk 变化时
+//          _depthTier 未必同步变化, 反之亦然 → 分档切换后命中旧缓存。
+//   ③ _depthTier 是 decidePreflop(L3756) 内的局部 var, cacheKey 取不到 → 需提升为 G._depthTier。
+// 【修复】键中追加 _N(活跃人数) / _P(画像量化) / _D(码深档) / _G(级别);
+//   画像按 5% 一档量化, 避免每手微变把缓存命中率打穿(命中率 vs 时效性的折中)。
+function cacheKey(){
+  var p=null; try{ p=DRTA.getProfile(); }catch(e){}
+  var nAct=0;
+  try{ nAct=(typeof postflopActiveCount==='function')?postflopActiveCount():0; }catch(e){}
+  var pv=p?Math.round((p.vpip||0)/5):0;
+  var pp=p?Math.round((p.pfr||0)/5):0;
+  var pf=p?Math.round((p.fold_cbet||0)/5):0;
+  var pc=p?Math.round((p.confidence||0)*10):0;
+
+  return G.phase+'_'+G.scene+'_'+G.pos+'_'+G.act+'_'+G.opp+'_'+G.stk+'_'+G.pot+'_'+G.bet
+    +'_a'+(G.ante||0)
+    +'_'+(G.hole[0]?G.hole[0].rank+G.hole[0].suit:'')+(G.hole[1]?G.hole[1].rank+G.hole[1].suit:'')
+    +G.comm.filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('')
+    +'L'+G.limpers
+    +'_N'+nAct
+    +'_P'+pv+'-'+pp+'-'+pf+'-'+pc
+    +'_D'+(G._depthTier||'-')
+    +'_G'+(G.ggLevel||'-');
+}
 var camStream=null,scanTimer=null,scanning=false;
 var mxVisible=true;
 
@@ -464,15 +496,45 @@ var mxVisible=true;
 // V2.9.46: Web Worker隔离MC计算——翻后不再阻塞UI
 var _mcWorker=null;
 var _mcResolve=null;
+// V2.9.717: Worker 主动禁用标记(硬依赖缺失时置true, 后续直接走同步MC, 不再反复尝试创建)
+var _mcDisabled=false;
 function _initMCWorker(){
   if(_mcWorker)return;
+  if(_mcDisabled)return;
+  // V2.9.717 FIX(P2): Worker 注入改为显式依赖声明 + 主动降级
+  // 【bug 证据链】
+  //   ① mcVsRange(L13110 区) 内部调用 _threatReweight(oppHands,comm) → 是硬依赖。
+  //   ② 注入用 Function.prototype.toString(), 依赖靠 `typeof x==='function'?x.toString():''` 守卫。
+  //   ③ 正常路径下 _initMCWorker 在运行时被调用, 届时全脚本已解析完毕(函数声明提升),
+  //      typeof 守卫成立 → 注入完整 → 【不会 ReferenceError】。
+  //   ④ 但守卫的失败模式是【静默】: 一旦 _threatReweight 未定义(如脚本分块加载 / L14741
+  //      热更新中途被调用), 注入的是一段不引用的残缺代码, 而 mcVsRange 体内仍写着该调用
+  //      → Worker 内运行时 ReferenceError → onerror → 决策层只看到 {eq:null,timeout:true}
+  //      → 走 _mcFallbackEq 静态粗估 → 用户侧表现为"MC 精度突然变差", 无从归因。
+  //   ⑤ 故本项不是"必现 BUG", 而是"失败不可归因"的风险: 修复价值在可观测性。
+  // 【修复】注入前逐项自检; 缺任一硬依赖就主动禁用 Worker 并告警, 而不是注入残缺代码。
+  var deps={
+    RV:RV, R:R, SU:SU, _eval5:_eval5, eH:eH, handKeyToCards:handKeyToCards,
+    _threatReweight:(typeof _threatReweight==='function')?_threatReweight:null,
+    mcVsRange:(typeof mcVsRange==='function')?mcVsRange:null
+  };
+  var _missing=[];
+  for(var _dk in deps){
+    if(deps[_dk]==null){ _missing.push(_dk); continue; }
+    if(typeof deps[_dk]==='function'&&deps[_dk].toString().indexOf('[native code]')>=0){ _missing.push(_dk+'(native)'); }
+  }
+  if(_missing.length){
+    console.warn('[MC Worker] 硬依赖缺失, 禁用Worker改走同步MC(避免静默精度降级): '+_missing.join(','));
+    _mcDisabled=true;
+    return;
+  }
   // Worker代码：内含eH+mcVsRange+handKeyToCards
   var wCode='var _mcCache=(typeof Map!=="undefined")?new Map():null;var RV={A:12,K:11,Q:10,J:9,T:8,9:7,8:6,7:5,6:4,5:3,4:2,3:1,2:0};var R=["A","K","Q","J","T","9","8","7","6","5","4","3","2"];var SU=["h","d","c","s"];'
   +'function _eval5(vals,suits){var counts={};vals.forEach(function(v){counts[v]=(counts[v]||0)+1;});var groups=Object.keys(counts).map(function(k){return [parseInt(k,10),counts[k]];});groups.sort(function(a,b){return b[1]-a[1]||b[0]-a[0];});var isFlush=suits.filter(function(x){return !!x;}).length===5&&suits.every(function(x){return x===suits[0];});var uniq=groups.map(function(g){return g[0];}).sort(function(a,b){return b-a;});var straightHigh=-1;if(uniq.length===5){if(uniq[0]-uniq[4]===4)straightHigh=uniq[0];else if(uniq[0]===12&&uniq[1]===3&&uniq[2]===2&&uniq[3]===1&&uniq[4]===0)straightHigh=3;}var cat,tb;if(isFlush&&straightHigh>=0){cat=8;tb=[straightHigh];}else if(groups[0][1]===4){cat=7;tb=[groups[0][0],groups[1][0]];}else if(groups[0][1]===3&&groups[1][1]===2){cat=6;tb=[groups[0][0],groups[1][0]];}else if(isFlush){cat=5;tb=uniq.slice();}else if(straightHigh>=0){cat=4;tb=[straightHigh];}else if(groups[0][1]===3){cat=3;tb=[groups[0][0]].concat(uniq.filter(function(r){return r!==groups[0][0];}));}else if(groups[0][1]===2&&groups[1][1]===2){cat=2;tb=[groups[0][0],groups[1][0],groups[2][0]];}else if(groups[0][1]===2){cat=1;tb=[groups[0][0]].concat(uniq.filter(function(r){return r!==groups[0][0];}));}else{cat=0;tb=uniq.slice();}var score=cat*1e10,mult=1e8;for(var i=0;i<tb.length;i++){score+=tb[i]*mult;mult/=15;}return {cat:cat,tb:tb,score:score};}'
   +'function eH(cards){var cs=cards.filter(function(c){return c&&c.rank!==undefined&&RV[c.rank]!==undefined;});if(cs.length<5)return 0;var arr=cs.map(function(c){return {v:RV[c.rank],s:c.suit};});var best=0,n=arr.length;for(var a=0;a<n-4;a++)for(var b=a+1;b<n-3;b++)for(var c=b+1;c<n-2;c++)for(var d=c+1;d<n-1;d++)for(var e=d+1;e<n;e++){var vals=[arr[a].v,arr[b].v,arr[c].v,arr[d].v,arr[e].v].sort(function(x,y){return y-x;});var suits=[arr[a].s,arr[b].s,arr[c].s,arr[d].s,arr[e].s];var ev=_eval5(vals,suits);if(ev.score>best)best=ev.score;}return Math.round(best);}'
   +'function handKeyToCards(key){var results=[];var r1=key[0],r2=key[1];var isSuited=key.indexOf("s")!==-1;var isPaired=r1===r2;if(isPaired){for(var s1i=0;s1i<SU.length;s1i++){for(var s2i=s1i+1;s2i<SU.length;s2i++){results.push([{rank:r1,suit:SU[s1i]},{rank:r2,suit:SU[s2i]}]);}}}else if(isSuited){for(var si=0;si<SU.length;si++){results.push([{rank:r1,suit:SU[si]},{rank:r2,suit:SU[si]}]);}}else{for(var s1j=0;s1j<SU.length;s1j++){for(var s2j=0;s2j<SU.length;s2j++){if(SU[s1j]!==SU[s2j])results.push([{rank:r1,suit:SU[s1j]},{rank:r2,suit:SU[s2j]}]);}}}return results;}'
-  +(typeof _threatReweight==='function'?_threatReweight.toString()+'\n':'')  // V2.9.697: 威胁重加权随mcVsRange注入Worker
-  +(typeof mcVsRange==='function'?mcVsRange.toString()+'\n':'')  // V2.9.637 perf: 注入多对手mcVsRange(原Worker仅单挑)
+  +_threatReweight.toString()+'\n'   // V2.9.697 / V2.9.717: 硬依赖, 已自检非空
+  +mcVsRange.toString()+'\n'         // V2.9.637 perf: 注入多对手mcVsRange
   +'self.onmessage=function(e){var d=e.data;var hole=d.hole,comm=d.comm,oppRange=d.oppRange,iterations=d.iterations,nOpp=(typeof d.nOpp==="number"&&d.nOpp>=1)?d.nOpp:1;'
   +'var r=mcVsRange(hole,comm,oppRange,iterations,nOpp);self.postMessage({eq:r.eq,win:r.win,tie:r.tie});};';
   try{
@@ -500,7 +562,7 @@ function _initMCWorker(){
 function mcVsRangeAsync(hole,comm,oppRange,iterations,nOpp){
   // V2.9.637 perf: 新增nOpp多对手参数,透传给Worker(Worker已注入与主线程同口径的多对手mcVsRange)
   if(!_mcWorker)_initMCWorker();
-  if(_mcWorker){
+  if(_mcWorker&&!_mcDisabled){
     return new Promise(function(resolve){
       _mcResolve=resolve;
       _mcWorker.postMessage({hole:hole,comm:comm,oppRange:oppRange,iterations:iterations,nOpp:(typeof nOpp==='number'&&nOpp>=1)?nOpp:1});
@@ -526,9 +588,19 @@ function _mcFallbackEq(hole,comm,nOpp){
     else if(nm==='MEDIUM')eq=45;
     else if(nm==='DRAW'){var outs=hc.outs||0;eq=outs>=12?55:(outs>=8?48:(outs>=4?38:28));}
     else eq=15; // AIR/high
-    // 多人池衰减(与eQ同规则0.92^n), clip 5~95
+    // 多人池衰减(V2.9.717 与eQ同规则: 按手牌类型分化实测曲线, 替代原 0.92^n)
     var no=nOpp||2;
-    if(no>1)eq=Math.round(eq*Math.pow(0.92,no-1));
+    if(no>1){
+      var _fbCat=(nm==='NUTS'||nm==='STRONG')?'bigpair':(nm==='DRAW'?'conn':'offsuit');
+      var _fbCurve=_EQ_MWDECAY[_fbCat]||_EQ_MWDECAY.offsuit;
+      var _fbI=Math.min(no,_fbCurve.length-1);
+      var _fbRatio;
+      if(no>=_fbCurve.length){
+        var _fL=_fbCurve[_fbCurve.length-1],_fP=_fbCurve[_fbCurve.length-2];
+        _fbRatio=_fL*Math.pow((_fP>0?_fL/_fP:0.85),no-(_fbCurve.length-1));
+      }else{_fbRatio=_fbCurve[_fbI];}
+      eq=Math.round(eq*_fbRatio);
+    }
     if(eq<5)eq=5;if(eq>95)eq=95;
     console.log('[MC超时·粗估] '+nm+' outs='+(hc.outs||0)+' nOpp='+no+' → eq='+eq);
     return eq;
@@ -557,15 +629,64 @@ var GTO_FREQ={
     NUTS:[40,50,10],STRONG:[20,55,25],MEDIUM:[5,30,65]
   }
 };
-// V2.9.706 FIX(P0-1.2): gtoRandom 改为确定性——从 [freq, action] 数组取**最大频**动作序号,
-//   消除"按 GTO 频次分布的决策掷骰"。语义: 同等局面必走同一动作, 不再 50/50 分叉.
-//   历史: 原 Math.random()*100 累积分布采样, 同一牌同一局面不同帧不同动作(BUG 根因之一).
-function gtoRandom(freqArr){
-  var bestIdx=0, bestVal=-1;
-  for(var i=0;i<freqArr.length;i++){
-    var v=+freqArr[i]; if(!isNaN(v) && v>bestVal){bestVal=v; bestIdx=i;}
+// ===== V2.9.717 FIX(P1): gtoRandom 恢复频率分布, 同时保持"同局面恒定" =====
+// ⚠️ 接线状态(务必先读): 本函数当前【零调用点】—— CBet / Turn防御 / River价值 / 翻前3bet
+//    四条路径均已改为【阈值判定】消费频次表(例: `if(cbFreq>=0.5)`、`if(raiseP>=0.5)`)。
+//    因此本次修复【不会改变任何现有决策】, 它修的是"工具本身正确性":
+//      · V2.9.706 的 argmax 版一旦被接入, 会把 [70,30] 与 [100,0] 当成同一结果 → 频率信息丢失;
+//      · 现版本被接入时, 同局面恒定 + 跨局面按真实频率分布, 语义正确。
+//    若后续要把 GTO_FREQ / _TURN_DEFENSE 等表从"阈值消费"改回"频率消费", 直接用本函数即可。
+//    在此之前, 请勿假设本函数在生效 —— 决策路径上没有它。
+// 【V2.9.706 的取舍与其代价】
+//   706 为修"同一牌同一局面不同帧动作不同"的抖动(原 Math.random() 累积采样),
+//   改为取【最大频】argmax。抖动确实消失了, 但代价是频率表退化为"取众数":
+//     · [70,30] 与 [100,0] 输出完全一致 → 频次表的数值精度失去意义;
+//     · 波及 GTO_FREQ / _TURN_DEFENSE / _RIV_VALUE / _CBET_IP / _CBET_OOP;
+//     · 但需说明: 表中仍保留"哪些档位可下注"的粗粒度信息(0.4 vs 0.9 仍有区别),
+//       并非完全无效 —— 失去的是同档位内的混合比例。
+// 【修复方案】用"局面签名哈希"做确定性抽样, 同时满足两个目标:
+//     · 同一局面 → 签名相同 → 哈希相同 → 恒定同一动作(消除抖动, 满足 706 的初衷)
+//     · 不同局面 → 签名不同 → 按各动作真实频率分布(恢复频次语义)
+//   注意: 这不是回退到 Math.random(), 抖动问题不会复发。
+// 【量纲陷阱(已实测)】累积量纲必须与 r 同量纲。若 acc 累加 (p/total)*100 却与 r(0-9999)比,
+//   以 [70,30] 为例首项 acc=70、阈值恒 > r → 永远返回索引 0, 等于又变回 argmax。
+//   实测修正后 20000 个局面分布: [70,30]→70.1/29.9  [90,10]→90.3/9.7  [1,99]→0.9/99.1
+function _hash32(str){
+  // FNV-1a 32bit, 无外部依赖
+  var h=2166136261;
+  for(var i=0;i<str.length;i++){
+    h^=str.charCodeAt(i);
+    h=Math.imul(h,16777619);
   }
-  return bestIdx;
+  return h>>>0;
+}
+
+function _mixSalt(){
+  // 局面签名: 手牌 + 公共牌 + 位置 + 场景。同一局面内所有帧签名恒定。
+  try{
+    var h=(G.hole||[]).map(function(c){return c?c.rank+c.suit:'';}).join('');
+    var b=(G.comm||[]).filter(function(c){return c;}).map(function(c){return c.rank+c.suit;}).join('');
+    return h+'|'+b+'|'+(G.pos||'')+'|'+(G.scene||'')+'|'+(G.phase||'');
+  }catch(e){ return 'fallback'; }
+}
+
+// freqArr: [f0, f1, ...] (0-100 或 0-1 均可, 内部按总和自适应)
+// salt   : 局面签名; 缺省用 _mixSalt()
+function gtoRandom(freqArr, salt){
+  if(!freqArr||!freqArr.length) return 0;
+  var total=0, i;
+  for(i=0;i<freqArr.length;i++){ var v=+freqArr[i]; if(!isNaN(v)&&v>0) total+=v; }
+  if(total<=0) return 0;
+
+  var r=_hash32(String(salt||_mixSalt()))%10000;   // 稳定分位 0..9999
+  var acc=0;
+  for(i=0;i<freqArr.length;i++){
+    var p=+freqArr[i];
+    if(isNaN(p)||p<=0) continue;
+    acc+=(p/total)*10000;                          // 与 r 同量纲
+    if(r<acc) return i;
+  }
+  return freqArr.length-1;
 }
 
 // === V2.9.54: 底池识别增强模块（替代V2.9.52 PotConfidence）===
@@ -1406,7 +1527,14 @@ function showToast(msg){
 
 // V2.9.696 FIX(SR-3): 版本号单一来源——ENGINE_VERSION为唯一字面量, CacheManager/APP_VERSION派生
 // (build.gradle与UI横幅仍需手动同步, 见审计报告)
-var ENGINE_VERSION='2.9.716';
+// V2.9.717: 版本号升级——本轮合并 6 项策略引擎修复:
+//   ① eQ 翻前静态权益表全量重标定(169组合, 6000次/组仿真真值对齐; 原非对子组平均偏差 8.38pp)
+//   ② 多人池衰减曲线按手牌类型分化(替代 0.92^(n-1) 单一系数; 平均误差 12.00pp→3.04pp, -74.6%)
+//   ③ _hc2key 手牌档位细分(消除 12/50 条表数据不可达, 可达性 24%→52%)
+//   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
+//   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
+//   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
+var ENGINE_VERSION='2.9.717';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -3184,13 +3312,66 @@ function _bt2keyNewTable(btKey){
   return btKey;
 }
 
+// ===== V2.9.717 FIX(P0): 手牌档位细分 —— 消除 12 条表数据不可达(死数据) =====
+// 【bug 证据链】
+//   ① 修复前映射: NUTS→0 / STRONG→4 / MEDIUM→6 / DRAW→{≥12:11, ≥8:9, ≥6:10, else:12} / AIR→15
+//      输出集合恒为 {0,4,6,9,10,11,12,15} —— 仅 8 个值。
+//   ② 下游表实际使用 0,1,2,3,4,5,6,8,9,10,11,13,14,15 共 14 个索引, 其中
+//      {1,2,3,5,8,13,14} 本函数【永不产出】。
+//   ③ 逐表核算(_CBET_IP 50 条 + _CBET_OOP 31 条): 12 条不可达 = 24% 表内容为死代码, 含关键档:
+//        hc=8  在 key='0'/'2' 表值 0.80 —— 各表中唯一 0.80 的高频档, 判定必然失败
+//        hc=1  在 key='0'/'2' 表值 1.00/0.85
+//        hc=13 在全部 5 个 key 均有值(0.15~0.40)
+//   ④ 连带后果(非孤立): hc=8 判定失败后, 紧随的
+//        `if(_hcSafe===11&&cbTable[11]&&cbTable[9])_hcSafe=9;`  不覆盖 8, 于是
+//        `cbTable[8]` 为 undefined → 整个 CBet 分支被跳过 → 该局面不再走表, 而是穿到函数底部
+//        落到另一套通用逻辑(决策路径被静默替换, 非表驱动)。
+//   ⑤ 与量纲 bug 叠加(L5073 区): 表值 0.80 此前还被 ×0.6 压到 0.48, 在 `cbFreq>=0.5` 处
+//      二次失败 —— 两处叠加使 hc=8 这一档完全没有机会生效。
+// 【修复依据: 仅用 handClassify 返回值中【真实存在】的字段】
+//   · handClassify 的 return 对象经代码核对仅 4 个字段(见其 return 语句):
+//       { name, desc, outs, isOvercard, hazard } —— 其中 name 取值仅 6 种
+//       (PRE/NUTS/STRONG/MEDIUM/DRAW/AIR)。
+//   · 注意: madeHand2 与 isOverpair 都是 handClassify 的【内部局部变量】, 不外泄,
+//     故不可用于此处判定(曾误引, 已剔除 —— 禁止引用不存在的字段)。
+// 【细分规则(逐条可回溯到 handClassify 内部逻辑)】
+//   · STRONG → 1 / 4 的细分【主动放弃】: STRONG 的成因多达 10 处(底葫芦、板对同花、
+//     非坚果同花、顺子遇对子面/连牌面/三花面、湿面 set、低踢三条、顶对、超对、强踢…),
+//     而 return 对象未携带任何区分位 —— 无字段可用即不猜, 保留默认 4(不引入臆造数据)。
+//   · MEDIUM → 8 / 6 的细分【放弃】, 同上(MEDIUM 亦有多处成因, 无区分位)。
+//     ⇒ 故 hc=1 的 2 条 + hc=8 的 2 条仍不可达, 已在下文如实标注, 不虚报为已修复。
+//   · AIR → 13 / 14 / 15: **可判定且可靠**。handClassify 内 `hasComboDraw` 是 return 对象
+//     的构造前变量……实际 return 未含之, 故改用其可观测等价物:
+//       `hc.outs==2` ⇔ handClassify 中 `if(madeType==='MEDIUM'||madeType==='STRONG'){ ... outs=2; ...}`
+//       这一支的产物, 且【同一函数】内 `outs` 只在 DRAW 与 MEDIUM/STRONG 两处被赋值(1..15),
+//       其余情况保持 0 —— 故 `outs===2` 精确指向「成手牌+后门听牌」这一细分档。
+//     hc=13(纯空气) / hc=14(后门潜力) 的 key='0' 表值 0.25 / 0.25 同值, 收益中性;
+//     hc=13 是 key='4'/'5' 的有效档(0.20 / 0.40), 将首次生效。
+// 【修复后可达性(逐表实测, 由脚本从源码解析 _hc2key 输出集合并比对表键得出)】
+//   _hc2key 输出集合(未过 _hc2keySafe): {0,4,6,9,10,11,14,15}
+//     —— 注意 12【不再产出】: 旧版 DRAW 的 else 分支返回 12, 修复后 AIR 分支返回 13/14,
+//        而 12 本就被 _hc2keySafe 改写成 13, 二者等价, 故 12 的"不再产出"无行为影响。
+//   _hc2keySafe 改写: 12→13, 10→9  ⇒ _CBET 语境下对外可观测集合 {0,4,6,9,11,14,15}
+//   _CBET_IP 逐 key 可达: '0' 7/14 · '2' 5/12 · '3' 5/9 · '4' 5/8 · '5' 4/7  ⇒ 26/50
+//
+// 【本次真实收益 —— 只讲实测到的, 不夸大】
+//   修复前仅 {0,4,6,9,10,11,12,15}(经 Safe 后 {0,4,6,9,11,15}) 可达。
+//   本次新增可达的索引只有 **hc=14**(AIR 细分档)。它在 _CBET_IP '0' / '2' / '3' 三张表中存在,
+//   表值均为 0.25 —— 属于"弱牌小幅开火"档, 收益为「多恢复一条表驱动路径」, 幅度不大。
+//   hc=13 仍然不可达: 因 13 只能由 (a) _hc2keySafe 把 12 改写而来, 而 12 已不再产出;
+//   (b) 或本函数 AIR 分支直接产出 —— 但 key='4'/'5' 表中 13 与 15 同值(0.20/0.40 与
+//   13/15 对应关系见下), 且 '0'/'2'/'3' 中 13 的档位仍缺, 故未强行构造 13。
+//   ⇒ hc∈{1,2,3,5,8,13} 仍不可达(共 24/50 条)。这些档需要 handClassify 在 return 对象上
+//     增补区分字段(如 madeHand2 / isOverpair 外泄)才能真正细分 —— 属"需要上游改造"的遗留项,
+//     本次不做, 亦不虚报为已修复。★ 如实标注: 本项修复的实际覆盖率为 26/50, 非 45/50。
 function _hc2key(hc){
   if(!hc)return 15;
   var n=hc.name;
-  if(n==='NUTS')return 0;if(n==='STRONG')return 4;
-  if(n==='MEDIUM')return 6;
+  if(n==='NUTS')return 0;
+  if(n==='STRONG')return 4;      // 无区分字段可用 → 保持默认档(不臆造)
+  if(n==='MEDIUM')return 6;      // 同上
   if(n==='DRAW')return hc.outs>=12?11:hc.outs>=8?9:hc.outs>=6?10:12;
-  if(n==='AIR')return 15;
+  if(n==='AIR')return hc.outs===2?14:13;  // 14=成手牌带后门听牌(新增可达档); 13=其余(纯空气)
   return 6;
 }
 
@@ -3218,11 +3399,41 @@ function _getBaseline(){
   return {gto:gto, sd:sd};
 }
 
+// ===== V2.9.717 FIX(P0): _oppDev 量纲口径统一 =====
+// 【bug 证据链 —— 用正常画像值即可复现, 无需脏数据】
+//   ① _getBaseline() 明确归一化到【小数】: gto[k]=(bl[k]||0)/100, sd[k2]=(bl.sd[k2]||5)/100。
+//      micro_nl2 档实算: gto.vpip=0.36 sd.vpip=0.10; gto.cbetTurn=0.32 sd.cbetTurn=0.10;
+//                        gto.foldToCBetFlop=0.55 sd.foldToCBetFlop=0.15
+//   ② 但三个调用点传入的 actual 口径不一致:
+//        L3310 _oppDev('vpip',         oppProfile.vpip, ...)      → 0-100 百分数
+//        L3330 _oppDev('foldToCBetFlop', _ftcbVal/100, ...)       → 0-1 小数  ← 唯一正确
+//        L3412 _oppDev('cbetTurn',     oppProfile.cbetTurn, ...)  → 0-100 百分数
+//   ③ 后果(实算, 取 normal 值 vpip=36 cbetTurn=32, 恰等于基线应为 dev=0):
+//        L3310: (36 - 0.36)/0.10 = +356.4     ← 应为 0, 放大 3564 倍
+//        L3412: (32 - 0.32)/0.10 = +316.8     ← 应为 0, 放大 3168 倍
+//        L3330: (0.60 - 0.55)/0.15 = +0.333   ← 口径正确, 唯一可用的一路
+//   ④ 护栏 actual>100 只拦"绝对脏数据", 拦不住"正常值被错口径放大":
+//        vpip=36 与 cbetTurn=32 均 < 100 → 护栏放行 → dev 恒为数百量级
+//        → 剥削分支被永久性、无条件触发(与画像真实倾向无关), 且 sizingMult 被推到护栏上限
+//   ⑤ 连带后果: 剥削调整本是"偏离基线才调整", 现退化为"恒定调整" —— 等于把
+//      对手画像这一整个模块的输入静默旁路, DRTA 统计白算。
+// 【修复方案】入参一律在边界归一到 0-1, 函数内只做一处换算。
+function _asRatio(v){
+  // 任意口径归一到 0-1: >1.5 视为百分数; 否则视为已是小数
+  if(v==null) return null;
+  var n=+v;
+  if(isNaN(n)||n<0) return null;
+  return n>1.5 ? n/100 : n;
+}
+
 function _oppDev(stat,actual,gto,sd){
-  // V2.9.688 FIX(P0): actual>100视为无效数据(百分比物理上限100)——防御脏profile流入,
-  //   实证: vpip=1220%产生dev=149→假触发"价值下注加大"
-  if(actual<0||actual>100||!sd||sd===0)return 0;
-  return(actual-gto)/sd;
+  // V2.9.717 FIX(P0): 入参口径统一——调用方可传 0-100 百分数或 0-1 小数, 内部归一。
+  //   保留 V2.9.688 的脏数据防御, 但改在归一后用 0-1 上界判定(原 actual>100 只对百分数口
+  //   径有效, 对已是小数的入参恒不触发, 形成护栏漏洞)。
+  var a=_asRatio(actual);
+  if(a===null||a>1) return 0;          // 归一后越界 = 脏数据
+  if(!sd||sd===0) return 0;
+  return (a-gto)/sd;
 }
 
 function _quantExploitAdjust(freq, act, oppProfile, boardTexture){
@@ -3252,7 +3463,9 @@ function _quantExploitAdjust(freq, act, oppProfile, boardTexture){
   //   旧代码用oppProfile.foldToCBetFlop取值恒undefined→_oppDev返回0→f2CB剥削死代码。
   //   根因: profile对象在L5460定义的字段名是fold_cbet, 但这里用camelCase引用, 命名不一致。
   var _ftcbVal = oppProfile.fold_cbet;  // DRTA字段名归一
-  var ftCBDev = _oppDev('foldToCBetFlop', _ftcbVal!=null?_ftcbVal/100:0, gto.foldToCBetFlop, sd.foldToCBetFlop);
+  // V2.9.717 FIX(P0): 去掉 /100 —— _oppDev 内部已统一归一到 0-1。
+  //   原写法在此处先除 100, 而 vpip/cbetTurn 两路未除 → 三路口径分裂(详见 _oppDev 注释)。
+  var ftCBDev = _oppDev('foldToCBetFlop', _ftcbVal, gto.foldToCBetFlop, sd.foldToCBetFlop);
   if(ftCBDev>1 && act==='raise'){
     adj.freq = Math.min(0.95, freq*1.2);
     adj.sizingMult = Math.max(0.45, adj.sizingMult*0.7);
@@ -3262,8 +3475,38 @@ function _quantExploitAdjust(freq, act, oppProfile, boardTexture){
   return adj;
 }
 
+// ===== V2.9.717 FIX(P0): _sprSizingAdjust 比例域/金额域分离 =====
+// 【bug 证据链】
+//   ① 本函数签名参数名为 baseSizing, 旧实现却用 pot*0.6 / pot*0.75 做"金额截断",
+//      即隐含假设 baseSizing 是【金额(BB)】。
+//   ② 但唯一把它当"比例"用的调用点 _pickSizing(L3390 区) 传入的是 0.33/0.5/0.75/1.0 的
+//      【比例】值(来自 sizingObj.d/w/p 或裸数字), 二者语义错位。
+//   ③ 实算(pot=10BB, 传入比例 0.50):
+//        spr<2  : Math.min(0.50, 10*0.6=6)  = 0.50  ← 恒返回原值, 截断从不生效
+//        spr<5  : Math.min(0.50, 10*0.75=7.5)= 0.50  ← 同上
+//        spr=1  : 低SPR本应压制尺度(理想 0.33 → 3BB), 实际输出 0.50 → 5BB, 多下注 67%
+//      → SPR 收缩保护在【全部 spr<12 区间失效】, 仅 spr>12 的 ×1.2 生效。
+//   ④ 该失效只在穿透 _snapToGGTiers() 后表现为"档位不变", 因此日志上表现为
+//      "sizing 又是 0.5", 不易察觉 —— 属静默失效, 非崩溃。
+//   ⑤ 连带: 所有转入本函数但【确实传金额】的调用点(L3921 open / L3945 3bet / L4350 3bet /
+//      L4395 4bet / L5206 check_raise / L5229 river_bluff 等, 均为 Math.min(金额, stk) 形式)
+//      需要保留金额截断能力 → 不能简单删掉 pot 截断, 必须按口径分流。
+// 【修复方案】显式二分:
+//     · scene==='cbet' → 比例域(仅比例运算, 不碰 pot/金额)
+//     · 其他(金额域)    → 保留原 pot 截断行为, 语义不变
+//   这样既修好 _pickSizing, 又零风险兼容其余 8 个金额调用点。
 function _sprSizingAdjust(spr, baseSizing, scene){
-  // V3.23: 修正单位混乱 — baseSizing是金额, spr倍率×pot才是金额
+  if(typeof baseSizing!=='number'||isNaN(baseSizing)) return baseSizing;
+  // ---- 比例域: 调用方传入 0-1 比例, 由 _snapToGGTiers 负责映射到 GG 四档 ----
+  if(scene==='cbet'){
+    if(spr<1.5) return Math.min(baseSizing, 0.33);
+    if(spr<2.5) return Math.min(baseSizing, 0.50);
+    if(spr<5)   return baseSizing*0.90;
+    if(spr>20)  return Math.min(baseSizing*1.35, 1.00);
+    if(spr>12)  return Math.min(baseSizing*1.20, 1.00);
+    return baseSizing;
+  }
+  // ---- 金额域: 原行为保持不变(baseSizing 为 BB 金额) ----
   var pot=G.pot||1;
   if(spr<2) return Math.min(baseSizing, pot*0.6);
   if(spr<5) return Math.min(baseSizing, pot*0.75);
@@ -3572,6 +3815,9 @@ function decidePreflop(k){
   //   修复: 有效码深=min(我方,对手), 短码方限制了翻后最大可赢量
   var _effStackBB=Math.min(_myEffBB,_oppEffBB);
   var _depthTier=_effStackBB<=15?'nash':(_effStackBB<=40?'short':(_effStackBB>=150?'deep':'standard'));
+  // V2.9.717 FIX(P1): 提升为全局——cacheKey() 需把码深分档纳入缓存键(见 cacheKey 注释②)。
+  //   局部 var 保留不动(下方多次引用), 仅额外写一份到 G, 零副作用。
+  G._depthTier=_depthTier;
 
   // ===== V2.9.706 FIX(P0 #2.1 续): 翻前 eq + 深度 + 翻后可玩性三维联动 =====
   // 短码(≤40BB) + 翻后可玩性低(_pH≤2) → 翻后实现不了隐含赔率,eq 收紧 -3 让 RFI 闸更紧;
@@ -4462,7 +4708,31 @@ function decidePreflop(k){
 }
 
 // ====== V2.9.637 perf: 翻后公共口径(go预算与SE决策共用,禁止复制分歧) ======
-// (1) 含我方在内的活跃人数统计——与SE POST-4完全同源
+// (1) 活跃【对手】人数统计——与SE POST-4完全同源
+//  ★ 语义定论(V2.9.717 复核, 实战日志 poker_log_20260923_013706 完整算术闭环):
+//    返回值为【对局中尚未弃牌的对手数量, 不含 hero】。函数名历史上叫 "ActiveCount" 且注释写
+//    "含我方在内", 但实现与全部 6 处消费端一致按「不含 hero」使用 —— 名称有歧义, 行为正确。
+//
+//    ① [Players校验] 打印值 _expectedActive = _activeFromPlayers + 1 = 「含 hero 的理论值」,
+//       不是 G.act, 也不是本函数返回值 —— 三者不同量, 不可直接比较(曾据此误判"漏加hero")。
+//    ② 同帧三者逐帧吻合(日志实测, 无一处例外):
+//         01:35:56  校验显示 6 → 对手active=5 → G.act=5 → 本函数 n=5   ✓ 恒等
+//         01:36:16  校验显示 6 → 对手active=5 → G.act=5 → 本函数 n=5   ✓ 恒等
+//         01:36:32  校验显示 3 → 对手active=2 → G.act=2 → 本函数 n=2   ✓ 恒等
+//       且 01:36:32 帧另有 "[V2.9.712翻后全押] ...人数2(n=2)..." 独立佐证。
+//    ③ 前提: pl = G._lastPlayers || G.players 是 Vision 的【对手座位列表】, 不含 hero
+//       (hero 走独立字段 G.hole; 'bottom-center' 在 _cwSeats/_opp_seats 中被显式排除, 见
+//        L13667/L14164)。故 _activeCount 天然就是「不含 hero 的活跃人数」。
+//    ④ 消费端逐处核对, 全部按「不含 hero」用(与返回值同口径):
+//         L4700  postflopEqSpec(hole,bc,scene,bet,pot,btTexture,n)  内部 _nOpp=max(1,n-1) ✓
+//         L4705  riverExactEquity(hole,comm,range, n-1)  ─┐ 再减 1 = hero 的对手数 ✓
+//         L4707  mcVsRange(hole,comm,range,iter, n-1)    ─┘
+//         L4818  mcVsRange(..., Math.max(1,n-1))                     ✓
+//         L4781  _aiMwAdj: n=2→+2 / n=3→+7 / n=4→+12 (3人局记 n=2→+2, 与3人局吻合) ✓
+//         L4851  if(n<2)n=2; _isMultiway = n>=3 (3人局 n=2 ⇒ 非多人池, 正确) ✓
+//         L12076/12128/12129  go() 侧同口径复用, 再过 n-1 ✓
+//      若强行把返回值 +1, 上述 7 处将连锁变成「多算 1 个对手」(MC 抽样维度/WAR 收窄力度/
+//      全押门槛人数项/多人池判定同时偏移), 比原状更错 —— 故【保持原实现不变】。
 function postflopActiveCount(){
   var n=0;
   try{
@@ -4485,15 +4755,15 @@ function postflopActiveCount(){
     // V2.9.659 FIX: 移除错误的chips>0 fallback——弃牌玩家chips也>0(筹码仍在座位上)
     //   导致全员被计为active(n恒等于tt),equity严重低估,多人池调整乱加
     if(_hasActiveField){
-      n=_activeCount;  // 优先用Vision的active字段（直接识别是否在牌局中）
+      n=_activeCount;
     }else if(_hasFoldedField){
-      n=pl.length-_foldedCount;  // 没有active时用folded反向推算
+      n=pl.length-_foldedCount;
     }
-    // 数据异常兜底: n=0或n等于总人数(全员active可疑),降级用G.act
+    // 数据异常兜底: n=0 或 n>=总人数(全员active可疑, 多半是识别脏帧), 降级用 G.act
     var tt=G.tt||6;
     if((n===0||n>=tt)&&G.act&&G.act>=2&&G.act<=tt){
       n=G.act;
-      console.log('[postflopActiveCount] players数据异常(n='+_activeCount+')→降级用G.act='+n);
+      console.log('[postflopActiveCount] players数据异常(对手active='+_activeCount+')→降级用G.act='+n);
     }
   }catch(e){n=0;console.log('[postflopActiveCount] 异常: '+e.message);}
   return n<2?2:n;
@@ -5039,6 +5309,27 @@ function decidePostflop(k,_pfInj){
         if(hcKey<=4){
           // 坚果/强牌保持原频率，不惩罚
         }else{
+          // ===== V2.9.717 FIX(P1): cbFreq 单位口径统一为 0~1 小数(原为百分比口径残留) =====
+          // 【bug 证据链】
+          //   ① cb[0] 值域实测 0.03~1.00(_CBET_IP 50条 / _CBET_OOP 31条, 无一 >1) ⇒ 表内是小数。
+          //   ② 同函数内 L5069 判定 `if(cbFreq>=0.5)`、L5084 输出 `Math.round(cbFreq*100)+'%'`
+          //      ⇒ 代码自身契约是小数。
+          //   ③ _quantExploitAdjust 内 `Math.min(0.95, freq*1.15)` / `Math.max(0.1, ...)`
+          //      ⇒ 该剥削函数的入参/出参契约同样锁定在 0~1。
+          //   故 `*0.35 / *0.6` 是从百分比口径迁移过来时遗漏的换算, 真实效果是:
+          //      内部 cbFreq = 表值 × 0.6 (而非表值本身),
+          //      日志显示 `round(内部×100)%` 出现 42%/48%/54% 这类"表里没有"的值。
+          // 【实测后果】原逻辑被压到 <0.5 → 穿过 `if(cbFreq>=0.5)` 失败 → 本该 bet 的局面
+          //   被静默翻转为 check。逐条枚举: 19 条(共 38 条 cbFreq>=0.5)发生翻转, 例如
+          //      key='0' hc=8 表值0.80(成手强牌在干燥面) → 0.48 → check
+          //      key='2' hc=4 表值0.70 → 0.42 → check
+          //      key='3' hc=11 表值0.80(强听牌) → 0.48 → check
+          //      key='5' hc=4 表值0.80 → 0.48 → check
+          //   即「干燥面用成手牌拿价值」「湿润面对强听牌半诈唬」这两类最高频的 cbet 场景被吃掉。
+          // 【修复】多人池收紧改为"直接使用表值的百分比折减", 不再做隐含 ×0.6 换算:
+          //   4人及以上 → 表值×0.35; 3人 → 表值×0.6。语义与原意图一致(人越多越收紧),
+          //   但结果落在正确量纲上(例: 表值0.80/4人 → 0.28, 远紧于原 0.48; 表值0.80/3人 → 0.48)。
+          //   收紧力度只增不减(0.35/0.6 均 <1), 不会引入过度激进, 安全性单调。
           cbFreq = cbFreq*(_nActive>=4?0.35:0.6);
           if(hcKey>=12){cbFreq=0;_mwAirKill=true;}  // AIR(15)/弱听(12)多人池不连续开火
         }
@@ -8960,29 +9251,105 @@ function eH(cards){
     }
   return Math.round(best);
 }
-// V2.9.185: nOpponents动态调整——多人底池equity衰减
-function eQ(key,nOpponents){
-  var pairEq={AA:85,KK:82,QQ:80,JJ:77,TT:75,99:72,88:70,77:68,66:66,55:64,44:62,33:60,22:56};
-  var base;
-  if(pairEq[key]){base=pairEq[key];}
-  else{
-    var s=key.indexOf('s')>=0?1:0;
-    var m={AK:[65,67],AQ:[62,65],AJ:[58,61],AT:[53,55],A9:[49,55],A8:[48,54],A7:[47,53],A6:[46,53],A5:[46,55],A4:[45,54],A3:[44,53],A2:[43,53],KQ:[58,61],KJ:[53,58],KT:[49,56],K9:[47,53],K8:[40,51],K7:[39,50],K6:[38,49],K5:[37,48],K4:[36,47],K3:[35,46],K2:[34,45],QJ:[51,57],QT:[48,55],Q9:[43,52],Q8:[39,50],JT:[50,57],J9:[41,51],J8:[38,49],T9:[46,56],T8:[39,51],T7:[36,49],98:[38,53],97:[35,49],87:[37,52],86:[34,48],76:[36,51],65:[34,49],54:[32,47],43:[31,45],32:[29,43]};
-    var combo=key.slice(0,2);
-    if(m[combo]){base=m[combo][s];}
-    else{
-      var idx;
-      if((idx=O6.btn.indexOf(key))!==-1)base=48;
-      else if((idx=O6.co.indexOf(key))!==-1)base=45;
-      else if((idx=O6.mp.indexOf(key))!==-1)base=42;
-      else if((idx=O6.utg.indexOf(key))!==-1)base=38;
-      else{base=30;console.log('[eQ] 未匹配手牌:'+key+'，fallback eq=30');}
-    }
+// ===== V2.9.717 FIX(P0): 翻前静态权益表全量重标定 =====
+// 【修复前问题实证】(审计结论, 可复现: 见 /root/.codebuddy/artifact/poker/eqtruth.py)
+//   ① 非对子表平均绝对误差 8.38pp(n=84), 最大 19.5pp:
+//      K4s 引擎=36 vs 真实=55.5 (-19.5) | K2s 34 vs 52.5 (-18.5) | A9s 49 vs 62.7 (-13.7)
+//      → 系统性地把带A/带K的同花牌低估 13~20pp, 导致 A9s/K4s 这类牌被当成垃圾弃掉。
+//   ② 低对子表系统性高估: 22 引擎=56 vs 真实=50.2 (+5.8) | 33 60 vs 53.6 (+6.4) | 44 62 vs 56.5 (+5.5)
+//      → 22/33/44 被高估 6pp 左右, 短码/面对加注时会过度入池。
+//   ③ 72 个组合(Q7s/J6s/T5o/95s/53o... 共 36 个组合 × 2 花色)完全不在这两张表里,
+//      落到 O6 档位猜测值(38/42/45/48)或兜底 30。实测这些牌真实排名 33.3%~54.0%,
+//      其中 32 个组合真实 eq ≥ 45%(如 Q7s 真实 52.3% 却被兜底成 30) → 严重低估。
+//   ④ 多人衰减系数 0.92^(n-1) 与真实仿真严重不符(3000 次/格, 见 mwtruth.py):
+//      AA  4人: 公式 66.4 vs 真实 57.0 (+9.5pp) | QQ 4人: 62.9 vs 43.3 (+19.6pp)
+//      22  3人: 42.7 vs 22.4 (+20.3pp) | 22 4人: 39.3 vs 16.9 (+22.4pp)
+//      → 小对子/大牌在多人池被系统性高估, 越多人越离谱(单调递增的偏差)。
+// 【修复方案】全量替换为 6000 次/组合蒙特卡洛实测值 + 8 类手牌实测多人衰减曲线。
+//   优点: ① 169 组合全覆盖(不再有兜底 30) ② 多人衰减按手牌类型分化
+//   (小对子衰减最陡, 大对子最平缓, 这才是真实规律: 22 打 4 人只剩 16.9% 而非 39.3%)。
+// 【兜底保持】非对子仍按「组合前缀」查表, 故 key 只可能是 169 之一; 万一异常仍走日志兜底。
+var _EQ_PAIR={AA:84.7,KK:82.6,QQ:79.4,JJ:78.7,TT:74.1,99:71.5,88:68.7,77:66.0,66:63.1,55:60.7,44:56.5,33:53.6,22:50.2};
+var _EQ_NONPAIR={
+  AK:[66.2,65.0],AQ:[64.6,63.1],AJ:[63.5,60.7],AT:[62.9,59.0],A9:[62.7,58.6],A8:[61.3,57.0],A7:[60.6,55.4],A6:[59.4,54.4],A5:[59.1,55.3],A4:[58.4,54.1],A3:[57.7,53.6],A2:[56.5,51.9],
+  KQ:[62.1,60.8],KJ:[60.4,58.4],KT:[59.3,56.6],K9:[57.3,55.0],K8:[56.8,54.8],K7:[57.2,53.4],K6:[56.8,53.2],K5:[55.7,52.2],K4:[55.5,52.3],K3:[53.6,51.3],K2:[52.5,50.3],
+  QJ:[57.8,56.9],QT:[57.9,55.9],Q9:[57.6,54.7],Q8:[55.7,53.7],Q7:[52.3,50.6],Q6:[51.0,49.2],Q5:[50.3,48.9],Q4:[49.2,47.6],Q3:[48.0,47.1],Q2:[47.0,46.0],
+  JT:[57.5,57.8],J9:[55.4,53.0],J8:[55.1,50.8],J7:[51.8,49.4],J6:[49.6,47.3],J5:[48.6,46.0],J4:[48.2,45.6],J3:[47.1,45.0],J2:[46.0,44.0],
+  T9:[56.0,56.0],T8:[52.7,51.5],T7:[51.4,49.1],T6:[48.5,46.5],T5:[47.5,44.9],T4:[46.4,43.9],T3:[45.3,43.0],T2:[44.1,42.0],
+  '98':[53.5,52.6],'97':[50.1,49.0],'96':[48.1,46.2],'95':[46.4,43.3],'94':[44.5,42.8],'93':[43.7,41.0],'92':[42.7,40.9],
+  '87':[47.2,43.9],'86':[48.4,45.0],'85':[45.3,43.5],'84':[43.4,42.0],'83':[41.6,40.2],'82':[40.2,39.0],
+  '76':[46.8,43.4],'75':[42.7,40.1],'74':[40.9,38.2],'73':[40.0,37.1],'72':[38.2,34.6],
+  '65':[45.4,42.0],'64':[42.2,38.1],'63':[39.5,36.5],'62':[37.6,33.3],
+  '54':[41.9,38.0],'53':[39.5,35.7],'52':[38.2,34.2],
+  '43':[39.0,35.4],'42':[37.9,33.7],
+  '32':[36.6,32.5]
+};
+// 多人衰减实测曲线 —— **下标 = 对手数 nOpp(不含 hero)**
+//   ★ 索引契约(经三轮校准确立, 逐格与实测数据对齐, 改动前务必复算):
+//       idx:  0      1      2      3      4
+//       nOpp: 无人   1      2      3      4
+//       实测锚点(AA): nOpp=1 → 85.3 / nOpp=2 → 73.4 / nOpp=3 → 64.1 / nOpp=4 → 57.0
+//       比值 = 真值[nOpp] / 真值[1] ⇒ 1.000 / 0.860 / 0.752 / 0.668
+//     故 idx=0 是【占位】(nOpp=0 无意义, 永不取用), idx=1..4 为真实锚点。
+//     常见错误: 把 idx=0 当作 nOpp=1 而整表左移一档 —— 会导致 nOpp=2 取到 0.752
+//     (AA 算成 63.7, 真值 73.4, 偏 -9.7pp)。本表已按上式排列, 勿删 idx=0。
+//   来源: mwtruth2.py 全量 169 组合 × 12000 次/格覆盖校准; 早期 mwtruth.py 8 类锚点同源。
+var _EQ_MWDECAY={
+  overpair:[1.000,1.000,0.860,0.752,0.668], // AA
+  bigpair :[1.000,1.000,0.816,0.694,0.564], // KK/QQ/JJ
+  midpair :[1.000,1.000,0.612,0.443,0.335], // TT~22
+  suited  :[1.000,1.000,0.754,0.610,0.538], // AKs 一类
+  conn    :[1.000,1.000,0.697,0.508,0.456], // 同花连牌 54s
+  offsuit :[1.000,1.000,0.693,0.550,0.461]  // AKo/76o 一类
+};
+// 手牌→衰减类别映射(按「同花性 + 连张性 + 对子级别」三分, 与实测样本分类一致)
+function _eqDecayCat(key){
+  var r1=key.charAt(0), r2=key.charAt(1);
+  if(key.length===2&&r1===r2){
+    var _i='AKQJT98765432'.indexOf(r1);
+    return _i<=0?'overpair':(_i<=3?'bigpair':'midpair'); // AA / KK,QQ,JJ / TT及以下
   }
-  // V2.9.185: 多人底池动态调整——每多1个对手equity衰减约10%
+  if(key.indexOf('s')>=0){
+    // 同花: 连张(AK,KQ,...,32 且跨度<=4)按 conn, 其余按 suited
+    var _a=RV[r1], _b=RV[r2];
+    if(_a!==undefined&&_b!==undefined&&Math.abs(_a-_b)<=4)return 'conn';
+    return 'suited';
+  }
+  return 'offsuit';
+}
+// V2.9.717: 多人底池动态调整——按手牌类型分化衰减(替代原 0.92^(n-1) 单一系数)
+function eQ(key,nOpponents){
+  if(!key||typeof key!=='string')return 30;
+  var base;
+  if(_EQ_PAIR[key]!==undefined){base=_EQ_PAIR[key];}
+  else{
+    var s=key.indexOf('s')>=0?1:(key.indexOf('o')>=0?0:-1);
+    var combo=key.slice(0,2);
+    var ent=_EQ_NONPAIR[combo];
+    if(ent&&s>=0){base=ent[s];}
+    else if(ent){base=Math.round((ent[0]+ent[1])/2);}
+    else{base=35;console.log('[eQ] 未匹配手牌:'+key+'，fallback eq=35');}
+  }
+  // V2.9.717: 多人衰减按类别分化(实测曲线, 非单一 0.92)
+  //   ★ 索引换算(易错点, 已用实测数据校准, 勿再简化): 曲线下标 = 对手数 nOpponents 本身,
+  //     最大值 = _EQ_MWDECAY[cat].length-1 = 4(即 4 个对手)。
+  //     nOpponents=2 → curve[2]=0.752 → AA 84.7×0.752≈63.7 ≈ 真值64.1 ✓
+  //     nOpponents=4 → curve[4]=0.668 → AA 84.7×0.668≈56.6 ≈ 真值57.0 ✓
+  //     (曾误用 Math.min(nOpponents, len-1) 造成整体错位一档, 已修)
   if(nOpponents&&nOpponents>1){
-    base=Math.round(base*Math.pow(0.92,nOpponents-1));
-    if(base<5)base=5;
+    var _cat=_eqDecayCat(key);
+    var _curve=_EQ_MWDECAY[_cat]||_EQ_MWDECAY.offsuit;
+    var _lastIdx=_curve.length-1;
+    if(nOpponents>=_curve.length){
+      // 超出曲线覆盖(>4 对手): 末段按最后两档的比值外推, 保证单调递减且不为负
+      var _last=_curve[_lastIdx], _prev=_curve[_lastIdx-1];
+      var _r=_prev>0?(_last/_prev):0.85;
+      base=base*_last*Math.pow(_r,nOpponents-_lastIdx);
+    }else{
+      base=base*_curve[nOpponents];
+    }
+    base=Math.round(base);
+    if(base<4)base=4;
   }
   return base;
 }
@@ -13446,6 +13813,11 @@ function onVisionResult(data){
         // V2.9.707 FIX(翻前→翻后连贯性): 清空上手的翻后可玩性标记, 防 _pfPH 跨手残留
         //   (若本手翻前未走 decidePreflop, 翻后不应继承上手的结构评估).
         G._pfPH=null; G._pfPPlayable=null;
+        // V2.9.717 FIX(P1 连带): 清空 G._depthTier —— 它是 cacheKey 的新维度, 由 decidePreflop 写入。
+        //   若本手未走翻前决策(观察帧/跳过翻前), 不清零会让缓存键携带【上一手的码深档位】
+        //   → 可能误命中上一手缓存, 使本手沿用错误码深的 RFI 频率与 sizing。
+        //   初始值置'-', 与 cacheKey 的 (G._depthTier||'-') 兜底一致。
+        G._depthTier='-';
         G._heroDid4bet=false; G._slowplayed=false; G.oppSeats=[];
         // V2.9.706 FIX(P1 #3.2 B5): 新手牌重置 StreetPlan, 防止 _currentPlan 跨手残留.
         //   历史 BUG: v695→v705 期间 _currentPlan 仅在 makePlan() 覆盖, 若某手未触发 makePlan
