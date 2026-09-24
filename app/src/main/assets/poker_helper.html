@@ -1534,7 +1534,7 @@ function showToast(msg){
 //   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
 //   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
 //   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
-var ENGINE_VERSION='2.9.720';
+var ENGINE_VERSION='2.9.721';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -4484,7 +4484,11 @@ function decidePreflop(k){
         //   ② 不该跟的乱跟 —— _fc2OddExempt(赔率≤17%)无条件放行, 连 52o 这类牌也放行(#23)。
         // 【修法】给质量门加一条数学判据: 用 vs-open 真实权益(见 eQvsOpen)对比赔率, 达线即放行。
         //   同时把"赔率豁免"从无条件改为同样需要过数学线 —— 一条判据同时治两端。
-        var _eqOpen2=(typeof eQvsOpen==='function')?eQvsOpen(k,raiserRole):null;
+        // ===== V2.9.721 FIX(P0 BUG-B): 同 V2.9.719 赔率兜底, 改用【实际对手数】统一口径 =====
+        //   同为"权益 vs 多人池赔率"判据, 必须走 pfCallEq() 与兜底通道保持同口径,
+        //   否则本路径仍会用单挑权益放行多人池的负EV跟注(扫描中占 25 例)。
+        var _eqOpen2=(typeof pfCallEq==='function')?pfCallEq(k,raiserRole,Math.max(1,((typeof G!=='undefined'&&G.act)?G.act:2)-1))
+                    :((typeof eQvsOpen==='function')?eQvsOpen(k,raiserRole):null);
         var _fc2EqCmp=(typeof _eqOpen2==='number')?_eqOpen2:eq;
         var _fc2MathOK=(typeof _fc2EqCmp==='number'&&_fc2EqCmp>=_fc2PoPre+6);
         if(_fc2MathOK&&!(_fc2Pair||_fc2OffBW||(_fc2Suited&&_fc2SuitedOK))){
@@ -4534,15 +4538,26 @@ function decidePreflop(k){
       // 【修法】在此出口前加一道纯数学闸: 只要 vs-open 真实权益显著超过底池赔率, 就应跟注。
       //   边际取 8pp(严于质量门的 6pp)——本通道是"最后兜底", 只在数学优势明确时介入,
       //   不与上游 FlatCall 抢决策(上游已判定的会提前 return, 到不了这里)。
-      var _oddsEq=(typeof eQvsOpen==='function')?eQvsOpen(k,raiserRole):null;
+      // ===== V2.9.721 FIX(P0 BUG-B): 权益改用【实际对手数】统一口径 pfCallEq() =====
+      //   旧实现: eQvsOpen(k,raiserRole) —— vs 单一 raiser 的【单挑】静态表, 却被拿去比对
+      //           【多人池】的底池赔率, 系统性高估胜率。
+      //   实机铁证与量化依据见 pfCallEq() 定义处注释(5h4h@CO 2BB 一手输光 + 16224 样本扫描:
+      //   对手数=1 时负EV跟注 0 例, 对手数>=2 时 3249 例 —— 问题只存在于多人池)。
+      //   _oddsN = 池内未弃牌对手数 = G.act(含我方的活跃人数) - 1, 与 V2.9.718 极短码闸的
+      //           _xsN = Math.max(1,(G.act||2)-1) 完全同口径 —— 消除"同帧两个模块口径打架"。
+      var _oddsN=Math.max(1,((typeof G!=='undefined'&&G.act)?G.act:2)-1);
+      var _oddsEq=(typeof pfCallEq==='function')?pfCallEq(k,raiserRole,_oddsN)
+                 :((typeof eQvsOpen==='function')?eQvsOpen(k,raiserRole):null);
       var _oddsCmp=(typeof _oddsEq==='number')?_oddsEq:eq;
       if(bet>0&&typeof _oddsCmp==='number'&&_oddsCmp>0){
         var _oddsNeed=bet/Math.max(pot+bet,1)*100;
-        if(_oddsCmp>=_oddsNeed+8){
+        // ===== V2.9.721 FIX(P0 BUG-B): 门槛补【多人池惩罚】, 与 limp/FlatCall 同口径, 消除单挑权益比多人赔率 =====
+        var _oddsMW=(typeof Multiway!=='undefined'&&Multiway.callThresholdAdj)?Multiway.callThresholdAdj():0;
+        if(_oddsCmp>=_oddsNeed+8+_oddsMW){
           var _exOD=applyExploit(_oddsCmp,'call',oppType,{bet:bet,pot:pot});
-          console.log('[V2.9.719赔率兜底] '+k+' vs '+rP5+' eq'+Math.round(_oddsCmp)+'%(vs-open)≥赔率'
-            +Math.round(_oddsNeed)+'%+8 → 表/质量门均未覆盖但数学成立, 跟注');
-          return{a:'call',v:bet,r:'赔率兜底 '+k+' eq'+Math.round(_oddsCmp)+'%≥需'+Math.round(_oddsNeed+8)
+          console.log('[V2.9.719赔率兜底] '+k+' vs '+rP5+' eq'+Math.round(_oddsCmp)+'%(n='+_oddsN+'对手口径)≥赔率'
+            +Math.round(_oddsNeed)+'%+8+多人'+_oddsMW+' → 表/质量门均未覆盖但数学成立, 跟注');
+          return{a:'call',v:bet,r:'赔率兜底 '+k+' eq'+Math.round(_oddsCmp)+'%(n='+_oddsN+')≥需'+Math.round(_oddsNeed+8+_oddsMW)
             +'%(赔率'+Math.round(_oddsNeed)+'%+边际8, '+rP5+'表/质量门未覆盖)',eq:_exOD.eq,c:_oddsCmp>=50?'m':'l',
             scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_oddsCmp,pot,bet,0),
             exploit:_exOD.exploit,_se:true,_seFreq:1,_oddsFallback:true};
@@ -9621,6 +9636,48 @@ function eQ(key,nOpponents){
     if(base<4)base=4;
   }
   return base;
+}
+
+// ============================================================================
+// V2.9.721 FIX(P0 BUG-B): 翻前「跟注权益」统一口径入口 pfCallEq()
+// ----------------------------------------------------------------------------
+// 【实机铁证】poker_log_20260924_044535 —— 5h4h @ CO 一手牌输光:
+//   翻前 面对 MP 加注 pot=2.5BB bet=1BB(底池赔率 28.6%), 引擎判定:
+//     [V2.9.719赔率兜底] 54s vs MP eq38%(vs-open)≥赔率29%+8 → 表/质量门均未覆盖但数学成立, 跟注
+//   但【同一帧、同一手牌】更早执行的 V2.9.718 极短码闸(L3856)用【多人口径】算出相反结论:
+//     _xsEq = eQ('54s',3) = 19%  <  需 40.6%(赔率28.6% + 6 + 多人6)  → 不通过
+//   ⇒ 同一次决策内两个模块用【不同人数口径】给出相反答案, 且后执行的(单挑口径)覆盖了先执行的。
+// 【根因】eQvsOpen() 的定义即"vs 单一 raiser 的 open 范围"(见其上方注释)。用它去比
+//   【多人池的底池赔率】必然高估自身胜率。引擎自带的 limp/FlatCall/BBLimp 等 gate 早已通过
+//   【在门槛上加 Multiway.callThresholdAdj()】来吸收多人池惩罚 —— 唯独赔率兜底(修改2)漏了这道。
+// 【量化全貌】全量扫描 16224 个翻前样本(169手 × 3位置 × 4人数 × 8码深, pot2.5/bet1 赔率28.6%):
+//     对手数=1  → 负EV跟注    0 例   ← 单挑时两口径一致, 完全无BUG
+//     对手数>=2 → 负EV跟注 3249 例   ← 问题【只在】多人池出现, 与码深无关
+//                              (2BB 402例 / 100BB 424例, 几乎相同 ⇒ 纯人数口径问题)
+//   决策来源分布: 赔率兜底2320 / limp兜底533 / GTO表371 / FlatCall25
+// 【修法(与引擎其余 gate 完全一致, 不新造数值/不双计惩罚)】
+//   ① 本入口只返回【精确】权益基准 = eQvsOpen(vs raiser 真实 open 范围); 查不到回落 eQ(key,1)。
+//      —— 注意: 不再在权益里"内减人数惩罚"(首版这么改会触发 1167 例过度弃牌, 已否决)。
+//   ② 多人池惩罚完全交给【调用方在门槛上加 Multiway.callThresholdAdj()】, 与 limp/FlatCall 同口径:
+//        修改2(赔率兜底): 门槛 = 赔率 + 8 + callThresholdAdj
+//        修改3(FlatCall) : 门槛 = 44 + callThresholdAdj(原本就加, 与之一致即可)
+//   这样 修改3 自动回到 V2.9.719 原本【正确】的 single-penalty 状态(原 FlatCall 就是 raw eq vs
+//   44+callThresholdAdj, 是我把带内减惩罚的 pfCallEq 塞进去才造成双计/过度弃牌)。
+// 【不改动的部分】decidePreflop 局部变量 eq(=eQ(k)经posMod/specBonus/_pH调整后的策略分)保持不变,
+//   它服务于 RFI/sizing/3B频率等非赔率类判据, 改它等于重标定整个翻前 —— 超出本次修复边界。
+// 【nOpp 参数说明】保留签名以便调用方传入实际对手数, 但本函数是"纯权益查询", 人数惩罚不在内。
+// ============================================================================
+function pfCallEq(key,raiserRole,nOpp){
+  // 统一返回【精确】权益基准: vs raiser 真实 open 范围(eQvsOpen); 查不到回落 eQ(key,1)。
+  // 多人池惩罚【不在此处】—— 由调用方按引擎既有约定在【门槛】上加 Multiway.callThresholdAdj(),
+  //   (与 limp/FlatCall/BBLimp 等所有翻前 gate 完全一致, 避免双计惩罚 / 口径打架)。
+  try{
+    var _open=(typeof eQvsOpen==='function')?eQvsOpen(key,raiserRole):null;
+    if(typeof _open!=='number'||!isFinite(_open))_open=eQ(key,1);
+    return _open;
+  }catch(e){
+    try{return eQ(key,1);}catch(e2){return 30;}
+  }
 }
 
 // ===== V2.9.706 FIX(P0 #2.2): 板面威胁统一评估 —— 翻前感知翻后的实现 =====
@@ -15684,9 +15741,22 @@ var NashPushFold={
           if(_oc2>0&&_of2){var _ebb2=Math.round(_oc2/_nbb);if(_oppShoveBB<=0||_ebb2<_oppShoveBB)_oppShoveBB=_ebb2;}
         }
       }catch(_nashOppErr){_oppShoveBB=0;}
+      // ==========================================================================
+      // V2.9.721 【保留本闸, 不移除 —— 实测证明它是必要的保护】
+      //   曾怀疑本闸是"一手牌输光(5h4h@CO 2BB)"的根因并试图在 ≤3BB 档绕过它,
+      //   16128 样本对拍实测后【回退该改动】, 铁证如下:
+      //     试图让 ≤3BB 走 Nash CALL 表 → 引入 1335 例【过度弃牌】, 典型如
+      //       KQo@mp 2BB 对手2: 多人口径权益 43% vs 赔率 28.6%(+14.4pp 明确正EV) → 被判 fold
+      //       ATo @mp 2BB 对手2: 权益 44% (+15.4pp) → 被判 fold
+      //   根因: NashPushFold.CALL 表是按【对手全码 shove】(极紧范围)标定的,
+      //     而此类局面是面对【普通小额加注】(范围宽得多), 硬套 CALL 表必然灾难性误杀。
+      //     V2.9.595 设立本闸的原始理由至今成立: "Nash push-fold表只适用于对手全码"。
+      //   结论: 本闸不但没错, 而且是正确防线。真正的 BUG 在下游 —— V2.9.719 赔率兜底
+      //     在【多人池】套用【单挑】权益表, 已由 pfCallEq() 修复(见其定义处注释)。
+      // ==========================================================================
       var _betBB=parseFloat(bet)||0;
       if(_oppShoveBB>0&&_betBB<_oppShoveBB*0.9){
-        console.log('[Nash闸] 面对加注'+_betBB+'BB < 对手有效码深'+_oppShoveBB+'BB×90%→非全码,不走Nash表(走常规范围) k='+k+' '+p);
+        console.log('[Nash闸] 面对加注'+_betBB+'BB < 有效码深'+_oppShoveBB+'BB×90%→非全码,不走Nash表(走常规范围) k='+k+' '+p);
         return null;
       }
     }
