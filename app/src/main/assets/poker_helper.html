@@ -1534,7 +1534,7 @@ function showToast(msg){
 //   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
 //   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
 //   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
-var ENGINE_VERSION='2.9.722';
+var ENGINE_VERSION='2.9.723';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -3779,6 +3779,23 @@ function _dominatorTh(k,rP5){
     return _d;
   }catch(e){return 0;}
 }
+// ===== V2.9.723 FIX: 层③纯垃圾牌判定（翻前平跟限制用）=====
+// 定义(严格忠于用户确认 + 原规则"投机牌/垃圾牌只限平跟"):
+//   纯垃圾牌 = 非对子 且 无 A/K 高牌 且 非同花(suited)
+//   ① 任意对子(含小对22-77) → 非垃圾(保留 set mine; 用户"强对升STRONG"暗示对子有保留价值)
+//   ② 带 A/K 高牌(A7o等)    → 非垃圾(用户确认"算可玩")
+//   ③ 同花(Q4s等)           → 非垃圾(用户确认"算可玩")
+//   其余(无A/K、非同花、非对子, 如 87o/54o/63o/96o/J7o) → 纯垃圾, 只限平跟(≤1BB)
+// 牌key格式: 高位在前 (k[0]为高位牌), 如 '87o' 'A7o' 'Q4s' '88'
+function isTrashPreflop(k){
+  if(!k||typeof k!=='string'||k.length<2)return false;
+  if(k.length===2&&k[0]===k[1])return false;       // 任意对子 → 非垃圾
+  var _hi=k.charAt(0);
+  if(_hi==='A'||_hi==='K')return false;            // 带A/K高牌 → 可玩
+  if(k.indexOf('s')>=0)return false;               // 同花 → 可玩
+  return true;                                      // 其余 → 纯垃圾
+}
+
 function decidePreflop(k){
   // V3.9/V2.9.632: 入参防护 — 手牌非法返回null,入口归一后由decide()下游统一安全fold(NO_DATA),不再回落旧引擎
   if(!k||typeof k!=='string'||k.length<2){return null;}
@@ -3974,6 +3991,18 @@ function decidePreflop(k){
   if(G.ante>0){var _ac=G.ante*(G.tt||6);var _ar=_ac/Math.max(pot,1);var _ab=Math.min(Math.round(_ar*12),5);if(_ab>0)eq+=_ab;}
 
   var tiltInfo=TiltDetector.detectTilt(profile);
+
+  // ===== V2.9.723 FIX(P0): 层③纯垃圾牌平跟限制闸（翻前唯一修改点）=====
+  // 【联动】此闸一处拦截, 统一屏蔽 FlatCall防御/赔率兜底/limp兜底 三个跟注出口对垃圾牌的放行,
+  //   避免在三处各打补丁(防止补丁打结)。垃圾牌只许平跟(≤1BB), 跟任何>1BB的下注一律fold。
+  // 【平跟线】盲注200=1BB → to-call≤1BB 为平跟(看牌), >1BB 为跟别人open/3bet/allin=禁。
+  // 【翻前/翻后连贯】翻前平跟的垃圾牌仅投入≤1BB, 翻后未中牌由"回撤刹车/面CBet弃"等弱牌闸弃牌,
+  //   不会在翻后继续追大注; 中牌按翻后正常逻辑(AIR/DRAW→不追, 成牌→价值)。
+  // 【不误伤】RFI开池(bet=0或自己open)不受影响; 小对子/可玩牌/强对经 isTrashPreflop 排除, 不受影响。
+  if(typeof isTrashPreflop==='function'&&isTrashPreflop(k)&&bet>1){
+    console.log('[V2.9.723垃圾牌平跟限制] '+k+' vs '+rP5+' 需跟'+bet+'BB>1BB(平跟线)→强制fold(垃圾牌禁跟大注)');
+    return _fold(eq,'垃圾牌'+k+'需跟'+bet+'BB>平跟线1BB→fold(只限平跟)',spr);
+  }
 
   // 1: 开池
   if(scene==='check'||scene==='call'||scene==='open'){  // V3.26: 'open'=Straddle局开池场景
