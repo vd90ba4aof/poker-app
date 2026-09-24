@@ -26,7 +26,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="V2.9.721 翻前跟注权益统一多人池口径 · 修复单挑权益比多人池赔率导致的负EV跟注(16224样本负EV跟注-65%) · 消除FlatCall双计惩罚 · 50项引擎测试全绿"
+        android:text="V2.9.722 翻前全押闸消除人数项二次计税(对齐翻后C3) · 修复翻前全押多人池确凿误弃(38→21例) · 0负EV误跟 · 50项引擎测试全绿"
         android:textSize="13sp"
         android:textColor="#86efac"
         android:layout_marginTop="4dp" />
