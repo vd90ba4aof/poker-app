@@ -1534,7 +1534,7 @@ function showToast(msg){
 //   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
 //   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
 //   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
-var ENGINE_VERSION='2.9.724';
+var ENGINE_VERSION='2.9.725';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -4808,6 +4808,10 @@ function decidePreflop(k){
       else if(_preEffBB>80){_preDeepAdj=7;}
       else if(_preEffBB>40){_preDeepAdj=4;}
     }catch(_preEfE){}
+    // V2.9.725: 中强层(QQ/JJ/TT/AK等非AA强牌)翻前all-in 采用与AA一致的"仅赔率+MC噪声"标准,
+    //   移除深码+10pp缓冲——该缓冲使 TT #28(eq26%>赔率20%) 被判需33%而误弃, 属负EV根因(与V2.9.722人数项同理)。
+    //   AA 本就走独立通道(_preIsAA), 此处不影响; 仅影响 _preStrong&&!_preIsAA 的中强层。
+    if(!_preIsAA) _preDeepAdj = 0;
 
     // [最终门槛] 单通道求和
     //   V2.9.711c 上限保护: 与翻后同口径, 防极端组合门槛不可达致强牌误弃。
@@ -12134,27 +12138,32 @@ function _decideInner(){
       result._colorInfo.color=ColorStrategy.COLORS.FOLD;
     }
     // V2.9.123+: ★ 翻前顶级手牌绝对保护 ★
-    // AA/KK/QQ/JJ/TT/AK翻前绝不弃牌——任何护栏/纠错都不能把它们改成fold
-    // V2.9.127: 扩展至JJ/TT/AK (原V2.9.123只覆盖AA/KK/QQ, 5-max实战中JJ/TT/AK被EV护栏/对手偏移误降fold)
+    // V2.9.725: 顶级保护重构(根因在 V2.9.712翻前全押门槛, 非本闸)。
+    //   策略: AA/KK 仍翻前绝不弃(任何护栏/纠错都不能改fold);
+    //   QQ/JJ/TT/AK 仅"非all-in"场景保留绝不弃(防V2.9.127的3bet误弃回归),
+    //   面对all-in时移出保护 → 由 V2.9.712翻前全押门槛(已改为仅赔率+MC噪声, 与AA同源)按EV决定可弃,
+    //   实现"可下注、不强制全压"(用户需求)。
     // V2.9.711: 清理失效引用——旧代码检测 '[V2.9.708风控] ban' 标记放行用户禁用,
     //   但708风控闸已在711重构中移除(改为引擎内建双闸), 该标记不再产生 → 检测恒false=死代码。
     //   711新牌力闸本身放行 对子22+/双J+/强A(含AA-TT/AK), 与顶级保护口径一致, 无冲突。
     var _cc=G.comm.filter(function(c){return c&&c.rank;}).length;
     if(_cc===0 && result.a==='fold'){
       var _pk=k.length===2&&k[0]===k[1]?k:'';
-      if(_pk==='AA'||_pk==='KK'||_pk==='QQ'||_pk==='JJ'||_pk==='TT'){
+      if(_pk==='AA'||_pk==='KK'){
         console.log('[顶级保护] '+_pk+'翻前被降为fold→强制raise');
         result.a='raise';
         result.r=_pk+'翻前绝不弃牌!';
         result._colorInfo.colorKey='RAISE_BIG';
         result._colorInfo.color=ColorStrategy.COLORS.RAISE_BIG;
-      }else if(k==='AKs'||k==='AKo'){
-        // V2.9.127: AK顶级保护——vs 3bet不一定超池,用RAISE(绿)而非RAISE_BIG(青绿)
-        console.log('[顶级保护] '+k+'翻前被降为fold→强制raise');
+      }else if((_pk==='QQ'||_pk==='JJ'||_pk==='TT'||k==='AKs'||k==='AKo') && G.scene!=='allin'){
+        // V2.9.725: QQ/JJ/TT/AK 仅"非all-in"场景保留绝不弃(防V2.9.127的3bet误弃回归);
+        //   面对all-in时移出保护, 改由V2.9.712翻前全押门槛(已改为仅赔率+MC噪声, 与AA同源)按EV决定可弃。
+        console.log('[顶级保护] '+k+'翻前(非all-in)被降为fold→强制raise');
         result.a='raise';
         result.r=k+'翻前绝不弃牌!';
-        result._colorInfo.colorKey='RAISE';
-        result._colorInfo.color=ColorStrategy.COLORS.RAISE;
+        var _isAK=(k==='AKs'||k==='AKo');
+        result._colorInfo.colorKey=_isAK?'RAISE':'RAISE_BIG';
+        result._colorInfo.color=ColorStrategy.COLORS[_isAK?'RAISE':'RAISE_BIG'];
       }
     }
     // V2.9.126: ★ 池子驱动反fold——只解决"什么都弃牌"痛点 ★
