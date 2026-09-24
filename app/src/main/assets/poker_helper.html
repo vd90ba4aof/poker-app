@@ -1534,7 +1534,7 @@ function showToast(msg){
 //   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
 //   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
 //   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
-var ENGINE_VERSION='2.9.723';
+var ENGINE_VERSION='2.9.724';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -5025,8 +5025,11 @@ function _narrowRangeMultiway(baseArr,nOpp){
   }
 }
 
-function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive){
+function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive,stkIn){
   try{
+    // V2.9.724 FIX(R1-b): 新增 stkIn(我方剩余筹码BB)。allin 场景判定"是否存在我方赢不到的边池"
+    //   需要码深; 缺省时从 G.stk 兜底(老调用点无需强制改签名)。
+    var _stkSpec=(typeof stkIn==='number'&&stkIn>0)?stkIn:((typeof G!=='undefined'&&typeof G.stk==='number'&&G.stk>0)?G.stk:0);
     var _nOpp=Math.max(1,(nActive||2)-1);
     // ===== V2.9.719 FIX(P0 C6): 翻后"面对单个下注"的 eq 口径 = 击败【下注者】, 而非领先【全场】 =====
     // 【铁证1】poker_log_20260924_001034 #13: KsJs @ 4c6sKc7h2c(顶对K+J踢脚), 河牌面对 8/24 下注 → fold。
@@ -5051,8 +5054,31 @@ function postflopEqSpec(hole,bc,sceneIn,bet,pot,bTexture,nActive){
     //     不存在"两头都漏"(乘法级误伤实测把 #30 的 eq 压低约 10 倍, 加法级近似更安全)。
     if(sceneIn==='raise'||sceneIn==='reraise'||sceneIn==='bet'||sceneIn==='allin'){
       if(_nOpp>1){
-        console.log('[V2.9.720 eq口径] 面对'+(sceneIn==='allin'?'全押':'下注')+': nOpp '+_nOpp+'(领先全场)→1(击败'+(sceneIn==='allin'?'全押者':'下注者')+') | 人数风险移交门槛承担');
-        _nOpp=1;
+        // ===== V2.9.724 FIX(R1): allin 的 "nOpp→1" 必须在【存在边池】时让位 =====
+        //   V2.9.720 把 allin 无条件收敛为 vs1, 依据是"全押后其余未全押玩家几乎总是弃牌";
+        //   V2.9.719 又把门槛的人数项归零, 依据是"eq 已含人数"。两者叠加 ⇒ 多人池的人数风险
+        //   谁也没承担。铁证 poker_log_20260924_181708 #0: Ah7s @ Tc6c9s flop, pot=428BB /
+        //   我方全码45.5BB / nActive=4, 日志同一行出现
+        //     "[V2.9.720 eq口径] 面对全押: nOpp 3→1" + "[V2.9.719反双重计税] 人数12 已含于MC eq(n=4)→归零"
+        //   实测同手 eq: vs1=35.3% / vs3=13.0%(MC 20000次) —— eq 被抬到 2.7 倍, 门槛被压到 12.6%。
+        //   【物理判据】若 pot > 我方全码 × 在池人数, 说明池里存在我方无权赢取的边池 ⇒
+        //     必然有对手比我方深且仍在池中 ⇒ 我方必须同时击败【全部在池对手】才能赢下主池,
+        //     "其余玩家弃牌"的假设不成立 → 保留真实 nOpp。
+        //   【不误伤】①单挑(nActive=2)时 _nOpp 本就=1, 不进此分支;
+        //     ②无边池(pot ≤ stk×人数, 含 V2.9.720 修复的 #30 Jc3h 类短码大池)维持 vs1 不变;
+        //     ③非 allin(raise/bet)维持 V2.9.719 C6 原逻辑不变。
+        var _spFlag=false, _spCap=pot;
+        if(sceneIn==='allin'&&_stkSpec>0&&pot>0){
+          _spCap=Math.min(pot,_stkSpec*(nActive||2));
+          if(_spCap<pot)_spFlag=true;
+        }
+        if(_spFlag){
+          console.log('[V2.9.724 eq口径] 全押存在边池(pot '+pot+' > 我方全码'+_stkSpec+'×'+nActive+'人='+_spCap
+            +') → 保留nOpp='+_nOpp+'(须同时击败全部在池对手才能赢主池)');
+        }else{
+          console.log('[V2.9.720 eq口径] 面对'+(sceneIn==='allin'?'全押':'下注')+': nOpp '+_nOpp+'(领先全场)→1(击败'+(sceneIn==='allin'?'全押者':'下注者')+') | 人数风险移交门槛承担');
+          _nOpp=1;
+        }
       }
     }
     // 与原SE L3661同口径: 对手check=范围弱用宽cbet; 面对下注按街收窄(flop cbet / turn barrel / river barrel极化)
@@ -5122,7 +5148,7 @@ function decidePostflop(k,_pfInj){
   var _oppLinePF;if(scene==='check'){_oppLinePF='cbet';}// V2.9.600 精度债#2: 场景语义修正——对手check过牌=范围弱/未击中,用宽cbet基线;// 旧: scene==='check'错用barrel_river/barrel_turn(连开三枪/两枪强范围)→对手过牌反算强范围→我方价值eq低估、诈唬高估。// 面对bet场景: flop对手cbet用cbet宽范围, turn对手连开两枪barrel_turn, river连开三枪barrel_river(极化强范围)。else{_oppLinePF=bc.length===5?'barrel_river':bc.length===4?'barrel_turn':'cbet';}
   // V2.9.637 perf: 唯一真相源=postflopEqSpec()。正常链路go()已用多对手Worker/精确枚举算好并经_pfInj注入eq;
   //   仅当未注入(直接调用/兜底)时SE才在本线程自算——此时不再是每帧必跑,卡顿消除。多对手口径(_nActive-1)保持不变。
-  var _pfSpec=postflopEqSpec(hole,bc,scene,bet,pot,bTexture,_nActive);
+  var _pfSpec=postflopEqSpec(hole,bc,scene,bet,pot,bTexture,_nActive,stk);
   if(_pfInj&&typeof _pfInj.eq==='number'&&!isNaN(_pfInj.eq)){
     eq=_pfInj.eq;
     console.log('[V2.9.637perf] SE复用注入eq(多对手Worker已算,主线程0重算) n='+_nActive+' eq='+Math.round(eq*10)/10);
@@ -5157,9 +5183,23 @@ function decidePostflop(k,_pfInj){
   if(scene==='allin'){
     var _aiBet=(bet>0)?bet:pot;
 
+    // [物理层] 主池cap —— V2.9.724 FIX(R2): 补齐翻后长期缺失的一环, 口径对齐翻前 V2.9.712(L4741-4742)
+    //   pot 含边池时, 我方只能赢到 min(pot, 我方全码 × 在池人数); 超出部分是我方无权赢取的边池。
+    //   旧码 L5162 直接 bet/(pot+bet), 把边池当成"跟注后可赢", 巨池下赔率被系统性低估约一倍。
+    //   【铁证】poker_log_20260924_181708 #0: Ah7s @ Tc6c9s flop, pot=428BB / stk=45.5BB / nActive=4:
+    //     引擎赔率 9.6%(=45.5/473.5), 而真实主池赔率 18.8%(3对手皆深) ~ 22.6%(含25BB短码) / cap公式 20.0%。
+    //   【保守性证明】stk ≤ 我方总投入 myTot, 故 cap=stk×n ≤ 真实主池=myTot×n ⇒ 赔率偏高(门槛偏低)
+    //     ⇒ 本修正恒朝"偏松"一侧, 不会把原本该跟的牌误杀成弃牌(即不会引入过度弃牌)。
+    //   【退化一致】nActive=2(单挑)且我方能覆盖对手时 cap=pot, 本式退化为原式, 行为零变化。
+    var _aiInPot=((typeof G._inPotPlayers!=='undefined'&&G._inPotPlayers>=2)?G._inPotPlayers:(_nActive||2));
+    var _aiCapPot=(pot>0&&stk>0)?Math.min(pot,stk*_aiInPot):pot;
+    var _aiSidePot=(_aiCapPot<pot);
+    if(_aiSidePot){console.log('[V2.9.724翻后主池cap] pot '+pot+'→'+_aiCapPot+' (我方全码'+stk+'×在池'+_aiInPot
+      +'人, 边池'+Math.round((pot-_aiCapPot)*10)/10+'BB我方不可赢)');}
+
     // [第1层] 数学基线: 真实底池赔率(唯一真相源, 绝不被后续覆盖)
-    //   真实赔率 = 跟注额 / (可赢底池 + 跟注额)
-    var _aiPotOdds=(pot+_aiBet)>0?(_aiBet/(pot+_aiBet)*100):50;
+    //   真实赔率 = 跟注额 / (可赢底池 + 跟注额)   ← V2.9.724: 可赢底池用主池cap后的 _aiCapPot(旧为 pot)
+    var _aiPotOdds=(_aiCapPot+_aiBet)>0?(_aiBet/(_aiCapPot+_aiBet)*100):50;
     // MC噪声裕度: 蒙特卡洛模拟存在统计误差(源码L4674自述±3%), 用裕度而非人为地板防噪
     var _aiNoise=3;
     var _aiBase=_aiPotOdds+_aiNoise;
@@ -5234,6 +5274,12 @@ function decidePostflop(k,_pfInj){
     //   (实际被"池驱反fold"救成 call, 说明门槛本身已失准)。
     // 【保留】_aiNoise=3 作为 MC 采样噪声 + 对手范围不确定性的唯一裕度——这是有数学依据的
     //   (iter=1500~4000 时 MC std≈0.7~1.2pp, 范围估计偏差另计), 与"牌面/人数"无关, 不属重复计税。
+    // 【注意 V2.9.724】本项归零的前提是"eq 已含人数"。V2.9.720/724 已把 allin 的 eq 口径收敛过:
+    //   无边池 ⇒ eq=vs1 但此时"其余玩家弃牌"成立(V2.9.720 判据), 人数风险确实不存在;
+    //   有边池 ⇒ V2.9.724 已把 eq 回摆为真实 nOpp(V2.9.720 的假设失效), 人数风险已重新计入 eq。
+    //   ⇒ 两种情形都满足"eq 已含人数", 本项归零依然成立。**严禁再在门槛侧加回人数修正**
+    //     (上一次" eq 侧删 + 门槛侧删"双删就是 Ah7s 全压事件的根因)。
+    //   【待办 V2.9.725】河牌 allin 的 McC 组合爆炸风险已由 riverExactEquity 的 MC 回退(L13569)兜住, 无需处理。
     var _aiThreatDiag=_aiThreat, _aiMwAdjDiag=_aiMwAdj;
     _aiThreat=0; _aiMwAdj=0;
     if(_aiThreatDiag||_aiMwAdjDiag){
@@ -5273,11 +5319,13 @@ function decidePostflop(k,_pfInj){
       var _aiOppT=oppType||(G&&G.opp)||'unknown';
       if((_aiOppT==='fish'||_aiOppT==='calling_station'||_aiOppT==='maniac')&&hole.length===2&&typeof mcVsRange==='function'&&typeof gO==='function'&&typeof getOppPos==='function'){
         var _aiJamRange=gO(getOppPos());  // 开池宽表 → 近似 jam 宽范围
-        // ===== V2.9.720 FIX(P0 B3-b): 与 postflopEqSpec allin 口径对齐 —— 跟注对象是【全押者】 =====
-        //   旧代码此处硬写 Math.max(1,_nActive-1), 绕过了 postflopEqSpec 的口径收敛,
-        //   导致 V2.9.720 B3 对 allin 场景的修复在本分支失效(实测 #30 修复前/后 eq 均为 0.2%)。
-        //   同一决策对象必须同一人数口径, 否则同一手牌在两条路径下算出两套 eq。
-        var _aiJamMs=mcVsRange(hole,comm,_aiJamRange,1500,1);
+        // ===== V2.9.724 FIX(R1-c): 与 postflopEqSpec allin 同判据, 不再无条件写死 1 =====
+        //   旧码此处硬写 1 —— 无论 nActive 多大都按单挑重算 eq, 把 V2.9.724 在 postflopEqSpec
+        //   做的"存在边池⇒保留真实人数"直接覆盖掉(R3 放大器)。存在边池时用真实对手数。
+        //   无边池/单挑仍为 1(与 V2.9.720 B3-b 口径一致, 不回退该修复)。
+        var _aiJamN=(_aiSidePot&&(_nActive||2)>2)?Math.max(1,(_nActive||2)-1):1;
+        if(_aiJamN>1){console.log('[V2.9.724 jam人数口径] 存在边池: MC对手数 1→'+_aiJamN+'(nActive='+_nActive+')');}
+        var _aiJamMs=mcVsRange(hole,comm,_aiJamRange,1500,_aiJamN);
         if(_aiJamMs&&typeof _aiJamMs.eq==='number'&&_aiJamMs.eq>0){
           _aiJamAdjLog='[V2.9.712jam极化] opp='+_aiOppT+' 切宽jam范围 MC eq '+Math.round(eq)+'%→'+_aiJamMs.eq.toFixed(1)+'%';
           console.log(_aiJamAdjLog);
@@ -12792,7 +12840,7 @@ function go(){
       // V2.9.637 perf: scene归一(含bet→raise/85%全押硬闸)与活跃人数均与SE共用公共函数,口径零分歧
       var _goScene=postflopSceneNorm(G.scene,G.bet||0,G.stk||0);
       var _goNA=postflopActiveCount();
-      var _goSpec=postflopEqSpec(hole,bc,_goScene,G.bet||0,G.pot||1,bTexture,_goNA);
+      var _goSpec=postflopEqSpec(hole,bc,_goScene,G.bet||0,G.pot||1,bTexture,_goNA,G.stk||0);
       var oppRange=_goSpec.range;
       var betPotRatio=G.bet>0?G.bet/(G.pot+G.bet):0;
       // V2.9.53: 河牌完全枚举(同步精确), 翻牌/转牌仍走Worker异步MC
