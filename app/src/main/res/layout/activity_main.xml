@@ -26,6 +26,15 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:text="V2.9.725 翻前中强牌(QQ/JJ/TT/AK)可下注不强制全压: 移除all-in码深缓冲(避免正EV被迫全压), 绝不弃牌闸收窄至AA/KK"
+        android:textSize="13sp"
+        android:textColor="#fde047"
+        android:textStyle="bold"
+        android:layout_marginTop="4dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:text="V2.9.722 翻前全押闸消除人数项二次计税(对齐翻后C3) · 修复翻前全押多人池确凿误弃(38→21例) · 0负EV误跟 · 50项引擎测试全绿"
         android:textSize="13sp"
         android:textColor="#86efac"
