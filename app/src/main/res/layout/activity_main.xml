@@ -35,6 +35,15 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:text="V2.9.728 负EV弃牌修复: ①极短码赔率闸新增4-15BB救援段(赔率小于25%才接管, 全压按人数衰减权益判定, 零过度跟注; 原3BB以内作用域完全不变) ②Nash全压闸同口径改用衰减权益(救超大底池误弃, 如11BB赔率8.5%却弃牌) ③收口跟注门槛加成封顶+5pp(避免低赔率被加成翻倍误弃) ④面CBet码深保护: 跟注后剩余小于5BB且消耗过半改为全压, 不留死筹码"
+        android:textSize="13sp"
+        android:textColor="#fde047"
+        android:textStyle="bold"
+        android:layout_marginTop="4dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:text="V2.9.726 对手模型去不确定化: 禁用鱼/紧/疯自动误标与手动剥削标签, 引擎仅按当前手牌+公共牌标准范围权益做EV选择(修复A9误判全压)"
         android:textSize="13sp"
         android:textColor="#fde047"

@@ -1534,7 +1534,7 @@ function showToast(msg){
 //   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
 //   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
 //   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
-var ENGINE_VERSION='2.9.727';
+var ENGINE_VERSION='2.9.728';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -3870,13 +3870,41 @@ function decidePreflop(k){
   //   在 Nash 与 SE 表之前前置一道纯数学闸, 使 100BB 图表不再成为短码局的决策者。
   //   边际 = 6pp(eq 静态表 + 位置误差) + Multiway.callThresholdAdj()(多人池同口径加成)。
   //   eq 用 eQ(k, 对手数) 多人衰减口径(与 eQ 设计一致), 不用单挑 eq 高估多人池胜率。
-  if(bet>0&&_myEffBB>0&&_myEffBB<=3&&scene!=='check'&&scene!=='open'){
-    var _xsPo=bet/Math.max(pot+bet,1)*100;
+  // ===== V2.9.728 FIX(P0): 新增 4~15BB 救援段(原 ≤3BB 作用域判据不动) =====
+  //   原门槛 _myEffBB<=3 过严: 实机 idx18(3d2s, 我方11BB, pot=118BB, 赔率8.53%, eq37%)
+  //   因 11>3 未进入本闸, 落到 Nash CALL 表被误杀(按引擎自报eq, 弃牌损失 +36.7BB)。
+  //   现新增 4~15BB 救援段(上界对齐 L15773 shouldUseNash 的 Nash 生效区间), 并要求赔率<25%
+  //   才接管, 避免接管常规决策(仅救"极优赔率却被图表误杀"的局面)。
+  //   注: 原 ≤3BB 作用域沿用 V2.9.718 判据(权益人数衰减 + 门槛 +6+Multiway), 虽与引擎主口径
+  //   pfCallEq(L9742: 权益不内减, 惩罚只在门槛) 不一致, 但已在线上验证过, 本次不做改动(零回归)。
+  var _xsPoPre=(bet>0)?(bet/Math.max(pot+bet,1)*100):100;
+  // V2.9.728 三次修正(隔离复验铁证): 码深门槛放宽时【不能改动原 ≤3BB 作用域的判据】。
+  //   实测 121680 例对拍(727 vs 728)发现两处回归, 均已定位:
+  //     ① 22 / 32o @3BB pot=3 bet=1(赔率正好25%): 727=call, 728 因新增"_xsPoPre<25"未命中而 fold
+  //     ② A5s / A4s @3BB pot=4 bet=1 活跃5: 727="GTO 3bet vs MP"raise, 728 因权益去掉人数衰减
+  //        后 eq 由衰减值升到名义值,闸门被误触发, 把强牌的加注降级成跟注(丢弃牌率)。
+  //   修法: ≤3BB 完全保留 V2.9.718 原口径(权益人数衰减 + 门槛 +6+Multiway, 且不加赔率限制);
+  //         新增的 4~15BB 救援段才套用 V2.9.728 新判据 + 赔率<25% 限制。
+  if(bet>0&&_myEffBB>0&&_myEffBB<=15&&(_myEffBB<=3||_xsPoPre<25)&&scene!=='check'&&scene!=='open'){
+    var _xsPo=_xsPoPre;
     var _xsN=Math.max(1,((G.act||2)-1));
-    var _xsEq=eQ(k,_xsN);
-    var _xsNeed=_xsPo+6+Multiway.callThresholdAdj();
+    var _xsEq,_xsNeed,_xsTag;
+    if(_myEffBB<=3){
+      // ===== V2.9.718 原作用域: 完全保留原判据(零回归) =====
+      _xsEq=eQ(k,_xsN); _xsNeed=_xsPo+6+Multiway.callThresholdAdj(); _xsTag='V2.9.718原口径(衰减eq+6+多人)';
+    }else{
+      // ===== V2.9.728 新增 4~15BB 救援段 =====
+      // 全压跟注(bet>=stk*0.9)后无后续街, 所有未弃牌对手一路摊牌 → 必须用人数衰减权益;
+      //   名义单挑 eq 会显著高估多人池胜率。60840 例对拍实测: 用名义 eq 出现 2677 例过度跟注
+      //   (清一色 5人活跃/赔率≈24%/衰减eq仅15%, 典型 32s 15BB EV=-5.55BB), 改用衰减权益后归零。
+      // 非全压 → 沿用引擎主口径 pfCallEq(L9742: 权益不内减, 人数惩罚只在门槛 +6+Multiway)。
+      var _xsAllin=(bet>0&&stk>0&&bet>=stk*0.9);
+      _xsEq=_xsAllin?eQ(k,_xsN):eQ(k);
+      _xsNeed=_xsPo+(_xsAllin?3:(6+Multiway.callThresholdAdj()));
+      _xsTag=_xsAllin?('V2.9.728全压口径(衰减eq+3pp, '+_xsN+'对手)'):'V2.9.728非全压口径(名义eq+6+多人)';
+    }
     // V2.9.718 边界: 本闸只"救回原本会被100BB图表误弃的边际牌", 不接管强牌的加注/推全下决策。
-    //   用【名义单挑 eq】eQ(k) 判定牌力档位(与上面多人衰减后的 _xsEq 分工, 避免人数影响档位判定)。
+    //   用【名义单挑 eq】eQ(k) 判定牌力档位(V2.9.728: _xsEq 已不再做人数衰减, 档位判定仍用 eq)。
     //   实测 eQ(k): AA84.7/KK82.6/QQ79.4/JJ78.7/TT74.1/99 71.5/AKo66.2/AKs65/AQo64.6/AQs63.1
     //     → 取 62 为界: TT+/AK/AQ 全部保留原 3bet/推全下通道(短码最需要弃牌率与价值);
     //       AJs60.8/KQs60.8/55 60.7/KTo59.3/QTo57.9/K7o57.2 归入本闸救回。
@@ -3884,9 +3912,9 @@ function decidePreflop(k){
     if(_xsEq>=_xsNeed&&eq<62){
       console.log('[V2.9.718极短码赔率闸] '+k+' '+p+' '+_myEffBB+'BB pot='+pot+'BB bet='+bet+'BB 赔率='
         +Math.round(_xsPo)+'% 需='+Math.round(_xsNeed)+'%(赔率+6+多人'+Multiway.callThresholdAdj()
-        +') eq='+Math.round(_xsEq)+'%(n='+_xsN+'对手)→call(不查100BB GTO表)');
+        +') eq='+Math.round(_xsEq)+'%('+_xsTag+')→call(不查100BB GTO表)');
       var _xsEx=applyExploit(_xsEq,'call',oppType,{bet:bet,pot:pot});
-      return{a:'call',v:bet,r:'极短码赔率call '+k+' eq'+Math.round(_xsEq)+'%≥需'+Math.round(_xsNeed)+'%(码深'+_myEffBB+'BB 赔率'+Math.round(_xsPo)+'%)',eq:_xsEx.eq,c:_xsEq>=55?'m':'l',scene:'极短码跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_xsEq,pot,bet,0),exploit:_xsEx.exploit,_se:true,_seFreq:1,_xsShort:true};
+      return{a:'call',v:bet,r:'[V2.9.728]极短码赔率call '+k+' eq'+Math.round(_xsEq)+'%≥需'+Math.round(_xsNeed)+'%(码深'+_myEffBB+'BB 赔率'+Math.round(_xsPo)+'%)',eq:_xsEx.eq,c:_xsEq>=55?'m':'l',scene:'极短码跟注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_xsEq,pot,bet,0),exploit:_xsEx.exploit,_se:true,_seFreq:1,_xsShort:true};
     }
   }
 
@@ -5723,6 +5751,13 @@ function decidePostflop(k,_pfInj){
       var _raiseTh=SPRZone.raiseThreshold(spr,_raiseBase,_clHN);
       var _callTh=SPRZone.callThreshold(spr,_need+3,ip,_clHN,street);
       if(_isMultiway){_callTh+=6;_raiseTh+=4;}  // 多人池防守收紧
+      // ===== V2.9.728 FIX(P0): 加成天花板 =====
+      //   SPR/位置/牌类/人数加成是【加法叠加在底池赔率之上】(L5724+L9502-9517+L5725),
+      //   赔率越低扭曲越大: 实机 idx43(9s9h河牌) 赔率10%→_callTh=23%(加成13pp), eq19% 仍弃牌;
+      //   实机 idx30(Ad5c河牌) 赔率25%→_callTh=42%(加成17pp), eq39% 仍弃牌。
+      //   限制总加成不超过 +5pp: 保留"短码更严格"的方向性, 但杜绝"加成把门槛抬到超过权益"。
+      //   验算: idx43 → min(23,10+5)=15, eq19%≥15% 改跟注; idx30 → min(42,25+5)=30, eq39%≥30% 改跟注。
+      _callTh=Math.min(_callTh,_need+5);
       if(eq>=_raiseTh){
         var _rcSz=Math.round(Math.min(Math.max(pot*0.66,_effBet*2.2),stk));
         var _exR=applyExploit(eq,'raise',oppType,{bet:_effBet,pot:pot});
@@ -6464,6 +6499,16 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk,eq){
       var _rSz=Math.round(Math.max(betSz*2.5,pot*.66));
       _rSz=Math.min(_rSz,G.stk||100000);
       return{a:'raise',v:_rSz,r:'[V2.9.703确定性]面CBet raise 边际+'+_margin.toFixed(1)+'pp≥赔率+15pp '+btKey+'/'+hcKey,eq:eq||0,c:'h',sizing:_rSz,scene:isDonk?'面对Donk':'面对CBet',spr:spr,_se:true,_seFreq:1};
+    }
+    // ===== V2.9.728 FIX(P0): 码深保护 —— 禁止"跟注后只剩零头" =====
+    //   实机 idx41(9s9h转牌): chips=10BB 跟注 7BB → 只剩 3BB, 既无弃牌率也无后续筹码(死筹码),
+    //   直接导致后续 idx43 在赔率仅 8% 时被迫弃牌(用户反馈"压到没筹码了又弃牌")。
+    //   触发条件(双闸, 避免误伤常规跟注): 本次消耗 > 剩余筹码一半 且 跟注后剩余 < 5BB。
+    //   处理: 边际≥0 时改为全压(拿弃牌率 + 避免留死码), 边际<0 时走下方原有弃牌逻辑。
+    if(_margin>=0&&betSz>0&&(G.stk||0)>0&&betSz>((G.stk||0)*0.5)&&((G.stk||0)-betSz)<5){
+      var _protSz=Math.round(G.stk||0);
+      var _protEx=applyExploit(eq,'raise',(typeof oppType!=='undefined'?oppType:(G.opp||'unknown')),{bet:betSz,pot:pot});
+      return{a:'raise',v:_protSz,r:'[V2.9.728码深保护]面CBet 全压(原跟注'+betSz+'BB后仅剩'+Math.round((G.stk||0)-betSz)+'BB,不留零头) 边际+'+_margin.toFixed(1)+'pp '+btKey+'/'+hcKey,eq:eq||0,c:'m',sizing:_protSz,scene:isDonk?'面对Donk':'面对CBet',spr:spr,_se:true,_seFreq:1,evs:compareEVs(eq,pot,betSz,0),exploit:_protEx.exploit};
     }
     // (B) 边际≥0→call (修复 #13 4d3d 关键: margin=+1.5pp 必 call, 不掷骰)
     if(_margin>=0){
@@ -15874,9 +15919,19 @@ var NashPushFold={
     //   修复: 极短码(≤2BB)+scene=allin+底池赔率<10%时,equity>10%即call(留安全边际)。
     if(scene==='allin'){
       var _aiPotOdds=(pot>0)?(bet/(pot+bet)*100):100;
-      if(effectiveBB<=2&&_aiPotOdds<10&&_nashRealEq>10){
-        console.log('[V2.9.648短码赔率闸] '+k+' '+p+' '+effectiveBB+'BB pot='+pot+'BB bet='+bet+'BB 赔率='+Math.round(_aiPotOdds)+'% eq='+_nashRealEq+'%→call(不查Nash)');
-        return{a:'call',r:'短码全压赔率call('+k+' eq'+_nashRealEq+'%>赔率'+Math.round(_aiPotOdds)+'%)',eq:50,c:'m',scene:'短码赔率call',spr:spr,_se:true,_seFreq:1,_nash:true};
+      // ===== V2.9.728 FIX(P0): 原门槛 effectiveBB<=2 只在 ≤2BB 生效, 3~15BB(Nash生效区间
+      //   L15773 shouldUseNash) 整段保护空白 → 实机 idx18(11BB/赔率8.53%/eq37%) 被 Nash CALL 表
+      //   误杀。现改为按【赔率】触发: 赔率<25% 且权益超过赔率+3pp 缓冲即 call(不查 Nash CALL 表)。
+      //   注: idx44(86o/3BB/赔率30%/名义eq48%) 复核后不属误杀 —— 该局面 5 人活跃,
+      //   86o 对 4 名对手衰减权益仅 22% < 赔率 30%, 弃牌正确, 故维持 Nash fold 不改。
+      // V2.9.728 二次修正: 全压无后续街 → 必须用【人数衰减后权益】eQ(k,对手数) 判据,
+      //   不能用 _nashRealEq(=eQ(k) 名义单挑, 高估多人池)。60840 例对拍实测: 用名义权益
+      //   会出现 2677 例过度跟注(5人活跃/赔率≈24%/衰减eq仅15%, EV 最低 -5.55BB)。
+      var _aiN=Math.max(1,((G.act||2)-1));
+      var _aiEq=0; try{_aiEq=Math.round(eQ(k,_aiN));}catch(_e){_aiEq=_nashRealEq;}
+      if(_aiPotOdds<25&&_aiEq>_aiPotOdds+3){
+        console.log('[V2.9.728短码赔率闸] '+k+' '+p+' '+effectiveBB+'BB pot='+pot+'BB bet='+bet+'BB 赔率='+Math.round(_aiPotOdds)+'% 衰减eq('+_aiN+'对手)='+_aiEq+'%(名义单挑eq'+_nashRealEq+'%)→call(不查Nash)');
+        return{a:'call',r:'[V2.9.728]短码全压赔率call('+k+' 衰减eq'+_aiEq+'%>赔率'+Math.round(_aiPotOdds)+'+3, '+_aiN+'对手)',eq:50,c:'m',scene:'短码赔率call',spr:spr,_se:true,_seFreq:1,_nash:true};
       }
       if(this.isNashCall(k,p,effectiveBB)){
         return{a:'call',r:'Nash call vs allin('+p+'/'+bbKey+'BB) '+k,eq:50,c:'m',scene:'纳什callvs全压',spr:spr,_se:true,_seFreq:1,_nash:true};
