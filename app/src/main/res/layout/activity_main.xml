@@ -1,221 +1,238 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- ===== V2.9.729 FIX(P0-1): 版本说明遮挡隐身模式 =====
+     【实测问题】旧布局根为 LinearLayout 且【无 ScrollView】, 顶部依次排 5 条版本说明
+       (V2.9.727/728/726/725/722, 其中 V2.9.728 单条约 200 字), 在 360×640dp 小屏上
+       版本说明整块占据首屏, 🥷隐身模式开关被挤出可视区且无法滚动到 → 点不到。
+     【修法三处】
+       ① 根布局外包 ScrollView(fillViewport=true) —— 任何屏高都能滚到全部控件, 不再被截断;
+       ② 隐身模式开关上移到「标题 → 状态 → 启动按钮」之后, 首屏必定可见可点;
+       ③ 5 条版本说明合并为「最新 1 条 + 可折叠历史(4 条)」, 默认收起, 首屏只占 1 行。
+     【不误伤】所有原有 id 全部保留(tvStatus/btnStart/btnHelper/switchStealth/
+       tvAccessibilityStatus/btnAccessibility/spinnerProvider/etApiKey/btnSaveApi/tvHint),
+       MainActivity 既有绑定与监听零改动; 仅新增 tvVerLatest/btnVerHistory/tvVerHistory 三个控件。
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#0f1a0f"
-    android:padding="24dp"
-    android:gravity="center_horizontal">
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="🃏"
-        android:textSize="64sp"
-        android:layout_marginTop="30dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="屏幕优化"
-        android:textSize="24sp"
-        android:textColor="#f1f5f9"
-        android:textStyle="bold"
-        android:layout_marginTop="8dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="V2.9.727 关闭即清缓存: WebView localStorage(对手追踪/手牌历史/统计/画像/死值rfKey)每次启动-销毁全清空, 每次重新开始(配合V2.9.726去不确定化)"
-        android:textSize="13sp"
-        android:textColor="#fde047"
-        android:textStyle="bold"
-        android:layout_marginTop="4dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="V2.9.728 负EV弃牌修复: ①极短码赔率闸新增4-15BB救援段(赔率小于25%才接管, 全压按人数衰减权益判定, 零过度跟注; 原3BB以内作用域完全不变) ②Nash全压闸同口径改用衰减权益(救超大底池误弃, 如11BB赔率8.5%却弃牌) ③收口跟注门槛加成封顶+5pp(避免低赔率被加成翻倍误弃) ④面CBet码深保护: 跟注后剩余小于5BB且消耗过半改为全压, 不留死筹码"
-        android:textSize="13sp"
-        android:textColor="#fde047"
-        android:textStyle="bold"
-        android:layout_marginTop="4dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="V2.9.726 对手模型去不确定化: 禁用鱼/紧/疯自动误标与手动剥削标签, 引擎仅按当前手牌+公共牌标准范围权益做EV选择(修复A9误判全压)"
-        android:textSize="13sp"
-        android:textColor="#fde047"
-        android:textStyle="bold"
-        android:layout_marginTop="4dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="V2.9.725 翻前中强牌(QQ/JJ/TT/AK)可下注不强制全压: 移除all-in码深缓冲(避免正EV被迫全压), 绝不弃牌闸收窄至AA/KK"
-        android:textSize="13sp"
-        android:textColor="#fde047"
-        android:textStyle="bold"
-        android:layout_marginTop="4dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="V2.9.722 翻前全押闸消除人数项二次计税(对齐翻后C3) · 修复翻前全押多人池确凿误弃(38→21例) · 0负EV误跟 · 50项引擎测试全绿"
-        android:textSize="13sp"
-        android:textColor="#86efac"
-        android:layout_marginTop="4dp" />
-
-    <TextView
-        android:id="@+id/tvStatus"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="⏸ 未启动"
-        android:textSize="18sp"
-        android:textColor="#666666"
-        android:layout_marginTop="24dp" />
-
-    <Button
-        android:id="@+id/btnStart"
-        android:layout_width="240dp"
-        android:layout_height="56dp"
-        android:text="🚀 启动"
-        android:textSize="18sp"
-        android:textColor="#ffffff"
-        android:backgroundTint="#22c55e"
-        android:layout_marginTop="16dp" />
-
-    <Button
-        android:id="@+id/btnHelper"
-        android:layout_width="240dp"
-        android:layout_height="56dp"
-        android:text="🃏 打开智囊"
-        android:textSize="16sp"
-        android:textColor="#ffffff"
-        android:backgroundTint="#16a34a"
-        android:layout_marginTop="12dp"
-        android:visibility="gone" />
-
-    <!-- V2.9.39: 隐身模式开关 -->
-    <LinearLayout
-        android:layout_width="240dp"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginTop="8dp">
-
-        <Switch
-            android:id="@+id/switchStealth"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="🥷 隐身模式"
-            android:textColor="#e2e8f0"
-            android:textSize="14sp"
-            android:thumbTint="#7c3aed"
-            android:trackTint="#374151" />
-    </LinearLayout>
-
-    <TextView
-        android:id="@+id/tvAccessibilityStatus"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="⚠️ 无障碍服务未开启（点击下方开启）"
-        android:textSize="12sp"
-        android:textColor="#f59e0b"
-        android:layout_marginTop="8dp"
-        android:gravity="center" />
-
-    <Button
-        android:id="@+id/btnAccessibility"
-        android:layout_width="240dp"
-        android:layout_height="48dp"
-        android:text="♿ 开启无障碍服务"
-        android:textSize="14sp"
-        android:textColor="#ffffff"
-        android:backgroundTint="#7c3aed"
-        android:layout_marginTop="4dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="━━ API视觉识别配置 ━━"
-        android:textSize="13sp"
-        android:textColor="#f59e0b"
-        android:layout_marginTop="20dp" />
+    android:fillViewport="true"
+    android:background="#0f1a0f">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="8dp"
-        android:gravity="center_vertical">
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:gravity="center_horizontal">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="平台:"
-            android:textSize="14sp"
-            android:textColor="#94a3b8" />
-
-        <Spinner
-            android:id="@+id/spinnerProvider"
-            android:layout_width="120dp"
-            android:layout_height="40dp"
-            android:layout_marginStart="8dp"
-            android:backgroundTint="#374151" />
+            android:text="🃏"
+            android:textSize="48sp"
+            android:layout_marginTop="16dp" />
 
         <TextView
-            android:id="@+id/tvApiStatus"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="❌ 未配置"
+            android:text="屏幕优化"
+            android:textSize="24sp"
+            android:textColor="#f1f5f9"
+            android:textStyle="bold"
+            android:layout_marginTop="4dp" />
+
+        <!-- ② 隐身模式开关上移: 首屏可见可点 (旧布局排在 5 条版本说明之后) -->
+        <LinearLayout
+            android:layout_width="240dp"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="16dp">
+
+            <Switch
+                android:id="@+id/switchStealth"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🥷 隐身模式"
+                android:textColor="#e2e8f0"
+                android:textSize="14sp"
+                android:thumbTint="#7c3aed"
+                android:trackTint="#374151" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⏸ 未启动"
+            android:textSize="18sp"
+            android:textColor="#666666"
+            android:layout_marginTop="12dp" />
+
+        <Button
+            android:id="@+id/btnStart"
+            android:layout_width="240dp"
+            android:layout_height="56dp"
+            android:text="🚀 启动"
+            android:textSize="18sp"
+            android:textColor="#ffffff"
+            android:backgroundTint="#22c55e"
+            android:layout_marginTop="12dp" />
+
+        <Button
+            android:id="@+id/btnHelper"
+            android:layout_width="240dp"
+            android:layout_height="56dp"
+            android:text="🃏 打开智囊"
+            android:textSize="16sp"
+            android:textColor="#ffffff"
+            android:backgroundTint="#16a34a"
+            android:layout_marginTop="12dp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/tvAccessibilityStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⚠️ 无障碍服务未开启（点击下方开启）"
             android:textSize="12sp"
-            android:textColor="#ef4444"
-            android:layout_marginStart="12dp" />
+            android:textColor="#f59e0b"
+            android:layout_marginTop="12dp"
+            android:gravity="center" />
+
+        <Button
+            android:id="@+id/btnAccessibility"
+            android:layout_width="240dp"
+            android:layout_height="48dp"
+            android:text="♿ 开启无障碍服务"
+            android:textSize="14sp"
+            android:textColor="#ffffff"
+            android:backgroundTint="#7c3aed"
+            android:layout_marginTop="4dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="━━ API视觉识别配置 ━━"
+            android:textSize="13sp"
+            android:textColor="#f59e0b"
+            android:layout_marginTop="20dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="平台:"
+                android:textSize="14sp"
+                android:textColor="#94a3b8" />
+
+            <Spinner
+                android:id="@+id/spinnerProvider"
+                android:layout_width="120dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:backgroundTint="#374151" />
+
+            <TextView
+                android:id="@+id/tvApiStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="❌ 未配置"
+                android:textSize="12sp"
+                android:textColor="#ef4444"
+                android:layout_marginStart="12dp" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/etApiKey"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:hint="输入API Key（如 sk-xxx）"
+            android:textSize="14sp"
+            android:textColor="#e2e8f0"
+            android:textColorHint="#64748b"
+            android:backgroundTint="#374151"
+            android:inputType="textPassword"
+            android:layout_marginTop="8dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp" />
+
+        <Button
+            android:id="@+id/btnSaveApi"
+            android:layout_width="200dp"
+            android:layout_height="44dp"
+            android:text="💾 保存API配置"
+            android:textSize="14sp"
+            android:textColor="#ffffff"
+            android:backgroundTint="#d97706"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/tvHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="先点上方按钮启动截屏"
+            android:textSize="13sp"
+            android:textColor="#666666"
+            android:layout_marginTop="12dp"
+            android:gravity="center" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="使用步骤：\n1. 配置API Key（支持OpenAI/通义千问VL/硅基流动）\n2. 点「开启无障碍服务」→ 开启\n3. 开启「🥷隐身模式」(反检测)\n4. 点「启动」→ 允许悬浮窗\n5. 打牌时点屏幕上的🎯悬浮球即可截屏识别\n★ 拖动悬浮球可移到不挡牌的位置 ★\n★ 长按悬浮球可展开/收起详细面板 ★\n★ 悬浮球边框颜色=建议：绿=加注 橙=跟注 红=弃牌 ★"
+            android:textSize="12sp"
+            android:textColor="#64748b"
+            android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:lineSpacingExtra="3dp" />
+
+        <!-- ③ 版本说明区移到最底部: 默认只显示最新 1 条, 历史 5 条折叠 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="━━ 版本说明 ━━"
+            android:textSize="13sp"
+            android:textColor="#f59e0b"
+            android:layout_marginTop="20dp" />
+
+        <TextView
+            android:id="@+id/tvVerLatest"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="V2.9.729 负EV弃牌与界面修复: ①表内路径补赔率兜底(与表外同口径, 修K牌翻前多弃) ②强牌硬底不再被小档被支配折价否决 ③vs-allin低赔率时码深加成归零 ④面CBet加注下限按街别/人数分档且不留零头 ⑤河牌MEDIUM薄价值加注通道开启 ⑥主界面版本说明折叠+隐身开关上移(不再被遮挡)"
+            android:textSize="12sp"
+            android:textColor="#fde047"
+            android:textStyle="bold"
+            android:layout_marginTop="6dp"
+            android:gravity="center" />
+
+        <Button
+            android:id="@+id/btnVerHistory"
+            android:layout_width="200dp"
+            android:layout_height="40dp"
+            android:text="📜 历史版本说明(5条)"
+            android:textSize="13sp"
+            android:textColor="#e2e8f0"
+            android:backgroundTint="#374151"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/tvVerHistory"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="V2.9.728 负EV弃牌修复: ①极短码赔率闸新增4-15BB救援段 ②Nash全压闸同口径改用衰减权益 ③收口跟注门槛加成封顶+5pp ④面CBet码深保护: 跟注后剩余小于5BB且消耗过半改为全压, 不留死筹码\n\nV2.9.727 关闭即清缓存: WebView localStorage(对手追踪/手牌历史/统计/画像/死值rfKey)每次启动-销毁全清空\n\nV2.9.726 对手模型去不确定化: 禁用鱼/紧/疯自动误标与手动剥削标签\n\nV2.9.725 翻前中强牌(QQ/JJ/TT/AK)可下注不强制全压\n\nV2.9.722 翻前全押闸消除人数项二次计税 · 修复翻前全押多人池确凿误弃(38→21例)"
+            android:textSize="11sp"
+            android:textColor="#94a3b8"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:lineSpacingExtra="2dp"
+            android:visibility="gone" />
+
     </LinearLayout>
-
-    <EditText
-        android:id="@+id/etApiKey"
-        android:layout_width="match_parent"
-        android:layout_height="44dp"
-        android:hint="输入API Key（如 sk-xxx）"
-        android:textSize="14sp"
-        android:textColor="#e2e8f0"
-        android:textColorHint="#64748b"
-        android:backgroundTint="#374151"
-        android:inputType="textPassword"
-        android:layout_marginTop="8dp"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp" />
-
-    <Button
-        android:id="@+id/btnSaveApi"
-        android:layout_width="200dp"
-        android:layout_height="44dp"
-        android:text="💾 保存API配置"
-        android:textSize="14sp"
-        android:textColor="#ffffff"
-        android:backgroundTint="#d97706"
-        android:layout_marginTop="8dp" />
-
-    <TextView
-        android:id="@+id/tvHint"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="先点上方按钮启动截屏"
-        android:textSize="13sp"
-        android:textColor="#666666"
-        android:layout_marginTop="12dp"
-        android:gravity="center" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="使用步骤：\n1. 配置API Key（支持OpenAI/通义千问VL/硅基流动）\n2. 点「开启无障碍服务」→ 开启\n3. 开启「🥷隐身模式」(反检测)\n4. 点「启动」→ 允许悬浮窗\n5. 打牌时点屏幕上的🎯悬浮球即可截屏识别\n★ 拖动悬浮球可移到不挡牌的位置 ★\n★ 长按悬浮球可展开/收起详细面板 ★\n★ 悬浮球边框颜色=建议：绿=加注 橙=跟注 红=弃牌 ★"
-        android:textSize="12sp"
-        android:textColor="#64748b"
-        android:layout_marginTop="12dp"
-        android:lineSpacingExtra="3dp" />
-
-</LinearLayout>
+</ScrollView>

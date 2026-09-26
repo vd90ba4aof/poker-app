@@ -1534,7 +1534,7 @@ function showToast(msg){
 //   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
 //   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
 //   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
-var ENGINE_VERSION='2.9.728';
+var ENGINE_VERSION='2.9.729';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -3774,7 +3774,13 @@ function _dominatorTh(k,rP5){
     if(_d>0){
       var _ot=(typeof G!=='undefined'&&G.opp)||'unknown';
       if(_ot==='fish'||_ot==='calling_station'||_ot==='maniac')return 0;
-      if(_ot==='unknown')return Math.round(_d*0.5);
+      // ===== V2.9.729 FIX(P1-4): unknown 折价 0.5→0.33 =====
+      // 【实测依据】poker_log_20260927_042432: 59/59 决策 oppStats 全部 unknown —— 实战中
+      //   unknown 是常态而非例外, ×0.5 等于把"范围未知"当成"半紧", 对 K 高牌系统性加 3pp 阈值
+      //   (K: 6×0.5=3; Q/J/T: 10×0.5=5), 而未知范围本身没有任何支配依据。
+      //   收敛至 ×0.33(K→2, Q/J/T→3): 保留方向性(未知≠无风险), 主要惩罚留给有画像依据的
+      //   tight/nit/tag(仍全额)。三个调用点(FlatCall1/FlatCall2/表内频率)统一受益。
+      if(_ot==='unknown')return Math.round(_d*0.33);
     }
     return _d;
   }catch(e){return 0;}
@@ -3794,6 +3800,53 @@ function isTrashPreflop(k){
   if(_hi==='A'||_hi==='K')return false;            // 带A/K高牌 → 可玩
   if(k.indexOf('s')>=0)return false;               // 同花 → 可玩
   return true;                                      // 其余 → 纯垃圾
+}
+
+// ===== V2.9.729 FIX(P0-5, 新发现): 赔率闸的"人数惩罚"统一口径 =====
+// 【实测发现的口径冲突】翻前赔率闸里两处人数来源不一致:
+//   ① 权益侧: _oddsN = G.act-1(未弃牌对手数);
+//   ② 惩罚侧: Multiway.callThresholdAdj() → Multiway.level() → _effPlayers() = G._inPotPlayers。
+//   实机证据(poker_log_20260927_042432 决策[32] Jc9c): reason="赔率兜底 J9s eq45%(n=5)≥需44%
+//   (赔率36%+边际8, CO表...)" —— 需44 = 36+8+0 ⇒ 多人惩罚 _oddsMW=0, 但同一条 reason 里
+//   n=5 说明 G.act=6(4 个对手)。即"4 个对手"却按【单挑】不加任何多人惩罚。
+//   后果: 底池赔率(多人池天然更低)与单挑权益直接比较且无惩罚 → 多人池系统性过度跟注。
+//   扫描实证(169手×5位置×3人数×4注码×2码深 = 20280 点): 仅此一项就放行大量负EV跟注。
+// 【修法】把人数惩罚改为【与权益侧同源】: 取 max(G.act, G._inPotPlayers) 判 level,
+//   映射表与 Multiway.level() 完全一致(hu≤2→0 / 3way=3→3 / multiway≤5→6 / super>5→10),
+//   只是不再依赖可能与 G.act 打架的 _inPotPlayers 单值。赔率兜底两条路径(表外/表内)共用本函数,
+//   单一真相源, 杜绝两处口径再漂移。
+// ===== V2.9.729 FIX(P0-6, 新发现): 赔率闸改用【多人衰减 + 位置范围折减】的真实权益 =====
+// 【实测发现】pfCallEq(k,role,n) 对 n【完全不衰减】(实测 KJo@mp: n=1..5 恒为 44.9),
+//   多人惩罚只加在门槛侧(+0/3/6/6/10)。但底池赔率随人数急剧下降(4 人池约 20-25%),
+//   10pp 的门槛惩罚根本补不上"单挑权益 vs 多人赔率"的缺口:
+//   扫描实证(20280 点, 权益用 eQ(k,n)×范围折减核算): 仅 act=5(4对手) 一档,
+//   新增 348 个跟注里 320 个 EV<0, 合计 -122BB。
+// 【修法】权益侧就带上多人衰减: eq_n = eQ(k,n) × [pfCallEq(k,role,1)/eQ(k,1)]
+//   —— eQ 是引擎自带的多人衰减模型(实测 AA: 1人84.7 / 4人57.0, 与公开实测一致),
+//      后一项是"该位置开池范围 vs 随机范围"的折减系数(KJo@mp: 44.9/60.4=0.743)。
+// 【一致性】权益既已含多人衰减, 门槛侧就不再叠加多人惩罚(避免同一事实计两次),
+//   只保留 8pp 通用边际。翻前赔率兜底两条路径(表外/表内)共用本函数。
+function _pfOddsEq(k,role,n){
+  try{
+    var _e1=eQ(k,1), _en=eQ(k,n);
+    var _p1=(typeof pfCallEq==='function')?pfCallEq(k,role,1):null;
+    if(!(typeof _e1==='number'&&_e1>0&&typeof _en==='number')) return (typeof _p1==='number')?_p1:null;
+    if(!(typeof _p1==='number')) return _en;
+    return _en*(_p1/_e1);
+  }catch(e){
+    try{return (typeof pfCallEq==='function')?pfCallEq(k,role,n):null;}catch(e2){return null;}
+  }
+}
+function _pfOddsMWAdj(){
+  try{
+    var _pa=(typeof G!=='undefined'&&typeof G.act==='number'&&G.act>=2)?G.act:2;
+    var _pb=(typeof G!=='undefined'&&typeof G._inPotPlayers==='number'&&G._inPotPlayers>=2)?G._inPotPlayers:2;
+    var _n=Math.max(_pa,_pb);
+    if(_n<=2)return 0;
+    if(_n===3)return 3;
+    if(_n<=5)return 6;
+    return 10;
+  }catch(e){return 0;}
 }
 
 function decidePreflop(k){
@@ -4603,13 +4656,19 @@ function decidePreflop(k){
       //   _oddsN = 池内未弃牌对手数 = G.act(含我方的活跃人数) - 1, 与 V2.9.718 极短码闸的
       //           _xsN = Math.max(1,(G.act||2)-1) 完全同口径 —— 消除"同帧两个模块口径打架"。
       var _oddsN=Math.max(1,((typeof G!=='undefined'&&G.act)?G.act:2)-1);
-      var _oddsEq=(typeof pfCallEq==='function')?pfCallEq(k,raiserRole,_oddsN)
-                 :((typeof eQvsOpen==='function')?eQvsOpen(k,raiserRole):null);
+      // V2.9.729 FIX(P0-6): 权益改用【多人衰减+范围折减】口径(见 _pfOddsEq 定义处实测依据)
+      var _oddsEq=(typeof _pfOddsEq==='function')?_pfOddsEq(k,raiserRole,_oddsN)
+                 :((typeof pfCallEq==='function')?pfCallEq(k,raiserRole,_oddsN)
+                 :((typeof eQvsOpen==='function')?eQvsOpen(k,raiserRole):null));
       var _oddsCmp=(typeof _oddsEq==='number')?_oddsEq:eq;
       if(bet>0&&typeof _oddsCmp==='number'&&_oddsCmp>0){
         var _oddsNeed=bet/Math.max(pot+bet,1)*100;
         // ===== V2.9.721 FIX(P0 BUG-B): 门槛补【多人池惩罚】, 与 limp/FlatCall 同口径, 消除单挑权益比多人赔率 =====
-        var _oddsMW=(typeof Multiway!=='undefined'&&Multiway.callThresholdAdj)?Multiway.callThresholdAdj():0;
+        // V2.9.729 FIX(P0-5+P0-6): 权益已含多人衰减, 门槛侧不再叠加多人惩罚(同一事实不计两次)。
+        //   保留 _pfOddsMWAdj 仅供未走 _pfOddsEq 的极端回落路径使用(口径同 G.act)。
+        var _oddsMW=(typeof _pfOddsEq==='function')?0
+                   :((typeof _pfOddsMWAdj==='function')?_pfOddsMWAdj()
+                   :((typeof Multiway!=='undefined'&&Multiway.callThresholdAdj)?Multiway.callThresholdAdj():0));
         if(_oddsCmp>=_oddsNeed+8+_oddsMW){
           var _exOD=applyExploit(_oddsCmp,'call',oppType,{bet:bet,pot:pot});
           console.log('[V2.9.719赔率兜底] '+k+' vs '+rP5+' eq'+Math.round(_oddsCmp)+'%(n='+_oddsN+'对手口径)≥赔率'
@@ -4678,10 +4737,72 @@ function decidePreflop(k){
           //   22@eq74→51.8不再触发硬底); ②被支配offsuit broadway(_tbDom>0)不给硬底豁免
           //   (频率折价未命中的QJo vs MP不被硬底捞回, 否则FIX-3折价形同虚设);
           //   ③其余强牌(对子77+/非被支配双broadway)保留原硬底保护。
-          if((_isPairPF||_twoBroadway)&&_tbDom===0&&_tbEqAdj>=60){
+          // ===== V2.9.729 FIX(P0-3): 硬底否决条件 _tbDom===0 → _tbDom<=3 =====
+          // 【实测根因】poker_log_20260927_042432 决策[3] KdJh@SB: pot=30/toCall=10(赔率25.0%),
+          //   实机 reason="[SE]vs MP call频率26%未命中"→fold, 按日志 eq=60% 计 EVcall=+14.00BB。
+          //   逐行定位: 该手 _twoBroadway=true(K,J∈JQKA)、_tbEqAdj=eq=60≥60, 只因
+          //   _tbDom=_dominatorTh('KJo','MP')=6×0.5(unknown)=3 —— 非零 → 硬底被否决 → L4686 fold。
+          //   即"K 牌翻前大多弃牌"的直接机制: 只有 K 高offsuit broadway 会拿到 _tbDom=3 这一档,
+          //   而硬底要求严格 ===0, 于是 K 牌被"被支配折价"和"硬底"两头夹击(折价降频率, 硬底又不救)。
+          // 【修法】小档折价(_tbDom<=3, 即 unknown 下的 2~3)不再否决硬底 —— 折价已在频率侧生效
+          //   (f×0.85~0.9), 不应在硬底侧二次否决(同一事实计两次 = 联动重复惩罚)。
+          //   重档(_tbDom>=6: tight/nit/tag 全额, 或 unknown 未降档前)仍否决, 保留 V2.9.701 原意。
+          // ===== V2.9.729 FIX(P0-3b): 硬底加【多人赔率护栏】 =====
+          // 【扫描实证】硬底判定用的是 eq=eQ(k,1)(【单挑】权益, KJo=60, KQo=62, AJo=65),
+          //   而硬底一旦触发就无条件 call —— 在 4 人池(赔率33%)里 KJo 的真实多人权益仅 20.8%,
+          //   硬底把它救成跟注 = 单次 -3.76BB。169手×20280点扫描中, 全部 24 个"新增负EV跟注"
+          //   无一例外都来自本硬底(KJo/KQo/AJo/QJo vs mp)。
+          // 【修法】硬底只救"跟注至少接近不亏"的强牌: 多人衰减权益 ≥ 底池赔率 - 3pp。
+          //   -3pp 是给隐含赔率/位置/对手范围误差留的容差, 不再放宽 —— 再放宽就会重新放行
+          //   上面那批 -3.76BB 的跟注(实测 KJo@4对手 20.8% vs 赔率33%, 差 12.5pp 远超容差)。
+          //   实测边界: 本日志[3] KdJh 多人权益 24.5% vs 赔率 25.0%(差 0.5pp) → 仍在容差内, 照常救回。
+          var _hfN=Math.max(1,((typeof G!=='undefined'&&G.act)?G.act:2)-1);
+          var _hfEq=(typeof _pfOddsEq==='function')?_pfOddsEq(k,raiserRole,_hfN):null;
+          var _hfNeed=(bet>0)?bet/Math.max(pot+bet,1)*100:0;
+          var _hfOK=(bet<=0)||(!(typeof _hfEq==='number'))||(_hfEq>=_hfNeed-3);
+          if(!_hfOK&&typeof _hfEq==='number'){
+            console.log('[V2.9.729硬底护栏] '+k+' vs '+rP5+' 强牌硬底被拦: 多人权益'
+              +Math.round(_hfEq)+'% < 赔率'+Math.round(_hfNeed)+'%-3pp(单挑eq='+Math.round(_tbEqAdj)
+              +'%但 '+_hfN+' 个对手, 跟注为负EV → 不救, 维持fold)');
+          }
+          if((_isPairPF||_twoBroadway)&&_tbDom<=3&&_tbEqAdj>=60&&_hfOK){
             var exploitHF=applyExploit(eq,'call',oppType,{bet:bet,pot:pot});var weightsHF=DRTA.getDRTAWeight?DRTA.getDRTAWeight(profile):{};
             console.log('[SE] 频率未命中但强牌硬底: '+k+' eq折损后='+Math.round(_tbEqAdj)+'≥60 → 不fold,降级call');
             return{a:'call',r:'GTO强牌硬底 '+k+' eq'+Math.round(_tbEqAdj)+'%('+Math.round(f*100)+'%频率未命中)'+(_tbEqAdj<eq?'·set折损':''),eq:exploitHF.eq,c:'m',sizing:0,scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(eq,pot,bet||pot*2.5,0),exploit:exploitHF.exploit,drta:{type:profile.type,conf:profile.confidence,weights:weightsHF},_se:true,_freqHardFloor:true};
+          }
+          // ===== V2.9.729 FIX(P0-2): 表内路径补赔率兜底(与 L4609 完全同口径) =====
+          // 【实测根因】scene==='raise' 有两条互斥出口, 判据不对称:
+          //   ① entry===null(表未命中) → L4609 V2.9.719 赔率兜底 → 数学成立即 call;
+          //   ② entry!==null(表命中)   → 本处, 只有"频率掷骰", 频率未命中即无条件 fold。
+          //   复现证据: 本日志 [4]Qd2d [32]Jc9c [47]2s2h [52]AsTc 实机均走①赔率兜底/limp兜底/FlatCall
+          //   判 call, 而复现脚本走②表内频率路径判 fold —— 同一手牌因查表是否命中而结论相反。
+          //   决策[3] KdJh 亦落在②(频率26%未命中)。
+          // 【修法】在 fold 前插入同一数学闸: pfCallEq(k,raiserRole,n) ≥ 赔率+8+多人惩罚 → call。
+          //   与 L4609 逐字同口径(同 pfCallEq / 同 Multiway.callThresholdAdj / 同 8pp 边际),
+          //   不引入第二套标准, 两条路径自此判据一致。
+          // 【不误伤】① 垃圾牌由 L4030 V2.9.723 闸先行拦截, 到不了本处;
+          //   ② act==='3b' 分支与频率命中分支已提前 return / 不进入本块;
+          //   ③ 门槛含 8pp 边际 + 多人池惩罚(0/3/6/6/10), 严于表内频率(后者无边际要求)。
+          var _tfoN=Math.max(1,((typeof G!=='undefined'&&G.act)?G.act:2)-1);
+          var _tfoEq=(typeof _pfOddsEq==='function')?_pfOddsEq(k,raiserRole,_tfoN)
+                    :((typeof pfCallEq==='function')?pfCallEq(k,raiserRole,_tfoN)
+                    :((typeof eQvsOpen==='function')?eQvsOpen(k,raiserRole):null));
+          var _tfoCmp=(typeof _tfoEq==='number')?_tfoEq:eq;
+          if(bet>0&&typeof _tfoCmp==='number'&&_tfoCmp>0){
+            var _tfoNeed=bet/Math.max(pot+bet,1)*100;
+            // V2.9.729 FIX(P0-6): 与表外赔率兜底同函数、同口径; 权益已含多人衰减 → 门槛侧不再叠加
+            var _tfoMW=(typeof _pfOddsEq==='function')?0
+                      :((typeof _pfOddsMWAdj==='function')?_pfOddsMWAdj()
+                      :((typeof Multiway!=='undefined'&&Multiway.callThresholdAdj)?Multiway.callThresholdAdj():0));
+            if(_tfoCmp>=_tfoNeed+8+_tfoMW){
+              var _tfoEx=applyExploit(_tfoCmp,'call',oppType,{bet:bet,pot:pot});
+              console.log('[V2.9.729表内赔率兜底] '+k+' vs '+rP5+' eq'+Math.round(_tfoCmp)+'%(n='+_tfoN+')≥赔率'
+                +Math.round(_tfoNeed)+'%+8+多人'+_tfoMW+' → 表内频率'+Math.round(f*100)+'%未命中但数学成立, 跟注');
+              return{a:'call',v:bet,r:'表内赔率兜底 '+k+' eq'+Math.round(_tfoCmp)+'%(n='+_tfoN+')≥需'+Math.round(_tfoNeed+8+_tfoMW)
+                +'%(赔率'+Math.round(_tfoNeed)+'%+边际8, '+rP5+'表频率'+Math.round(f*100)+'%未命中)',eq:_tfoEx.eq,c:_tfoCmp>=50?'m':'l',
+                scene:'面对加注',spr:spr,sprAdvice:getSPRAdvice(spr),evs:compareEVs(_tfoCmp,pot,bet,0),
+                exploit:_tfoEx.exploit,_se:true,_seFreq:1,_oddsFallback:true};
+            }
           }
           return _fold(eq,'vs '+rP5+' call频率'+Math.round(f*100)+'%未命中',spr);
         }
@@ -5339,6 +5460,21 @@ function decidePostflop(k,_pfInj){
     if(_aiEffBB>120){_aiDeepAdj=12;}
     else if(_aiEffBB>80){_aiDeepAdj=8;}
     else if(_aiEffBB>40){_aiDeepAdj=4;}
+    // ===== V2.9.729 FIX(P0-4): 低赔率下码深加成归零(绝对量→相对量) =====
+    // 【实测根因】本日志决策[2] As8c @3h2cQs(转牌): pot=210/toCall=68 → 底池赔率 24.5%,
+    //   门槛 = 赔率24 + 裕度3 + 威胁0 + 人数0 + 码深4 = 31%, 而 eq=31% → 差 1pp 判 fold,
+    //   按日志 eq 计 EVcall = +15.40BB(本日志单手最大错失)。
+    //   症结: _aiDeepAdj 是【绝对百分点】加成(4/8/12), 与赔率高低无关。赔率 24.5% 时码深 4pp
+    //   相当于把所需权益抬高 16%(4/24.5); 而赔率 60% 时同样 4pp 只抬高 6.7% —— 低赔率(即
+    //   底池已经很大、跟注性价比最高)的场景反而被加得最狠, 与"大池应更愿意跟"的方向相反。
+    // 【修法】赔率<30%(大池/便宜跟注)时不加码深修正, 只保留赔率+裕度+威胁+人数四项相对量;
+    //   赔率≥30% 维持原码深修正不变(深码套牢风险在此区间才显著)。
+    // 【不误伤】本日志其余 vs-allin 点: [17]赔率25% eq20%→仍fold; [29]赔率25% eq7%→仍fold;
+    //   [51]赔率25% eq19%→仍fold; [35]赔率93%、[8]赔率33% ≥30% → 完全不受影响。
+    if(typeof _aiPotOdds==='number'&&_aiPotOdds<30&&_aiDeepAdj>0){
+      console.log('[V2.9.729码深加成归零] 赔率'+Math.round(_aiPotOdds)+'%<30%: 码深修正 '+_aiDeepAdj+'pp→0(低赔率大池不再叠加绝对加成)');
+      _aiDeepAdj=0;
+    }
 
     // [第5层 V2.9.712 B5] oppType 接入 jam 极化范围
     //   fish/station jam 范围宽 → MC 重算 eq → 真实化翻后 allin eq
@@ -5747,7 +5883,14 @@ function decidePostflop(k,_pfInj){
         console.log('[V2.9.702收口] AIR但eq'+Math.round(eq)+'%≥赔率'+Math.round(_need)+'%+15且≥50%→分类与权益矛盾,按赔率决策');
       }
       // 加注base阈值: flop +12 / turn +15 / river仅NUTS-STRONG可加(+12),其他+100(河牌非坚果不加注)
-      var _raiseBase=_need+(street==='turn'?15:street==='river'?((_clHN==='NUTS'||_clHN==='STRONG')?12:100):12);
+      // ===== V2.9.729 FIX(P1-2): 河牌非坚果加注门槛 +100pp → 分层 =====
+      // 【问题】旧码对河牌非 NUTS/STRONG 一律 +100pp, 等价于"河牌除坚果外永不加注",
+      //   把 MEDIUM(中对/底对/弱踢顶对)在河牌的薄价值加注通道整条封死。
+      // 【修法】分层: NUTS/STRONG 仍 +12; MEDIUM +25(需 eq 显著高于赔率 25pp 才加, 即薄价值);
+      //   WEAK/DRAW/AIR 仍 +100(河牌无成牌不加注, 保持原防诈唬约束)。
+      // 【边界】只放松 MEDIUM 一档, 且要求 eq≥赔率+25pp —— 比跟注线(赔率+5, 见 L5728 天花板)
+      //   高出 20pp, 不会把"跟注牌"顺带变成"加注牌"。
+      var _raiseBase=_need+(street==='turn'?15:street==='river'?((_clHN==='NUTS'||_clHN==='STRONG')?12:(_clHN==='MEDIUM'?25:100)):12);
       var _raiseTh=SPRZone.raiseThreshold(spr,_raiseBase,_clHN);
       var _callTh=SPRZone.callThreshold(spr,_need+3,ip,_clHN,street);
       if(_isMultiway){_callTh+=6;_raiseTh+=4;}  // 多人池防守收紧
@@ -6490,7 +6633,21 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk,eq){
     var spr=_sprCur2;
     var _need=Math.max(1,betSz)/Math.max(pot+betSz,1)*100;        // 跟注赔率线 %
     var _margin=(typeof eq==='number'?eq:0)-_need;                 // 边际 pp
-    var _raiseTh=Math.max(_need+15,55);                            // raise 阈值:赔率+15pp 或 55%
+    // ===== V2.9.729 FIX(P1-1): 55% 绝对下限改为【街别 + 人数】条件化 =====
+    // 【实测】本日志决策[42] AdTh @Kd9d2d(翻牌): pot=14/bet=6 → 赔率30.0%, eq=48%(边际+18.3pp)
+    //   却只判 call —— 因 _raiseTh=max(30+15,55)=55% > eq48%。
+    //   V2.9.707 引入 55% 下限的依据是"半池注时 eq≥45 即 raise = 系统性过度加注";
+    //   该依据在【多人池】成立(需同时穿透多人范围), 但单挑时对手只需一人弃牌,
+    //   加注弃牌率显著更高, 55% 一刀切把单挑的中强听牌/中对的价值加注一并封死。
+    // 【修法】边际 _need+15 一律不变(不放松边际), 只把绝对下限分档:
+    //   翻牌·单挑(act<=2) → 48%; 翻牌·多人池(act>=3) → 55%(不变, 保留 V2.9.707 防过度加注);
+    //   转牌/河牌         → 55%(不变) 且边际 15→18pp(后街弃牌率下降, 收紧)。
+    // 【不误伤】[42] 是 4 人池 → 仍按 55% → 维持 call(多人池半诈唬加注本就应谨慎);
+    //   仅"单挑翻牌 + eq∈[48,55)" 一类新增加注, 由 169 手×多场景扫描验证无新增负EV 跟注/加注。
+    var _mwCB=(typeof G!=='undefined'&&(G.act||0)>=3);
+    var _raiseMarginPP=(street==='flop')?15:18;
+    var _raiseTh=(street==='flop')?Math.max(_need+_raiseMarginPP,_mwCB?55:48)
+                                  :Math.max(_need+_raiseMarginPP,55);
     // (A) 高边际/强牌→raise (替代 random<adjR 路径)
     // V2.9.707 FIX(P1): 706 计算 _raiseTh 后从未使用(死变量), 实际条件 _margin>=15 等价
     //   eq>=need+15, 缺 55% 下限 → need=30(半池注)时 eq>=45 即 raise, 与注释意图(应≥55)不符,
@@ -6498,7 +6655,14 @@ function _facingCBet(k,hcKey,btKey,ip,betSz,pot,street,isDonk,eq){
     if((typeof eq==='number'&&eq>=_raiseTh) || (typeof hcKey==='number' && hcKey<=4 && _margin>=_need)){
       var _rSz=Math.round(Math.max(betSz*2.5,pot*.66));
       _rSz=Math.min(_rSz,G.stk||100000);
-      return{a:'raise',v:_rSz,r:'[V2.9.703确定性]面CBet raise 边际+'+_margin.toFixed(1)+'pp≥赔率+15pp '+btKey+'/'+hcKey,eq:eq||0,c:'h',sizing:_rSz,scene:isDonk?'面对Donk':'面对CBet',spr:spr,_se:true,_seFreq:1};
+      // ===== V2.9.729 FIX(连贯): 加注不留零头 =====
+      //   V2.9.728 码深保护只覆盖下方 call 支路(L6508); 本 raise 支路若算出 _rSz 后只剩 <5BB,
+      //   同样制造"死筹码"(用户反馈"压到没筹码了又弃牌")。此处与 call 支路同口径: 直接全压。
+      if((G.stk||0)>0&&_rSz<(G.stk||0)&&((G.stk||0)-_rSz)<5){
+        console.log('[V2.9.729加注不留零头] 面CBet raise '+_rSz+'BB 后仅剩 '+Math.round((G.stk||0)-_rSz)+'BB<'+'5BB → 改全压'+(G.stk||0)+'BB');
+        _rSz=Math.round(G.stk||0);
+      }
+      return{a:'raise',v:_rSz,r:'[V2.9.703确定性]面CBet raise 边际+'+_margin.toFixed(1)+'pp≥赔率+'+_raiseMarginPP+'pp(下限'+Math.round(_raiseTh)+'%) '+btKey+'/'+hcKey+(_mwCB?'·多人池':''),eq:eq||0,c:'h',sizing:_rSz,scene:isDonk?'面对Donk':'面对CBet',spr:spr,_se:true,_seFreq:1,evs:compareEVs(eq,pot,betSz,0)};
     }
     // ===== V2.9.728 FIX(P0): 码深保护 —— 禁止"跟注后只剩零头" =====
     //   实机 idx41(9s9h转牌): chips=10BB 跟注 7BB → 只剩 3BB, 既无弃牌率也无后续筹码(死筹码),
@@ -9458,6 +9622,12 @@ function getOppPos(){
       return _OPP_ROLE_NORM[_oppR]||_oppR;
     }
   }catch(e){}
+  // ===== V2.9.729 FIX(P2-4, 只做可观测性, 不改判据) =====
+  // 【实测】本日志 59/59 决策的实机 reason 均带有明确 raiser(vs MP/vs SB/vs CO/vs BTN/vs UTG1/
+  //   vs BB), 说明实机 G._raiserRole 有值, 回落路径在本次实战中【未被触发】——
+  //   因此"按我方位置推导 raiser 位置"缺少任何实机样本支撑, 属于猜测, 本次不做。
+  //   仅补一条回落计数日志, 待后续日志出现 "getOppPos回落" 且有明确错判样本时再按证据改判据。
+  try{console.log('[V2.9.729 getOppPos回落] _raiserRole='+(G&&G._raiserRole)+' 未知 → 按 mp 防守(实机若大量出现需按证据修正)');}catch(_gopE){}
   return 'mp'; // V2.9.674: utg→mp, 修正对手位置默认值——utg映射为UTG1表最紧导致大量手牌不在3B范围,mp更均衡覆盖
 }
 function postflopIP(pos){var _pfOrdPF={sb:1,bb:2,utg:3,utg1:4,mp:5,mp1:6,hj:7,co:8,btn:9};return(_pfOrdPF[pos]||5)>=7;}

@@ -37,6 +37,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnAccessibility: Button
     private lateinit var btnSaveApi: Button
     private lateinit var switchStealth: Switch
+    // V2.9.729 FIX(P0-1): 历史版本说明折叠按钮/容器(默认收起, 避免版本说明占满首屏)
+    private lateinit var btnVerHistory: Button
+    private lateinit var tvVerHistory: TextView
     private lateinit var spinnerProvider: Spinner
     private lateinit var etApiKey: EditText
     private var isRunning = false
@@ -81,6 +84,14 @@ class MainActivity : AppCompatActivity() {
             switchStealth = findViewById(R.id.switchStealth)
             spinnerProvider = findViewById(R.id.spinnerProvider)
             etApiKey = findViewById(R.id.etApiKey)
+            // V2.9.729 FIX(P0-1): 历史版本说明默认收起, 点击展开/收起
+            btnVerHistory = findViewById(R.id.btnVerHistory)
+            tvVerHistory = findViewById(R.id.tvVerHistory)
+            btnVerHistory.setOnClickListener {
+                val show = tvVerHistory.visibility != View.VISIBLE
+                tvVerHistory.visibility = if (show) View.VISIBLE else View.GONE
+                btnVerHistory.text = if (show) "📜 收起历史版本说明" else "📜 历史版本说明(5条)"
+            }
 
             isRunning = FloatingService.isRunning
 
