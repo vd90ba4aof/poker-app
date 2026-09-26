@@ -1534,7 +1534,7 @@ function showToast(msg){
 //   ④ cbFreq 单位口径统一为 0~1 小数(原百分比口径残留, 曾致 19/38 条表项 bet↔check 静默翻转)
 //   ⑤ _mcFallbackEq 与 eQ 共用同一条衰减曲线(消除兜底路径与主路径口径分裂)
 //   ⑥ postflopActiveCount 语义定论(经实战日志完整算术闭环复核, 确认原实现正确, 撤销误改并加护栏注释)
-var ENGINE_VERSION='2.9.725';
+var ENGINE_VERSION='2.9.726';
 // ============================================================
 // V2.9.712 尺度约束（用户规则，场景分流）
 //   规则: 翻前【开池】上限3BB; 【反加注(3bet/4bet)】不受3BB约束,
@@ -7729,7 +7729,7 @@ var DRTA={
 
 // V2.9.702: setTrackerType去重——旧代码DRTA.setType(type)+setOppType(type)双重注入
 //   (setOppType内部L11827也调DRTA.setType),setType跑两次。保留setOppType单一入口。
-function setTrackerType(type){G.opp=type;setOppType(type);}
+function setTrackerType(type){setOppType(type);}
 
 // ===== V2.9.60: TiltDetector — 对手情绪检测 =====
 var TiltDetector={
@@ -13135,7 +13135,7 @@ function setScene(s){
   mkMx(); // V2.9.55: 切换场景时刷新范围矩阵
   go();
 }
-function setOppType(t){G.opp=t;DRTA.setType(t);DRTA.updateUI();document.querySelectorAll('.ex-btn').forEach(function(b){b.classList.remove('on');});var ids={unknown:'exUnknown',fish:'exFish',tight:'exTP',lag:'exLAG',nit:'exTP',maniac:'exLAG',calling_station:'exFish',tag:'exTP'};var exEl=document.getElementById(ids[t]);if(exEl)exEl.classList.add('on');go();}
+function setOppType(t){DRTA.setType(t);DRTA.updateUI();document.querySelectorAll('.ex-btn').forEach(function(b){b.classList.remove('on');});var ids={unknown:'exUnknown',fish:'exFish',tight:'exTP',lag:'exLAG',nit:'exTP',maniac:'exLAG',calling_station:'exFish',tag:'exTP'};var exEl=document.getElementById(ids[t]);if(exEl)exEl.classList.add('on');go();}
 function resetTracker(){DRTA.reset();}
 function sPos(p){p=_fp(p);G.pos=p;document.getElementById('posBtn').textContent=pL(p);document.querySelectorAll('.adv-row .adv-btn').forEach(function(b){b.classList.remove('on');});var posBtns=document.querySelectorAll('.adv-row .adv-btn');var posList=['btn','co','hj','mp','utg','sb','bb'];for(var i=0;i<posBtns.length;i++){if(posBtns[i].textContent===pL(p)){posBtns[i].classList.add('on');break;}}mkMx();go();}
 // V2.9.47: 切换桌型时自动修正位置
@@ -14880,14 +14880,14 @@ function onVisionResult(data){
     // V2.9.121: 自动更新G.opp为面对的具体对手类型(优先)或全桌平均
     var _facingAuto=OppProfiler.getFacingOppType();
     var _autoType=_facingAuto.type||OppProfiler.getOverallType();
+    G._autoOppType=_autoType; // V2.9.726: 仅缓存供UI展示, 不写G.opp(去不确定化)
     if(_autoType!=='unknown'&&_autoType!==G.opp){
-      G.opp=_autoType;
-      // V2.9.702: 去重——旧代码DRTA.setType+setOppType双重注入(setOppType内部L11827也调
+      // V2.9.726: 取消自动写入G.opp——观测架构(DRTA不读底牌/不识别偷牌)无法可靠区分鱼/紧/疯,——旧代码DRTA.setType+setOppType双重注入(setOppType内部L11827也调
       //   DRTA.setType)。旧版setType把TYPE_INIT百分比直写计数槽,每帧视觉数据都会污染
       //   tracker(DRTA"脏数据反复重置"根因之一,详见setType V2.9.702注释)。
       //   保留setOppType单一入口(内部 setType+UI+go())。
-      setOppType(_autoType);
-      console.log('[OppProfiler] 自动设置对手类型: '+_autoType+(_facingAuto.nickname?' (面对:'+_facingAuto.nickname+')':' (全桌平均)'));
+      // V2.9.726: 不再用自动类型触发决策(改为仅展示, G.opp 恒为 unknown, 引擎走标准范围权益基线)
+      console.log('[OppProfiler] 自动识别对手类型(仅展示不驱动决策): '+_autoType+(_facingAuto.nickname?' (面对:'+_facingAuto.nickname+')':' (全桌平均)'));
     }
     OppProfiler.updateUI();
     // V2.9.669: limpers自动推断(翻前平跟者)。OppProfiler.update已标准化G.oppSeats(含bet/action/hasBetChip)。

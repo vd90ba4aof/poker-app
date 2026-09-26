@@ -26,6 +26,15 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:text="V2.9.726 对手模型去不确定化: 禁用鱼/紧/疯自动误标与手动剥削标签, 引擎仅按当前手牌+公共牌标准范围权益做EV选择(修复A9误判全压)"
+        android:textSize="13sp"
+        android:textColor="#fde047"
+        android:textStyle="bold"
+        android:layout_marginTop="4dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:text="V2.9.725 翻前中强牌(QQ/JJ/TT/AK)可下注不强制全压: 移除all-in码深缓冲(避免正EV被迫全压), 绝不弃牌闸收窄至AA/KK"
         android:textSize="13sp"
         android:textColor="#fde047"
