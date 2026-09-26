@@ -32,6 +32,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewAssetLoader
+import android.webkit.WebStorage
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.os.Bundle
@@ -540,6 +541,8 @@ class FloatingService : Service() {
         try {
             webView?.destroy()
         } catch (_: Exception) {}
+        // V2.9.727: Service销毁即清WebView存储，落实"关闭即清缓存"
+        try { WebStorage.getInstance().deleteAllData() } catch (_: Exception) {}
         try {
             floatingView?.let { windowManager?.removeView(it) }
         } catch (_: Exception) {}
@@ -1777,6 +1780,8 @@ class FloatingService : Service() {
 
         // V2.9.109: 清除WebView缓存，防止加载旧版HTML
         wv.clearCache(true)
+        // V2.9.727: 清除所有WebView localStorage（对手追踪/手牌历史/统计/画像/死值rfKey），确保每次启动从空开始，无跨会话缓存残留
+        try { WebStorage.getInstance().deleteAllData() } catch (_: Exception) {}
         wv.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView?, request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
                 // V2.9.114: 用WebViewAssetLoader拦截本地资源请求

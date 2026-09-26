@@ -12,8 +12,8 @@ android {
         applicationId "win.opt.view"
         minSdk 26
         targetSdk 34
-        versionCode 726
-        versionName "2.9.726"
+        versionCode 727
+        versionName "2.9.727"
     }
 
     // Release签名配置

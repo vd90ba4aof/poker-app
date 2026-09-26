@@ -26,6 +26,15 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:text="V2.9.727 关闭即清缓存: WebView localStorage(对手追踪/手牌历史/统计/画像/死值rfKey)每次启动-销毁全清空, 每次重新开始(配合V2.9.726去不确定化)"
+        android:textSize="13sp"
+        android:textColor="#fde047"
+        android:textStyle="bold"
+        android:layout_marginTop="4dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:text="V2.9.726 对手模型去不确定化: 禁用鱼/紧/疯自动误标与手动剥削标签, 引擎仅按当前手牌+公共牌标准范围权益做EV选择(修复A9误判全压)"
         android:textSize="13sp"
         android:textColor="#fde047"
